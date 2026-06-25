@@ -29,6 +29,9 @@ from PIL import Image
 
 
 SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z_.-]+")
+POSITION_TAG = "0020|0032"
+ORIENTATION_TAG = "0020|0037"
+INSTANCE_NUMBER_TAG = "0020|0013"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,13 @@ class IndexRow:
     modality: str
     segmentation_path: Path
     dicom_dir: Path
+
+
+@dataclass(frozen=True)
+class DicomSliceInfo:
+    file_path: str
+    slice_position: float
+    instance_number: int
 
 
 def safe_name(text: str) -> str:
@@ -68,7 +78,92 @@ def read_index(index_csv: Path) -> list[IndexRow]:
     return rows
 
 
-def read_largest_dicom_series(dicom_dir: Path) -> sitk.Image:
+def read_vector_metadata(path: str, tag: str) -> np.ndarray | None:
+    reader = sitk.ImageFileReader()
+    reader.SetFileName(path)
+    reader.ReadImageInformation()
+    if not reader.HasMetaDataKey(tag):
+        return None
+    values = [float(item) for item in reader.GetMetaData(tag).split("\\")]
+    return np.asarray(values, dtype=np.float64)
+
+
+def read_int_metadata(path: str, tag: str, default: int) -> int:
+    reader = sitk.ImageFileReader()
+    reader.SetFileName(path)
+    reader.ReadImageInformation()
+    if not reader.HasMetaDataKey(tag):
+        return default
+    try:
+        return int(float(reader.GetMetaData(tag).strip()))
+    except ValueError:
+        return default
+
+
+def normal_from_orientation(file_path: str) -> np.ndarray | None:
+    orientation = read_vector_metadata(file_path, ORIENTATION_TAG)
+    if orientation is None or orientation.size != 6:
+        return None
+    row_direction = orientation[:3]
+    col_direction = orientation[3:]
+    normal = np.cross(row_direction, col_direction)
+    normal_norm = np.linalg.norm(normal)
+    if normal_norm == 0:
+        return None
+    return normal / normal_norm
+
+
+def collect_slice_infos(files: list[str]) -> list[DicomSliceInfo]:
+    if not files:
+        return []
+
+    normal = normal_from_orientation(files[0])
+    if normal is None:
+        return [
+            DicomSliceInfo(file_path=file_path, slice_position=float(index), instance_number=index)
+            for index, file_path in enumerate(files)
+        ]
+
+    slice_infos: list[DicomSliceInfo] = []
+    for index, file_path in enumerate(files):
+        position = read_vector_metadata(file_path, POSITION_TAG)
+        if position is None or position.size != 3:
+            slice_position = float(index)
+        else:
+            slice_position = float(np.dot(position, normal))
+        instance_number = read_int_metadata(file_path, INSTANCE_NUMBER_TAG, index)
+        slice_infos.append(
+            DicomSliceInfo(
+                file_path=file_path,
+                slice_position=slice_position,
+                instance_number=instance_number,
+            )
+        )
+    return slice_infos
+
+
+def select_unique_slice_files(
+    slices: list[DicomSliceInfo],
+    position_tolerance: float = 1e-6,
+) -> list[str]:
+    selected: list[str] = []
+    seen_positions: set[int] = set()
+    sorted_slices = sorted(
+        slices,
+        key=lambda item: (item.slice_position, item.instance_number, item.file_path),
+    )
+
+    for slice_info in sorted_slices:
+        position_key = int(round(slice_info.slice_position / position_tolerance))
+        if position_key in seen_positions:
+            continue
+        seen_positions.add(position_key)
+        selected.append(slice_info.file_path)
+
+    return selected
+
+
+def get_largest_series_files(dicom_dir: Path) -> list[str]:
     series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(dicom_dir))
     if not series_ids:
         raise RuntimeError(f"No DICOM series found in: {dicom_dir}")
@@ -80,9 +175,15 @@ def read_largest_dicom_series(dicom_dir: Path) -> sitk.Image:
         )
         if len(files) > len(best_files):
             best_files = list(files)
+    return best_files
+
+
+def read_largest_dicom_series(dicom_dir: Path) -> sitk.Image:
+    best_files = get_largest_series_files(dicom_dir)
+    selected_files = select_unique_slice_files(collect_slice_infos(best_files))
 
     reader = sitk.ImageSeriesReader()
-    reader.SetFileNames(best_files)
+    reader.SetFileNames(selected_files)
     return reader.Execute()
 
 

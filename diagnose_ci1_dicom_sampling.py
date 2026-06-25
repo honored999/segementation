@@ -15,43 +15,25 @@ import csv
 from pathlib import Path
 
 import numpy as np
-import SimpleITK as sitk
-
-from convert_ci1_dwi_to_2d import read_index
+from convert_ci1_dwi_to_2d import (
+    collect_slice_infos,
+    get_largest_series_files,
+    read_index,
+    select_unique_slice_files,
+)
 
 
 POSITION_TAG = "0020|0032"
 ORIENTATION_TAG = "0020|0037"
 
 
-def get_largest_series_files(dicom_dir: Path) -> list[str]:
-    series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(dicom_dir))
-    if not series_ids:
-        return []
-    best_files: list[str] = []
-    for series_id in series_ids:
-        files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(
-            str(dicom_dir), series_id
-        )
-        if len(files) > len(best_files):
-            best_files = list(files)
-    return best_files
-
-
-def read_vector_metadata(path: str, tag: str) -> np.ndarray | None:
-    reader = sitk.ImageFileReader()
-    reader.SetFileName(path)
-    reader.ReadImageInformation()
-    if not reader.HasMetaDataKey(tag):
-        return None
-    values = [float(item) for item in reader.GetMetaData(tag).split("\\")]
-    return np.asarray(values, dtype=np.float64)
-
-
 def spacing_stats(files: list[str]) -> dict[str, str]:
+    slice_infos = collect_slice_infos(files)
+    selected_files = select_unique_slice_files(slice_infos)
     if len(files) < 3:
         return {
             "slice_count": str(len(files)),
+            "selected_slice_count": str(len(selected_files)),
             "median_spacing": "",
             "max_abs_deviation": "",
             "duplicate_position_steps": "0",
@@ -59,53 +41,16 @@ def spacing_stats(files: list[str]) -> dict[str, str]:
             "reason": "too_few_slices",
         }
 
-    first_orientation = read_vector_metadata(files[0], ORIENTATION_TAG)
-    if first_orientation is None or first_orientation.size != 6:
-        return {
-            "slice_count": str(len(files)),
-            "median_spacing": "",
-            "max_abs_deviation": "",
-            "duplicate_position_steps": "0",
-            "nonuniform": "1",
-            "reason": "missing_orientation",
-        }
-
-    row_direction = first_orientation[:3]
-    col_direction = first_orientation[3:]
-    normal = np.cross(row_direction, col_direction)
-    normal_norm = np.linalg.norm(normal)
-    if normal_norm == 0:
-        return {
-            "slice_count": str(len(files)),
-            "median_spacing": "",
-            "max_abs_deviation": "",
-            "duplicate_position_steps": "0",
-            "nonuniform": "1",
-            "reason": "invalid_orientation",
-        }
-    normal = normal / normal_norm
-
-    positions = []
-    for file_path in files:
-        position = read_vector_metadata(file_path, POSITION_TAG)
-        if position is None or position.size != 3:
-            return {
-                "slice_count": str(len(files)),
-                "median_spacing": "",
-                "max_abs_deviation": "",
-                "duplicate_position_steps": "0",
-                "nonuniform": "1",
-                "reason": "missing_position",
-            }
-        positions.append(float(np.dot(position, normal)))
-
-    sorted_positions = np.sort(np.asarray(positions, dtype=np.float64))
+    sorted_positions = np.sort(
+        np.asarray([item.slice_position for item in slice_infos], dtype=np.float64)
+    )
     diffs = np.diff(sorted_positions)
     duplicate_steps = int(np.count_nonzero(np.abs(diffs) <= 1e-6))
     nonzero_diffs = np.abs(diffs[np.abs(diffs) > 1e-6])
     if nonzero_diffs.size == 0:
         return {
             "slice_count": str(len(files)),
+            "selected_slice_count": str(len(selected_files)),
             "median_spacing": "0",
             "max_abs_deviation": "0",
             "duplicate_position_steps": str(duplicate_steps),
@@ -120,6 +65,7 @@ def spacing_stats(files: list[str]) -> dict[str, str]:
 
     return {
         "slice_count": str(len(files)),
+        "selected_slice_count": str(len(selected_files)),
         "median_spacing": f"{median_spacing:.6g}",
         "max_abs_deviation": f"{max_abs_deviation:.6g}",
         "duplicate_position_steps": str(duplicate_steps),
@@ -175,6 +121,7 @@ def main() -> None:
         "dicom_dir",
         "segmentation_path",
         "slice_count",
+        "selected_slice_count",
         "median_spacing",
         "max_abs_deviation",
         "duplicate_position_steps",
