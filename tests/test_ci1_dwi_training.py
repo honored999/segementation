@@ -1,4 +1,6 @@
 import csv
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +11,7 @@ from PIL import Image
 from train_ci1_dwi_student_noskip_32ch import (
     CI1DwiSliceDataset,
     CI1DwiTensorCacheDataset,
+    configure_torch_threads,
     split_manifest_rows_by_patient,
 )
 
@@ -130,6 +133,23 @@ class CI1DwiTrainingDataTest(unittest.TestCase):
             self.assertEqual(tuple(mask.shape), (1, 6, 7))
             self.assertEqual(float(image.mean()), 0.5)
             self.assertEqual(float(mask.sum()), 0.0)
+
+    def test_configure_torch_threads_limits_cpu_thread_pools(self):
+        script = (
+            "import torch;"
+            "from train_ci1_dwi_student_noskip_32ch import configure_torch_threads;"
+            "configure_torch_threads(torch_threads=1, torch_interop_threads=1);"
+            "print(torch.get_num_threads(), torch.get_num_interop_threads())"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.stdout.strip(), "1 1")
 
 
 if __name__ == "__main__":

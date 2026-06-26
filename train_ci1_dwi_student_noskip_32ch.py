@@ -43,6 +43,8 @@ class CI1DwiNoSkip32Config:
     image_width: int = 256
     num_kernels: int = 32
     save_predictions_every: int = 5
+    torch_threads: int | None = None
+    torch_interop_threads: int | None = None
 
 
 def read_manifest_rows(manifest_path: Path) -> list[dict[str, str]]:
@@ -124,6 +126,21 @@ class CI1DwiTensorCacheDataset(torch.utils.data.Dataset):
 
 def manifest_uses_tensor_cache(rows: Sequence[dict[str, str]]) -> bool:
     return bool(rows) and "tensor_path" in rows[0]
+
+
+def configure_torch_threads(
+    torch_threads: int | None,
+    torch_interop_threads: int | None,
+) -> None:
+    if torch_threads is not None:
+        if torch_threads < 1:
+            raise ValueError("--torch-threads must be >= 1.")
+        torch.set_num_threads(torch_threads)
+
+    if torch_interop_threads is not None:
+        if torch_interop_threads < 1:
+            raise ValueError("--torch-interop-threads must be >= 1.")
+        torch.set_num_interop_threads(torch_interop_threads)
 
 
 class OpticalElectronicCI1DwiNoSkip32(nn.Module):
@@ -395,11 +412,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=CI1DwiNoSkip32Config.image_height)
     parser.add_argument("--width", type=int, default=CI1DwiNoSkip32Config.image_width)
     parser.add_argument("--num-workers", type=int, default=CI1DwiNoSkip32Config.num_workers)
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=CI1DwiNoSkip32Config.torch_threads,
+        help="Limit PyTorch CPU intra-op threads. Leave unset to use PyTorch default.",
+    )
+    parser.add_argument(
+        "--torch-interop-threads",
+        type=int,
+        default=CI1DwiNoSkip32Config.torch_interop_threads,
+        help="Limit PyTorch CPU inter-op threads. Leave unset to use PyTorch default.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    configure_torch_threads(
+        torch_threads=args.torch_threads,
+        torch_interop_threads=args.torch_interop_threads,
+    )
     config = CI1DwiNoSkip32Config(
         manifest_path=args.manifest_path,
         output_dir=args.output_dir,
@@ -409,11 +442,15 @@ def main() -> None:
         num_workers=args.num_workers,
         image_height=args.height,
         image_width=args.width,
+        torch_threads=args.torch_threads,
+        torch_interop_threads=args.torch_interop_threads,
     )
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Torch CPU threads: {torch.get_num_threads()}")
+    print(f"Torch inter-op threads: {torch.get_num_interop_threads()}")
     print(f"Manifest: {config.manifest_path}")
     print(f"Output: {config.output_dir}")
 
