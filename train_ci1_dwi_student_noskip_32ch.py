@@ -45,6 +45,8 @@ class CI1DwiNoSkip32Config:
     save_predictions_every: int = 5
     torch_threads: int | None = None
     torch_interop_threads: int | None = None
+    bce_weight: float = 1.0
+    dice_weight: float = 1.0
 
 
 def read_manifest_rows(manifest_path: Path) -> list[dict[str, str]]:
@@ -201,19 +203,115 @@ def count_parameters(model: nn.Module) -> int:
 
 
 def calculate_dice(logits: torch.Tensor, masks: torch.Tensor, threshold: float = 0.5) -> float:
-    preds = (torch.sigmoid(logits) > threshold).float()
-    intersection = (preds * masks).sum(dim=(1, 2, 3))
-    denominator = preds.sum(dim=(1, 2, 3)) + masks.sum(dim=(1, 2, 3))
-    dice = (2.0 * intersection + 1e-7) / (denominator + 1e-7)
-    return float(dice.mean().item())
+    return calculate_binary_metrics(logits, masks, threshold=threshold).dice
 
 
 def calculate_iou(logits: torch.Tensor, masks: torch.Tensor, threshold: float = 0.5) -> float:
+    return calculate_binary_metrics(logits, masks, threshold=threshold).iou
+
+
+@dataclass
+class BinaryMetrics:
+    dice: float
+    iou: float
+    positive_dice: float
+    positive_iou: float
+    total_slices: int
+    positive_mask_slices: int
+    empty_mask_slices: int
+    predicted_positive_slices: int
+
+
+def calculate_binary_metrics(
+    logits: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float = 0.5,
+) -> BinaryMetrics:
     preds = (torch.sigmoid(logits) > threshold).float()
     intersection = (preds * masks).sum(dim=(1, 2, 3))
+    pred_area = preds.sum(dim=(1, 2, 3))
+    mask_area = masks.sum(dim=(1, 2, 3))
+    denominator = pred_area + mask_area
     union = ((preds + masks) > 0).float().sum(dim=(1, 2, 3))
+
+    dice = (2.0 * intersection + 1e-7) / (denominator + 1e-7)
     iou = (intersection + 1e-7) / (union + 1e-7)
-    return float(iou.mean().item())
+    has_mask = mask_area > 0
+    positive_count = int(has_mask.sum().item())
+    empty_count = int((~has_mask).sum().item())
+    predicted_positive_count = int((pred_area > 0).sum().item())
+
+    if positive_count:
+        positive_dice = float(dice[has_mask].mean().item())
+        positive_iou = float(iou[has_mask].mean().item())
+    else:
+        positive_dice = 0.0
+        positive_iou = 0.0
+
+    return BinaryMetrics(
+        dice=float(dice.mean().item()),
+        iou=float(iou.mean().item()),
+        positive_dice=positive_dice,
+        positive_iou=positive_iou,
+        total_slices=int(logits.shape[0]),
+        positive_mask_slices=positive_count,
+        empty_mask_slices=empty_count,
+        predicted_positive_slices=predicted_positive_count,
+    )
+
+
+@dataclass
+class BinaryMetricAccumulator:
+    dice_sum: float = 0.0
+    iou_sum: float = 0.0
+    positive_dice_sum: float = 0.0
+    positive_iou_sum: float = 0.0
+    total_slices: int = 0
+    positive_mask_slices: int = 0
+    empty_mask_slices: int = 0
+    predicted_positive_slices: int = 0
+
+    def update(self, logits: torch.Tensor, masks: torch.Tensor) -> None:
+        metrics = calculate_binary_metrics(logits, masks)
+        self.dice_sum += metrics.dice * metrics.total_slices
+        self.iou_sum += metrics.iou * metrics.total_slices
+        self.positive_dice_sum += metrics.positive_dice * metrics.positive_mask_slices
+        self.positive_iou_sum += metrics.positive_iou * metrics.positive_mask_slices
+        self.total_slices += metrics.total_slices
+        self.positive_mask_slices += metrics.positive_mask_slices
+        self.empty_mask_slices += metrics.empty_mask_slices
+        self.predicted_positive_slices += metrics.predicted_positive_slices
+
+    def compute(self) -> BinaryMetrics:
+        total = max(self.total_slices, 1)
+        positive_total = max(self.positive_mask_slices, 1)
+        return BinaryMetrics(
+            dice=self.dice_sum / total,
+            iou=self.iou_sum / total,
+            positive_dice=self.positive_dice_sum / positive_total,
+            positive_iou=self.positive_iou_sum / positive_total,
+            total_slices=self.total_slices,
+            positive_mask_slices=self.positive_mask_slices,
+            empty_mask_slices=self.empty_mask_slices,
+            predicted_positive_slices=self.predicted_positive_slices,
+        )
+
+
+class BCEDiceLoss(nn.Module):
+    def __init__(self, bce_weight: float = 1.0, dice_weight: float = 1.0) -> None:
+        super().__init__()
+        self.bce_weight = bce_weight
+        self.dice_weight = dice_weight
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(self, logits: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        bce_loss = self.bce(logits, masks)
+        probs = torch.sigmoid(logits)
+        intersection = (probs * masks).sum(dim=(1, 2, 3))
+        denominator = probs.sum(dim=(1, 2, 3)) + masks.sum(dim=(1, 2, 3))
+        dice = (2.0 * intersection + 1e-7) / (denominator + 1e-7)
+        dice_loss = 1.0 - dice.mean()
+        return self.bce_weight * bce_loss + self.dice_weight * dice_loss
 
 
 def get_loaders(config: CI1DwiNoSkip32Config) -> tuple[DataLoader, DataLoader]:
@@ -271,18 +369,21 @@ def visualize_predictions(
     device: torch.device,
     output_path: Path,
     num_samples: int = 6,
+    show_probability: bool = True,
 ) -> None:
     model.eval()
-    positive_samples: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
-    fallback_samples: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
+    positive_samples: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+    fallback_samples: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
 
     for images, masks in loader:
         images = images.to(device)
         logits = model(images)
-        preds = torch.sigmoid(logits) > 0.5
+        probs = torch.sigmoid(logits)
+        preds = probs > 0.5
 
         images_cpu = images.cpu()
         masks_cpu = masks.cpu()
+        probs_cpu = probs.cpu()
         preds_cpu = preds.cpu()
         has_mask = masks_cpu.flatten(1).sum(dim=1) > 0
 
@@ -290,6 +391,7 @@ def visualize_predictions(
             sample = (
                 images_cpu[index : index + 1],
                 masks_cpu[index : index + 1],
+                probs_cpu[index : index + 1],
                 preds_cpu[index : index + 1],
             )
             if bool(has_mask[index]):
@@ -306,10 +408,12 @@ def visualize_predictions(
 
     images = torch.cat([sample[0] for sample in selected_samples], dim=0)
     masks = torch.cat([sample[1] for sample in selected_samples], dim=0)
-    preds = torch.cat([sample[2] for sample in selected_samples], dim=0)
+    probs = torch.cat([sample[2] for sample in selected_samples], dim=0)
+    preds = torch.cat([sample[3] for sample in selected_samples], dim=0)
     num_samples = images.shape[0]
+    num_columns = 4 if show_probability else 3
 
-    fig, axes = plt.subplots(num_samples, 3, figsize=(9, 3 * num_samples))
+    fig, axes = plt.subplots(num_samples, num_columns, figsize=(3 * num_columns, 3 * num_samples))
     if num_samples == 1:
         axes = axes.reshape(1, -1)
 
@@ -320,9 +424,15 @@ def visualize_predictions(
         axes[index, 1].imshow(masks[index, 0].numpy(), cmap="gray")
         axes[index, 1].set_title("Mask")
         axes[index, 1].axis("off")
-        axes[index, 2].imshow(preds[index, 0].numpy(), cmap="gray")
-        axes[index, 2].set_title("Prediction")
-        axes[index, 2].axis("off")
+        prediction_column = 2
+        if show_probability:
+            axes[index, 2].imshow(probs[index, 0].numpy(), cmap="magma", vmin=0.0, vmax=1.0)
+            axes[index, 2].set_title("Probability")
+            axes[index, 2].axis("off")
+            prediction_column = 3
+        axes[index, prediction_column].imshow(preds[index, 0].numpy(), cmap="gray")
+        axes[index, prediction_column].set_title("Prediction")
+        axes[index, prediction_column].axis("off")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -358,9 +468,10 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     epoch: int,
-) -> tuple[float, float, float]:
+) -> tuple[float, BinaryMetrics]:
     model.train()
-    total_loss, total_iou, total_dice, num_batches = 0.0, 0.0, 0.0, 0
+    total_loss, num_batches = 0.0, 0
+    metric_accumulator = BinaryMetricAccumulator()
 
     for images, masks in tqdm(loader, desc=f"Epoch {epoch}"):
         images = images.to(device, non_blocking=True)
@@ -372,11 +483,10 @@ def train_one_epoch(
         optimizer.step()
 
         total_loss += float(loss.item())
-        total_iou += calculate_iou(logits.detach(), masks)
-        total_dice += calculate_dice(logits.detach(), masks)
+        metric_accumulator.update(logits.detach(), masks)
         num_batches += 1
 
-    return total_loss / num_batches, total_iou / num_batches, total_dice / num_batches
+    return total_loss / num_batches, metric_accumulator.compute()
 
 
 @torch.no_grad()
@@ -385,9 +495,10 @@ def validate(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> tuple[float, float, float]:
+) -> tuple[float, BinaryMetrics]:
     model.eval()
-    total_loss, total_iou, total_dice, num_batches = 0.0, 0.0, 0.0, 0
+    total_loss, num_batches = 0.0, 0
+    metric_accumulator = BinaryMetricAccumulator()
 
     for images, masks in tqdm(loader, desc="Validating"):
         images = images.to(device, non_blocking=True)
@@ -395,11 +506,10 @@ def validate(
         logits = model(images)
         loss = criterion(logits, masks)
         total_loss += float(loss.item())
-        total_iou += calculate_iou(logits, masks)
-        total_dice += calculate_dice(logits, masks)
+        metric_accumulator.update(logits, masks)
         num_batches += 1
 
-    return total_loss / num_batches, total_iou / num_batches, total_dice / num_batches
+    return total_loss / num_batches, metric_accumulator.compute()
 
 
 def parse_args() -> argparse.Namespace:
@@ -412,6 +522,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=CI1DwiNoSkip32Config.image_height)
     parser.add_argument("--width", type=int, default=CI1DwiNoSkip32Config.image_width)
     parser.add_argument("--num-workers", type=int, default=CI1DwiNoSkip32Config.num_workers)
+    parser.add_argument("--bce-weight", type=float, default=CI1DwiNoSkip32Config.bce_weight)
+    parser.add_argument("--dice-weight", type=float, default=CI1DwiNoSkip32Config.dice_weight)
     parser.add_argument(
         "--torch-threads",
         type=int,
@@ -444,6 +556,8 @@ def main() -> None:
         image_width=args.width,
         torch_threads=args.torch_threads,
         torch_interop_threads=args.torch_interop_threads,
+        bce_weight=args.bce_weight,
+        dice_weight=args.dice_weight,
     )
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -468,7 +582,11 @@ def main() -> None:
     print(f"Trainable params: {count_parameters(model):,}")
     print(f"Sensor size: {model.sensor_size}")
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = BCEDiceLoss(
+        bce_weight=config.bce_weight,
+        dice_weight=config.dice_weight,
+    )
+    print(f"Loss: BCE*{config.bce_weight:g} + Dice*{config.dice_weight:g}")
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=5
@@ -479,38 +597,58 @@ def main() -> None:
     best_epoch = -1
 
     for epoch in range(1, config.num_epochs + 1):
-        train_loss, train_iou, train_dice = train_one_epoch(
+        train_loss, train_metrics = train_one_epoch(
             model, train_loader, criterion, optimizer, device, epoch
         )
-        val_loss, val_iou, val_dice = validate(model, val_loader, criterion, device)
-        scheduler.step(val_dice)
+        val_loss, val_metrics = validate(model, val_loader, criterion, device)
+        scheduler.step(val_metrics.positive_dice)
 
         print(
             f"Epoch {epoch:03d} | "
-            f"train loss {train_loss:.4f} iou {train_iou:.4f} dice {train_dice:.4f} | "
-            f"val loss {val_loss:.4f} iou {val_iou:.4f} dice {val_dice:.4f}"
+            f"train loss {train_loss:.4f} "
+            f"iou {train_metrics.iou:.4f} dice {train_metrics.dice:.4f} "
+            f"pos_iou {train_metrics.positive_iou:.4f} pos_dice {train_metrics.positive_dice:.4f} | "
+            f"val loss {val_loss:.4f} "
+            f"iou {val_metrics.iou:.4f} dice {val_metrics.dice:.4f} "
+            f"pos_iou {val_metrics.positive_iou:.4f} pos_dice {val_metrics.positive_dice:.4f} "
+            f"pred_pos {val_metrics.predicted_positive_slices}/{val_metrics.total_slices}"
         )
 
-        if val_dice > best_dice:
-            best_dice = val_dice
+        if val_metrics.positive_dice > best_dice:
+            best_dice = val_metrics.positive_dice
             best_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
             best_epoch = epoch
             torch.save(
                 {
                     "epoch": epoch,
                     "model_state_dict": best_state,
-                    "val_dice": val_dice,
-                    "val_iou": val_iou,
+                    "val_dice": val_metrics.dice,
+                    "val_iou": val_metrics.iou,
+                    "val_positive_dice": val_metrics.positive_dice,
+                    "val_positive_iou": val_metrics.positive_iou,
+                    "val_positive_mask_slices": val_metrics.positive_mask_slices,
+                    "val_predicted_positive_slices": val_metrics.predicted_positive_slices,
                     "config": {
                         "image_height": config.image_height,
                         "image_width": config.image_width,
                         "num_kernels": config.num_kernels,
                         "manifest_path": str(config.manifest_path),
+                        "bce_weight": config.bce_weight,
+                        "dice_weight": config.dice_weight,
                     },
                 },
                 config.output_dir / "ci1_dwi_student_noskip_32ch_best.pth",
             )
-            print(f"[OK] Saved best checkpoint from epoch {epoch} Dice={val_dice:.4f}")
+            print(
+                f"[OK] Saved best checkpoint from epoch {epoch} "
+                f"positive Dice={val_metrics.positive_dice:.4f}"
+            )
+            visualize_predictions(
+                model,
+                val_loader,
+                device,
+                config.output_dir / "predictions_best.png",
+            )
 
         if epoch == 1 or epoch % config.save_predictions_every == 0:
             visualize_predictions(
@@ -526,7 +664,7 @@ def main() -> None:
             model,
             config.output_dir / "ci1_dwi_student_noskip_32ch_optical_kernels.png",
         )
-        print(f"Best epoch: {best_epoch}, Dice={best_dice:.4f}")
+        print(f"Best epoch: {best_epoch}, positive Dice={best_dice:.4f}")
 
 
 if __name__ == "__main__":

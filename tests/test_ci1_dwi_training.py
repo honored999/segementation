@@ -9,10 +9,13 @@ import numpy as np
 from PIL import Image
 
 from train_ci1_dwi_student_noskip_32ch import (
+    BCEDiceLoss,
     CI1DwiSliceDataset,
     CI1DwiTensorCacheDataset,
+    calculate_binary_metrics,
     configure_torch_threads,
     split_manifest_rows_by_patient,
+    visualize_predictions,
 )
 
 
@@ -150,6 +153,64 @@ class CI1DwiTrainingDataTest(unittest.TestCase):
         )
 
         self.assertEqual(result.stdout.strip(), "1 1")
+
+    def test_bce_dice_loss_penalizes_missing_foreground(self):
+        import torch
+        import torch.nn as nn
+
+        logits = torch.full((1, 1, 4, 4), -4.0)
+        mask = torch.zeros((1, 1, 4, 4))
+        mask[:, :, 1:3, 1:3] = 1.0
+
+        bce = nn.BCEWithLogitsLoss()(logits, mask)
+        combined = BCEDiceLoss(bce_weight=1.0, dice_weight=1.0)(logits, mask)
+
+        self.assertGreater(float(combined), float(bce))
+
+    def test_calculate_binary_metrics_reports_positive_only_scores(self):
+        import torch
+
+        logits = torch.full((2, 1, 2, 2), -10.0)
+        masks = torch.zeros((2, 1, 2, 2))
+        masks[0, 0, 0, 0] = 1.0
+
+        metrics = calculate_binary_metrics(logits, masks)
+
+        self.assertEqual(metrics.positive_mask_slices, 1)
+        self.assertEqual(metrics.empty_mask_slices, 1)
+        self.assertEqual(metrics.predicted_positive_slices, 0)
+        self.assertAlmostEqual(metrics.positive_dice, 0.0, places=6)
+        self.assertGreater(metrics.dice, metrics.positive_dice)
+
+    def test_visualize_predictions_can_include_probability_panel(self):
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class TinyModel(nn.Module):
+            def forward(self, images):
+                logits = torch.full_like(images, -2.0)
+                logits[:, :, 1:3, 1:3] = 2.0
+                return logits
+
+        images = torch.zeros((1, 1, 4, 4), dtype=torch.float32)
+        masks = torch.zeros((1, 1, 4, 4), dtype=torch.float32)
+        masks[:, :, 1:3, 1:3] = 1.0
+        loader = DataLoader(TensorDataset(images, masks), batch_size=1)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "predictions.png"
+            visualize_predictions(
+                TinyModel(),
+                loader,
+                torch.device("cpu"),
+                output_path,
+                num_samples=1,
+                show_probability=True,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertGreater(output_path.stat().st_size, 0)
 
 
 if __name__ == "__main__":
