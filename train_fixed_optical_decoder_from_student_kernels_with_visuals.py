@@ -1,6 +1,10 @@
 """
 Train decoder only with fixed optical kernels from student2_noskip_32ch_best.pth.
 
+中文说明：
+这个脚本固定已经训练好的学生网络光学前端卷积核，只重新训练后端电子解码器，
+用于验证固定光学特征提取后，解码器是否还能完成分割任务。
+
 Goal:
 - Load optical_kernels from a trained OpticalElectronicStudent2NoSkip32 checkpoint.
 - Freeze the optical front-end.

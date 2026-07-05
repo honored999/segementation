@@ -1,5 +1,9 @@
 """Convert indexed CI-1 DWI volumes into a 2D slice segmentation dataset.
 
+中文说明：
+这个脚本根据 DWI 索引表读取 DICOM 原图和 NIfTI 标注，
+按 axial 方向切成二维 PNG 图像和 mask，生成可用于 2D 分割训练的数据集。
+
 Inputs:
     data/ci1_dwi_index.csv from prepare_ci1_dwi_dataset.py
 

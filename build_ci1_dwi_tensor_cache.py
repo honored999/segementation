@@ -1,5 +1,9 @@
 """Build a tensor cache from the CI-1 DWI 2D PNG dataset.
 
+中文说明：
+这个脚本把已经生成的 DWI 二维 PNG 图像和 mask 预处理成 PyTorch tensor 缓存，
+训练时可以直接读取 `.pt` 文件，减少反复解码 PNG 和 resize 带来的 CPU 开销。
+
 The training script can read PNGs directly, but that repeatedly performs:
     Image.open -> resize -> numpy -> tensor
 

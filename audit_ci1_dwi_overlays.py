@@ -1,4 +1,8 @@
-"""Generate DWI/mask overlay images for checking CI-1 label alignment."""
+"""Generate DWI/mask overlay images for checking CI-1 label alignment.
+
+中文说明：
+生成 DWI 图像和 mask 的覆盖图，用于检查 CI-1 标注是否和原图对齐。
+"""
 
 from __future__ import annotations
 

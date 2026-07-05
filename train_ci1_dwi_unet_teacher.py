@@ -1,5 +1,9 @@
 """Train a UNet teacher model on CI-1 DWI slices.
 
+中文说明：
+这个脚本在同一套 CI-1 DWI 单通道数据上训练常规 UNet 教师网络，
+用于和光学/无跳跃连接学生网络对比，判断问题来自数据难度还是学生网络瓶颈。
+
 The teacher is a conventional segmentation baseline for the same single-channel
 DWI data used by train_ci1_dwi_student_noskip_32ch.py. Its main purpose is to
 separate data difficulty from the optical/no-skip student bottleneck.

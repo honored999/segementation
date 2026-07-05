@@ -1,5 +1,9 @@
 """Diagnose DICOM slice spacing for indexed CI-1 DWI series.
 
+中文说明：
+这个脚本检查 CI-1 DWI DICOM 序列的切片间距和重复切片情况，
+用于定位 SimpleITK 提示 non-uniform sampling 或 missing slices 的具体病例。
+
 The converter can trigger SimpleITK warnings such as:
     Non uniform sampling or missing slices detected
 

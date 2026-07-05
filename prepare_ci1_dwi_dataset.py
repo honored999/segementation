@@ -1,5 +1,9 @@
 """Build a DWI image/segmentation index for the local CI-1 dataset.
 
+中文说明：
+这个脚本扫描本地 CI-1 数据集，寻找 DWI 的 NIfTI 标注文件，
+并把每个标注文件和同一患者、同一时间点下最可能对应的 DICOM 原图目录配对。
+
 This script does not read image pixels and does not modify the source dataset.
 It scans the CI-1 directory, finds DWI segmentation files saved as NIfTI
 (`.nii` / `.nii.gz`), and pairs each one with the most likely DICOM directory
