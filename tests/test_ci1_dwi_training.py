@@ -12,6 +12,7 @@ from train_ci1_dwi_student_noskip_32ch import (
     BCEDiceLoss,
     CI1DwiSliceDataset,
     CI1DwiTensorCacheDataset,
+    OpticalElectronicCI1DwiNoSkip32,
     calculate_binary_metrics,
     configure_torch_threads,
     split_manifest_rows_by_patient,
@@ -211,6 +212,33 @@ class CI1DwiTrainingDataTest(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_student_decoder_uses_two_convs_per_upsampling_stage(self):
+        import torch
+        import torch.nn as nn
+
+        model = OpticalElectronicCI1DwiNoSkip32(
+            image_height=64,
+            image_width=80,
+            in_channels=1,
+            num_kernels=8,
+            out_channels=1,
+        )
+        images = torch.randn(2, 1, 64, 80)
+
+        logits = model(images)
+
+        self.assertEqual(tuple(logits.shape), (2, 1, 64, 80))
+        self.assertIsInstance(model.up1_refine, nn.Sequential)
+        self.assertIsInstance(model.up2_refine, nn.Sequential)
+        self.assertGreaterEqual(
+            sum(isinstance(layer, nn.Conv2d) for layer in model.up1_refine),
+            2,
+        )
+        self.assertGreaterEqual(
+            sum(isinstance(layer, nn.Conv2d) for layer in model.up2_refine),
+            2,
+        )
 
 
 if __name__ == "__main__":

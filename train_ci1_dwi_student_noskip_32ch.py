@@ -171,11 +171,21 @@ class OpticalElectronicCI1DwiNoSkip32(nn.Module):
             torch.randn(num_kernels, in_channels, 3, 3) * 0.01
         )
 
-        self.up1_conv = nn.Conv2d(num_kernels, 24, kernel_size=3, padding=1)
-        self.up1_bn = nn.BatchNorm2d(24)
-        self.up2_conv = nn.Conv2d(24, 16, kernel_size=3, padding=1)
-        self.up2_bn = nn.BatchNorm2d(16)
-        self.up3_conv = nn.Conv2d(16, out_channels, kernel_size=3, padding=1)
+        self.up1_refine = self.decoder_refine_block(num_kernels, 24)
+        self.up2_refine = self.decoder_refine_block(24, 16)
+        self.up3_refine = self.decoder_refine_block(16, 16)
+        self.head = nn.Conv2d(16, out_channels, kernel_size=1)
+
+    @staticmethod
+    def decoder_refine_block(in_channels: int, out_channels: int) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
 
     @staticmethod
     def upsample_kernel(kernel_3x3: torch.Tensor) -> torch.Tensor:
@@ -189,17 +199,18 @@ class OpticalElectronicCI1DwiNoSkip32(nn.Module):
         up1 = F.interpolate(
             bottleneck, size=self.decoder_size1, mode="bilinear", align_corners=False
         )
-        up1 = F.relu(self.up1_bn(self.up1_conv(up1)))
+        up1 = self.up1_refine(up1)
 
         up2 = F.interpolate(
             up1, size=self.decoder_size2, mode="bilinear", align_corners=False
         )
-        up2 = F.relu(self.up2_bn(self.up2_conv(up2)))
+        up2 = self.up2_refine(up2)
 
         up3 = F.interpolate(
             up2, size=self.decoder_size3, mode="bilinear", align_corners=False
         )
-        return self.up3_conv(up3)
+        up3 = self.up3_refine(up3)
+        return self.head(up3)
 
 
 def count_parameters(model: nn.Module) -> int:
