@@ -1,0 +1,5 @@
+seed: 2026
+model: {type: hybrid_ideal, encoder_name: mobilenet_v2, encoder_weights: imagenet}
+data: {image_size: null, normalization: percentile}
+training: {epochs: 100, batch_size: 8, num_workers: 4, encoder_lr: 0.0001, new_layers_lr: 0.0005, weight_decay: 0.0001, amp: true, max_grad_norm: 5.0, early_stopping_patience: 20, threshold: 0.5}
+
