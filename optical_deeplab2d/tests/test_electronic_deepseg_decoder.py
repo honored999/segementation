@@ -3,7 +3,10 @@ import torch
 from torch import nn
 
 from optical_deeplab2d.models.backbone import build_deepseg_modules
-from optical_deeplab2d.models.electronic_deepseg_decoder import ModifiedUNetDecoderStage
+from optical_deeplab2d.models.electronic_deepseg_decoder import (
+    ElectronicDeepSegDecoder,
+    ModifiedUNetDecoderStage,
+)
 
 
 def test_build_deepseg_modules_exposes_mobilenet_encoder_and_aspp():
@@ -32,3 +35,65 @@ def test_decoder_stage_upsamples_concatenates_skip_and_refines_twice():
     assert sum(isinstance(module, nn.Conv2d) for module in stage.refine) == 2
     assert sum(isinstance(module, nn.BatchNorm2d) for module in stage.refine) == 2
     assert sum(isinstance(module, nn.ReLU) for module in stage.refine) == 2
+
+
+def test_electronic_deepseg_decoder_restores_odd_grayscale_spatial_shape():
+    model = ElectronicDeepSegDecoder(encoder_weights=None)
+
+    logits = model(torch.randn(2, 1, 65, 81))
+
+    assert logits.shape == (2, 1, 65, 81)
+    assert len(model.decoder_stages) == 4
+    assert not any("optical" in name for name, _ in model.named_parameters())
+
+
+def test_electronic_deepseg_decoder_backpropagates_through_encoder_aspp_and_decoder():
+    model = ElectronicDeepSegDecoder(encoder_weights=None)
+
+    model(torch.randn(2, 1, 64, 80)).square().mean().backward()
+
+    for module in (model.encoder, model.aspp, model.decoder_stages):
+        assert any(
+            parameter.grad is not None and torch.isfinite(parameter.grad).all()
+            for parameter in module.parameters()
+        )
+
+
+def test_electronic_deepseg_decoder_trains_with_a_single_odd_sized_image():
+    model = ElectronicDeepSegDecoder(encoder_weights=None)
+    model.train()
+
+    logits = model(torch.randn(1, 1, 65, 81))
+
+    assert logits.shape == (1, 1, 65, 81)
+
+
+def test_electronic_deepseg_decoder_supports_resnet18_gradients():
+    model = ElectronicDeepSegDecoder(encoder_name="resnet18", encoder_weights=None)
+
+    logits = model(torch.randn(2, 1, 65, 81))
+    logits.square().mean().backward()
+
+    assert logits.shape == (2, 1, 65, 81)
+    assert any(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for module in (model.decoder_stages, model.aspp)
+        for parameter in module.parameters()
+    )
+
+
+def test_electronic_deepseg_decoder_falls_back_to_resnet18_with_gradients():
+    with pytest.warns(RuntimeWarning):
+        model = ElectronicDeepSegDecoder(
+            encoder_name="unavailable_encoder", encoder_weights=None
+        )
+
+    logits = model(torch.randn(2, 1, 65, 81))
+    logits.square().mean().backward()
+
+    assert model.resolved_encoder == "resnet18"
+    assert logits.shape == (2, 1, 65, 81)
+    assert any(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for parameter in model.aspp.parameters()
+    )
