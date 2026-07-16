@@ -11,10 +11,17 @@ from optical_deeplab2d.datasets.split import build_patient_folds,save_folds
 from optical_deeplab2d.evaluation.io import write_evaluation
 from optical_deeplab2d.models.hybrid_deeplabv3plus import HybridOpticalDeepLabV3Plus
 from optical_deeplab2d.models.electronic_deeplabv3plus import ElectronicDeepLabV3Plus
+from optical_deeplab2d.models.electronic_deepseg_decoder import ElectronicDeepSegDecoder
 from optical_deeplab2d.training.checkpoint import load_checkpoint,save_checkpoint,validate_resume
 from optical_deeplab2d.training.logging import append_log
 from optical_deeplab2d.training.losses import CombinedBCEDiceLoss
 from optical_deeplab2d.training.seed import seed_everything
+
+MODEL_TYPES = {
+ 'hybrid_ideal': HybridOpticalDeepLabV3Plus,
+ 'electronic_baseline': ElectronicDeepLabV3Plus,
+ 'electronic_deepseg_decoder': ElectronicDeepSegDecoder,
+}
 
 def args():
  p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--data-root',type=Path,required=True);p.add_argument('--fold',type=int,choices=range(5),required=True);p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--resume',type=Path);p.add_argument('--overfit-small-batch',action='store_true');return p.parse_args()
@@ -29,7 +36,10 @@ def main():
  a=args();cfg=yaml.safe_load(a.config.read_text());seed_everything(cfg['seed']);a.output_dir.mkdir(parents=True,exist_ok=True);records=read_manifest(a.data_root);fold=build_patient_folds(records,cfg['seed'])[a.fold];save_folds(build_patient_folds(records,cfg['seed']),a.output_dir/'splits_final.json');train=[r for r in records if r.patient in fold.train_patients];val=[r for r in records if r.patient in fold.val_patients]
  if a.overfit_small_batch:train,val=train[:4],train[:4]
  pos=sum(r.has_mask for r in train);neg=len(train)-pos;weights=[1/max(pos,1) if r.has_mask else 1/max(neg,1) for r in train];sampler=WeightedRandomSampler(weights,len(train),replacement=True) if pos and neg else None
- tl=DataLoader(DwiSliceDataset(train),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu');cls=HybridOpticalDeepLabV3Plus if cfg['model']['type']=='hybrid_ideal' else ElectronicDeepLabV3Plus;model=cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights']).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=torch.optim.AdamW(model.parameters(),lr=cfg['training']['new_layers_lr'],weight_decay=cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
+ tl=DataLoader(DwiSliceDataset(train),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+ try: cls=MODEL_TYPES[cfg['model']['type']]
+ except KeyError as error: raise ValueError(f"Unknown model type: {cfg['model']['type']}") from error
+ model=cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights']).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=torch.optim.AdamW(model.parameters(),lr=cfg['training']['new_layers_lr'],weight_decay=cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
  if a.resume:
   ck=load_checkpoint(a.resume,device);validate_resume(ck,cfg);model.load_state_dict(ck['model_state_dict']);optim.load_state_dict(ck['optimizer_state_dict']);scheduler.load_state_dict(ck['scheduler_state_dict']);start=ck['epoch']+1;best=ck['best_metric']
  (a.output_dir/'config_resolved.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False));stale=0
