@@ -24,6 +24,10 @@ def select_representative_rows(rows: list[dict], seed: int = 2026, limit: int = 
         if len(selected) == limit: break
     return selected
 
+def select_random_rows(rows: list[dict], count: int, seed: int = 2026) -> list[dict]:
+    """Return deterministic unique random rows without replacement."""
+    return random.Random(seed).sample(rows, k=min(count, len(rows)))
+
 def save_validation_grid(rows: list[dict], output: Path) -> None:
     """Save one DWI/GT/prediction row per representative validation slice."""
     output.parent.mkdir(parents=True, exist_ok=True)

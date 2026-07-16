@@ -18,3 +18,10 @@ def test_selection_is_unique_and_grid_is_written(tmp_path: Path) -> None:
     assert len(selected) <= 6
     assert len({row["sample_id"] for row in selected}) == len(selected)
     assert output.exists() and output.stat().st_size > 0
+
+
+def test_random_selection_is_deterministic_and_unique() -> None:
+    from optical_deeplab2d.evaluation.visualization import select_random_rows
+    rows = [{"sample_id": str(index)} for index in range(10)]
+    assert [row["sample_id"] for row in select_random_rows(rows, 6)] == [row["sample_id"] for row in select_random_rows(rows, 6)]
+    assert len({row["sample_id"] for row in select_random_rows(rows, 6)}) == 6
