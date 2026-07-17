@@ -26,7 +26,7 @@ contracts already used by `optical_deeplab2d`.
 
 The new `ElectronicDenseNetDeepSegDecoder` accepts a single-channel DWI image,
 repeats it to three channels, and sends it through a
-`segmentation_models_pytorch` DenseNet121 encoder with `encoder_depth=5`.
+`segmentation_models_pytorch` DenseNet121 encoder with `depth=4`.
 The deepest encoder feature map is passed directly to the existing four-stage
 modified U-Net decoder: there is no ASPP, atrous convolution, or other
 DeepLabV3+ context component. Each decoder stage bilinearly upsamples to its
@@ -35,11 +35,13 @@ applies the existing two `Conv2d -> BatchNorm2d -> ReLU` refinement blocks.
 The head returns one unthresholded logit channel at exactly the input spatial
 size.
 
-Decoder input and stage widths are inferred from the DenseNet encoder's
-reported `out_channels`, rather than using MobileNetV2-specific channel
-constants. This keeps skip alignment and parameter dimensions correct for the
-new encoder while retaining the 128, 64, 32, and 32 decoder widths prescribed
-by the existing DeepSeg experiment.
+With four encoder downsampling operations, the deepest feature is at 1/16
+resolution and the decoder consumes 1/8, 1/4, 1/2, and input-resolution
+skips in order. Decoder input and stage widths are inferred from the DenseNet
+encoder's reported `out_channels`, rather than using MobileNetV2-specific
+channel constants. This keeps skip alignment and parameter dimensions correct
+for the new encoder while retaining the 128, 64, 32, and 32 decoder widths
+prescribed by the existing DeepSeg experiment.
 
 ## Configuration and Reproducibility
 
