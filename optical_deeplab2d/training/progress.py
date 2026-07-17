@@ -5,6 +5,24 @@ from __future__ import annotations
 import math
 
 
+def update_running_loss(
+    running_loss_total: float, completed_batches: int, loss: float
+) -> tuple[float, float]:
+    """Add one batch loss and return its updated running mean."""
+    new_total = running_loss_total + loss
+    return new_total, new_total / (completed_batches + 1)
+
+
+def complete_epoch_timing(
+    completed_epoch_seconds: list[float], elapsed_seconds: float, remaining_epochs: int
+) -> tuple[list[float], float | None]:
+    """Record a completed epoch and estimate remaining training time."""
+    updated_seconds = [*completed_epoch_seconds, elapsed_seconds]
+    if len(updated_seconds) == 1:
+        return updated_seconds, None
+    return updated_seconds, sum(updated_seconds) / len(updated_seconds) * remaining_epochs
+
+
 def format_duration(seconds: float | None) -> str:
     """Format a non-negative duration as ``MM:SS`` or ``HH:MM:SS``."""
     if seconds is None:

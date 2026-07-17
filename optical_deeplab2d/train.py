@@ -4,6 +4,7 @@ import argparse, json, sys, time
 from pathlib import Path
 import numpy as np
 import torch, yaml
+from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, WeightedRandomSampler
 if __package__ in {None,""}: sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from optical_deeplab2d.datasets.dataset_2d import DwiSliceDataset,collate_samples,read_manifest
@@ -14,6 +15,7 @@ from optical_deeplab2d.models.electronic_deeplabv3plus import ElectronicDeepLabV
 from optical_deeplab2d.models.electronic_deepseg_decoder import ElectronicDeepSegDecoder
 from optical_deeplab2d.training.checkpoint import load_checkpoint,save_checkpoint,validate_resume
 from optical_deeplab2d.training.logging import append_log
+from optical_deeplab2d.training.progress import build_batch_postfix,complete_epoch_timing,format_epoch_summary,update_running_loss
 from optical_deeplab2d.training.losses import CombinedBCEDiceLoss
 from optical_deeplab2d.training.seed import seed_everything
 
@@ -43,12 +45,42 @@ def main():
  if a.resume:
   ck=load_checkpoint(a.resume,device);validate_resume(ck,cfg);model.load_state_dict(ck['model_state_dict']);optim.load_state_dict(ck['optimizer_state_dict']);scheduler.load_state_dict(ck['scheduler_state_dict']);start=ck['epoch']+1;best=ck['best_metric']
  (a.output_dir/'config_resolved.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False));stale=0
+ completed_epoch_seconds: list[float] = []
  for epoch in range(start,cfg['training']['epochs']):
-  began=time.time();model.train();losses=[]
-  for image,mask,_ in tl:optim.zero_grad(set_to_none=True);value=criterion(model(image.to(device)),mask.to(device));value.backward();torch.nn.utils.clip_grad_norm_(model.parameters(),cfg['training']['max_grad_norm']);optim.step();losses.append(value.item())
-  _,rows=validate(model,vl,criterion,device,cfg['training']['threshold']);summary=write_evaluation(rows,a.output_dir);metric=summary['mean_patient_dice'];scheduler.step(metric);meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg};save_checkpoint(a.output_dir/'last.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
-  if metric>best:best=metric;stale=0;save_checkpoint(a.output_dir/'best.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
-  else:stale+=1
-  append_log(a.output_dir/'train_log.csv',{'epoch':epoch+1,'train_total_loss':np.mean(losses),'val_global_dice':summary['global']['dice'],'val_mean_image_dice':summary['mean_image_dice'],'val_mean_patient_dice':metric,'val_precision':summary['global']['precision'],'val_recall':summary['global']['recall'],'encoder_lr':optim.param_groups[0]['lr'],'new_layers_lr':optim.param_groups[0]['lr'],'epoch_time':time.time()-began,'gpu_memory_mb':torch.cuda.max_memory_allocated()/1048576 if torch.cuda.is_available() else 0})
-  if stale>=cfg['training']['early_stopping_patience']:break
+  began=time.time()
+  model.train()
+  losses=[]
+  running_loss_total=0.0
+  progress=tqdm(tl,desc=f"Epoch {epoch+1}/{cfg['training']['epochs']}",unit='batch',leave=False)
+  for batch_index,(image,mask,_) in enumerate(progress,start=1):
+   optim.zero_grad(set_to_none=True)
+   value=criterion(model(image.to(device)),mask.to(device))
+   value.backward()
+   torch.nn.utils.clip_grad_norm_(model.parameters(),cfg['training']['max_grad_norm'])
+   optim.step()
+   losses.append(value.item())
+   running_loss_total,_=update_running_loss(running_loss_total,batch_index-1,value.item())
+   elapsed=time.time()-began
+   gpu_mib=torch.cuda.max_memory_allocated()/1048576 if torch.cuda.is_available() else 0
+   batch_eta_seconds=elapsed/batch_index*(len(tl)-batch_index)
+   progress.set_postfix(build_batch_postfix(value.item(),running_loss_total/batch_index,gpu_mib,batch_eta_seconds),refresh=False)
+  _,rows=validate(model,vl,criterion,device,cfg['training']['threshold'])
+  gpu_mib=torch.cuda.max_memory_allocated()/1048576 if torch.cuda.is_available() else 0
+  summary=write_evaluation(rows,a.output_dir)
+  metric=summary['mean_patient_dice']
+  scheduler.step(metric)
+  meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg}
+  save_checkpoint(a.output_dir/'last.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
+  if metric>best:
+   best=metric
+   stale=0
+   save_checkpoint(a.output_dir/'best.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
+  else:
+   stale+=1
+  logged_epoch_seconds=time.time()-began
+  completed_epoch_seconds,total_eta_seconds=complete_epoch_timing(completed_epoch_seconds,logged_epoch_seconds,cfg['training']['epochs']-epoch-1)
+  append_log(a.output_dir/'train_log.csv',{'epoch':epoch+1,'train_total_loss':np.mean(losses),'val_global_dice':summary['global']['dice'],'val_mean_image_dice':summary['mean_image_dice'],'val_mean_patient_dice':metric,'val_precision':summary['global']['precision'],'val_recall':summary['global']['recall'],'encoder_lr':optim.param_groups[0]['lr'],'new_layers_lr':optim.param_groups[0]['lr'],'epoch_time':logged_epoch_seconds,'gpu_memory_mb':gpu_mib})
+  print(format_epoch_summary(epoch+1,cfg['training']['epochs'],logged_epoch_seconds,summary['global']['dice'],metric,total_eta_seconds))
+  if stale>=cfg['training']['early_stopping_patience']:
+   break
 if __name__=='__main__':main()

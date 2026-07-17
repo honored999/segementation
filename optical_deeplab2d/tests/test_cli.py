@@ -27,3 +27,33 @@ def test_train_model_types_selects_electronic_deepseg_decoder() -> None:
     from optical_deeplab2d import train
 
     assert train.MODEL_TYPES["electronic_deepseg_decoder"] is ElectronicDeepSegDecoder
+
+
+def test_train_script_declares_live_progress_contract() -> None:
+    import pathlib
+
+    train_source = (pathlib.Path(__file__).resolve().parents[1] / "train.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from tqdm.auto import tqdm" in train_source
+    assert "build_batch_postfix" in train_source
+    assert "format_epoch_summary" in train_source
+    assert "leave=False" in train_source
+    assert "complete_epoch_timing" in train_source
+    assert "logged_epoch_seconds=time.time()-began" in train_source
+    assert "'epoch_time':logged_epoch_seconds" in train_source
+    assert (
+        "progress.set_postfix(build_batch_postfix(value.item(),running_loss_total/batch_index,gpu_mib,batch_eta_seconds),refresh=False)"
+        in train_source
+    )
+    assert (
+        "print(format_epoch_summary(epoch+1,cfg['training']['epochs'],logged_epoch_seconds"
+        in train_source
+    )
+    assert train_source.index("logged_epoch_seconds=time.time()-began") > train_source.index(
+        "else:\n   stale+=1"
+    )
+    assert train_source.index("completed_epoch_seconds,total_eta_seconds=complete_epoch_timing") > train_source.index(
+        "else:\n   stale+=1"
+    )
