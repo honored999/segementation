@@ -3,3 +3,7 @@ data/
 results/
 __pycache__/
 .worktrees/
+docs/superpowers/plans/
+optical_deeplab2d/configs/electronic_scratch_6gb_smoke.yaml
+optical_deeplab2d/configs/hybrid_scratch_6gb_smoke.yaml
+optical_deeplab2d/outputs/
