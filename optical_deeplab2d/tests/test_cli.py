@@ -5,6 +5,9 @@ import sys
 import yaml
 
 from optical_deeplab2d.models.electronic_deepseg_decoder import ElectronicDeepSegDecoder
+from optical_deeplab2d.models.electronic_densenet_deepseg_decoder import (
+    ElectronicDenseNetDeepSegDecoder,
+)
 
 ROOT = Path(__file__).parents[2]
 
@@ -27,6 +30,31 @@ def test_train_model_types_selects_electronic_deepseg_decoder() -> None:
     from optical_deeplab2d import train
 
     assert train.MODEL_TYPES["electronic_deepseg_decoder"] is ElectronicDeepSegDecoder
+
+
+def test_densenet121_deepseg_no_aspp_smoke_config() -> None:
+    config_path = (
+        ROOT
+        / "optical_deeplab2d/configs/"
+        "electronic_densenet121_deepseg_no_aspp_6gb_smoke.yaml"
+    )
+    with config_path.open(encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file)
+
+    assert config["model"] == {
+        "type": "electronic_densenet121_deepseg_no_aspp",
+        "encoder_name": "densenet121",
+        "encoder_weights": "imagenet",
+    }
+
+
+def test_train_model_types_selects_densenet_deepseg_without_aspp() -> None:
+    from optical_deeplab2d import train
+
+    assert (
+        train.MODEL_TYPES["electronic_densenet121_deepseg_no_aspp"]
+        is ElectronicDenseNetDeepSegDecoder
+    )
 
 
 def test_train_script_declares_live_progress_contract() -> None:

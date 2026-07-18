@@ -13,6 +13,7 @@ from optical_deeplab2d.evaluation.io import write_evaluation
 from optical_deeplab2d.models.hybrid_deeplabv3plus import HybridOpticalDeepLabV3Plus
 from optical_deeplab2d.models.electronic_deeplabv3plus import ElectronicDeepLabV3Plus
 from optical_deeplab2d.models.electronic_deepseg_decoder import ElectronicDeepSegDecoder
+from optical_deeplab2d.models.electronic_densenet_deepseg_decoder import ElectronicDenseNetDeepSegDecoder
 from optical_deeplab2d.training.checkpoint import load_checkpoint,save_checkpoint,validate_resume
 from optical_deeplab2d.training.logging import append_log
 from optical_deeplab2d.training.progress import build_batch_postfix,complete_epoch_timing,format_epoch_summary,update_running_loss
@@ -23,6 +24,7 @@ MODEL_TYPES = {
  'hybrid_ideal': HybridOpticalDeepLabV3Plus,
  'electronic_baseline': ElectronicDeepLabV3Plus,
  'electronic_deepseg_decoder': ElectronicDeepSegDecoder,
+ 'electronic_densenet121_deepseg_no_aspp': ElectronicDenseNetDeepSegDecoder,
 }
 
 def args():
@@ -41,7 +43,7 @@ def main():
  tl=DataLoader(DwiSliceDataset(train),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
  try: cls=MODEL_TYPES[cfg['model']['type']]
  except KeyError as error: raise ValueError(f"Unknown model type: {cfg['model']['type']}") from error
- model=cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights']).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=torch.optim.AdamW(model.parameters(),lr=cfg['training']['new_layers_lr'],weight_decay=cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
+ model=(cls(cfg['model']['encoder_weights']) if cfg['model']['type']=='electronic_densenet121_deepseg_no_aspp' else cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights'])).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=torch.optim.AdamW(model.parameters(),lr=cfg['training']['new_layers_lr'],weight_decay=cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
  if a.resume:
   ck=load_checkpoint(a.resume,device);validate_resume(ck,cfg);model.load_state_dict(ck['model_state_dict']);optim.load_state_dict(ck['optimizer_state_dict']);scheduler.load_state_dict(ck['scheduler_state_dict']);start=ck['epoch']+1;best=ck['best_metric']
  (a.output_dir/'config_resolved.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False));stale=0
@@ -69,7 +71,7 @@ def main():
   summary=write_evaluation(rows,a.output_dir)
   metric=summary['mean_patient_dice']
   scheduler.step(metric)
-  meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg}
+  meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'context_module':getattr(model,'context_module','aspp'),'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg}
   save_checkpoint(a.output_dir/'last.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
   if metric>best:
    best=metric
