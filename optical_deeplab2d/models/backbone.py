@@ -34,6 +34,31 @@ def build_deepseg_modules(
     return model.encoder, model.decoder.aspp, resolved_name
 
 
+def build_densenet121_deepseg_encoder(
+    encoder_weights: str | None = "imagenet",
+) -> tuple[nn.Module, str]:
+    try:
+        import segmentation_models_pytorch as smp
+    except ImportError as error:
+        raise RuntimeError(
+            "segmentation_models_pytorch is required. Install "
+            "optical_deeplab2d/requirements.txt on the server."
+        ) from error
+    try:
+        encoder = smp.encoders.get_encoder(
+            "densenet121",
+            in_channels=3,
+            depth=4,
+            weights=encoder_weights,
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "DenseNet121 encoder could not be created; no fallback is used "
+            "for this comparison experiment."
+        ) from error
+    return encoder, "densenet121"
+
+
 class SpatialLogitHead(nn.Module):
     def _restore(self, logits: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
         return torch.nn.functional.interpolate(logits, image.shape[-2:], mode="bilinear", align_corners=False) if logits.shape[-2:] != image.shape[-2:] else logits
