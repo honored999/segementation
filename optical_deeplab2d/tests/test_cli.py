@@ -48,6 +48,18 @@ def test_densenet121_deepseg_no_aspp_smoke_config() -> None:
     }
 
 
+def test_densenet121_deepseg_no_aspp_full_config_uses_the_fair_training_schedule() -> None:
+    config_path = ROOT / "optical_deeplab2d/configs/electronic_densenet121_deepseg_no_aspp.yaml"
+    with config_path.open(encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file)
+
+    assert config["model"]["type"] == "electronic_densenet121_deepseg_no_aspp"
+    assert config["model"]["encoder_weights"] == "imagenet"
+    assert config["training"]["epochs"] == 100
+    assert config["training"]["encoder_lr"] == 1e-4
+    assert config["training"]["new_layers_lr"] == 5e-4
+
+
 def test_train_model_types_selects_densenet_deepseg_without_aspp() -> None:
     from optical_deeplab2d import train
 
@@ -55,6 +67,22 @@ def test_train_model_types_selects_densenet_deepseg_without_aspp() -> None:
         train.MODEL_TYPES["electronic_densenet121_deepseg_no_aspp"]
         is ElectronicDenseNetDeepSegDecoder
     )
+
+
+def test_optimizer_assigns_encoder_and_new_layers_their_configured_learning_rates() -> None:
+    from optical_deeplab2d import train
+
+    model = ElectronicDenseNetDeepSegDecoder(encoder_weights=None)
+    optimizer = train.build_optimizer(
+        model,
+        encoder_lr=1e-4,
+        new_layers_lr=5e-4,
+        weight_decay=1e-4,
+    )
+
+    assert [group["lr"] for group in optimizer.param_groups] == [1e-4, 5e-4]
+    encoder_parameter_ids = {id(parameter) for parameter in model.encoder.parameters()}
+    assert {id(parameter) for parameter in optimizer.param_groups[0]["params"]} == encoder_parameter_ids
 
 
 def test_train_script_declares_live_progress_contract() -> None:
@@ -69,6 +97,8 @@ def test_train_script_declares_live_progress_contract() -> None:
     assert "format_epoch_summary" in train_source
     assert "leave=False" in train_source
     assert "complete_epoch_timing" in train_source
+    assert "fit_percentile_normalizer(train)" in train_source
+    assert "build_transforms(training=True" in train_source
     assert "logged_epoch_seconds=time.time()-began" in train_source
     assert "'epoch_time':logged_epoch_seconds" in train_source
     assert (

@@ -7,8 +7,9 @@ import torch, yaml
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, WeightedRandomSampler
 if __package__ in {None,""}: sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from optical_deeplab2d.datasets.dataset_2d import DwiSliceDataset,collate_samples,read_manifest
+from optical_deeplab2d.datasets.dataset_2d import DwiSliceDataset,collate_samples,fit_percentile_normalizer,read_manifest
 from optical_deeplab2d.datasets.split import build_patient_folds,save_folds
+from optical_deeplab2d.datasets.transforms import build_transforms
 from optical_deeplab2d.evaluation.io import write_evaluation
 from optical_deeplab2d.models.hybrid_deeplabv3plus import HybridOpticalDeepLabV3Plus
 from optical_deeplab2d.models.electronic_deeplabv3plus import ElectronicDeepLabV3Plus
@@ -27,6 +28,18 @@ MODEL_TYPES = {
  'electronic_densenet121_deepseg_no_aspp': ElectronicDenseNetDeepSegDecoder,
 }
 
+def build_optimizer(model, encoder_lr: float, new_layers_lr: float, weight_decay: float):
+ encoder = getattr(model, 'encoder', None)
+ if encoder is None:
+  encoder = getattr(getattr(model, 'backbone', None), 'encoder', None)
+ encoder_parameters = list(encoder.parameters()) if encoder is not None else []
+ encoder_parameter_ids = {id(parameter) for parameter in encoder_parameters}
+ new_parameters = [parameter for parameter in model.parameters() if id(parameter) not in encoder_parameter_ids]
+ groups = []
+ if encoder_parameters: groups.append({'params': encoder_parameters, 'lr': encoder_lr})
+ if new_parameters: groups.append({'params': new_parameters, 'lr': new_layers_lr})
+ return torch.optim.AdamW(groups, weight_decay=weight_decay)
+
 def args():
  p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--data-root',type=Path,required=True);p.add_argument('--fold',type=int,choices=range(5),required=True);p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--resume',type=Path);p.add_argument('--overfit-small-batch',action='store_true');return p.parse_args()
 @torch.no_grad()
@@ -39,11 +52,13 @@ def validate(model,loader,criterion,device,threshold):
 def main():
  a=args();cfg=yaml.safe_load(a.config.read_text());seed_everything(cfg['seed']);a.output_dir.mkdir(parents=True,exist_ok=True);records=read_manifest(a.data_root);fold=build_patient_folds(records,cfg['seed'])[a.fold];save_folds(build_patient_folds(records,cfg['seed']),a.output_dir/'splits_final.json');train=[r for r in records if r.patient in fold.train_patients];val=[r for r in records if r.patient in fold.val_patients]
  if a.overfit_small_batch:train,val=train[:4],train[:4]
+ normalizer=fit_percentile_normalizer(train) if cfg['data']['normalization']=='percentile' else None
+ train_transform=build_transforms(training=True,image_size=cfg['data'].get('image_size'))
  pos=sum(r.has_mask for r in train);neg=len(train)-pos;weights=[1/max(pos,1) if r.has_mask else 1/max(neg,1) for r in train];sampler=WeightedRandomSampler(weights,len(train),replacement=True) if pos and neg else None
- tl=DataLoader(DwiSliceDataset(train),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+ tl=DataLoader(DwiSliceDataset(train,transform=train_transform,normalizer=normalizer),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val,normalizer=normalizer),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
  try: cls=MODEL_TYPES[cfg['model']['type']]
  except KeyError as error: raise ValueError(f"Unknown model type: {cfg['model']['type']}") from error
- model=(cls(cfg['model']['encoder_weights']) if cfg['model']['type']=='electronic_densenet121_deepseg_no_aspp' else cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights'])).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=torch.optim.AdamW(model.parameters(),lr=cfg['training']['new_layers_lr'],weight_decay=cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
+ model=(cls(cfg['model']['encoder_weights']) if cfg['model']['type']=='electronic_densenet121_deepseg_no_aspp' else cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights'])).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=build_optimizer(model,cfg['training']['encoder_lr'],cfg['training']['new_layers_lr'],cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
  if a.resume:
   ck=load_checkpoint(a.resume,device);validate_resume(ck,cfg);model.load_state_dict(ck['model_state_dict']);optim.load_state_dict(ck['optimizer_state_dict']);scheduler.load_state_dict(ck['scheduler_state_dict']);start=ck['epoch']+1;best=ck['best_metric']
  (a.output_dir/'config_resolved.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False));stale=0

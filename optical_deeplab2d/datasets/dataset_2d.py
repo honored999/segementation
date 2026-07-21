@@ -19,6 +19,17 @@ class SampleRecord:
     mask_path: Path
     has_mask: int
 
+
+@dataclass(frozen=True)
+class PercentileNormalizer:
+    lower: float
+    upper: float
+
+    def __call__(self, image: np.ndarray) -> np.ndarray:
+        if self.upper <= self.lower:
+            raise ValueError("Percentile normalization requires upper > lower.")
+        return np.clip((image.astype(np.float32) - self.lower) / (self.upper - self.lower), 0.0, 1.0)
+
 def _read_gray(path: Path) -> np.ndarray:
     if path.suffix.lower() not in SUPPORTED_SUFFIXES: raise ValueError(f"Unsupported image type: {path}")
     array = np.load(path) if path.suffix.lower() == ".npy" else np.asarray(Image.open(path))
@@ -26,14 +37,30 @@ def _read_gray(path: Path) -> np.ndarray:
     if array.ndim != 2 or not np.isfinite(array).all(): raise ValueError(f"Invalid non-finite/non-2D image: {path}")
     return array
 
-def load_sample(record: SampleRecord) -> tuple[torch.Tensor, torch.Tensor]:
+def load_sample(
+    record: SampleRecord, normalizer: PercentileNormalizer | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Read one manifest pair as `[1,H,W]` float tensors, raising on bad data."""
     image, mask = _read_gray(record.image_path), _read_gray(record.mask_path)
     if image.shape != mask.shape: raise ValueError(f"Image/mask size mismatch: {record.image_path} vs {record.mask_path}")
     if image.size == 0: raise ValueError(f"Empty image: {record.image_path}")
-    image = image.astype(np.float32)
-    if np.issubdtype(_read_gray(record.image_path).dtype, np.integer): image /= float(np.iinfo(_read_gray(record.image_path).dtype).max)
+    image_dtype = image.dtype
+    image = normalizer(image) if normalizer else image.astype(np.float32)
+    if normalizer is None and np.issubdtype(image_dtype, np.integer): image /= float(np.iinfo(image_dtype).max)
     return torch.from_numpy(image[None]), torch.from_numpy((mask > 0).astype(np.float32)[None])
+
+
+def fit_percentile_normalizer(
+    records: list[SampleRecord], lower_percentile: float = 1.0, upper_percentile: float = 99.0
+) -> PercentileNormalizer:
+    if not records:
+        raise ValueError("Cannot fit normalization without training records.")
+    bounds = np.asarray([
+        np.percentile(_read_gray(record.image_path), (lower_percentile, upper_percentile))
+        for record in records
+    ])
+    lower, upper = (float(value) for value in np.median(bounds, axis=0))
+    return PercentileNormalizer(lower, upper)
 
 def read_manifest(data_root: Path) -> list[SampleRecord]:
     """Load pairs from the authoritative manifest, never infer patient ID from filenames."""
@@ -50,10 +77,10 @@ def read_manifest(data_root: Path) -> list[SampleRecord]:
     return records
 
 class DwiSliceDataset(Dataset[tuple[torch.Tensor, torch.Tensor, SampleRecord]]):
-    def __init__(self, records: list[SampleRecord], transform: Callable | None = None) -> None: self.records, self.transform = records, transform
+    def __init__(self, records: list[SampleRecord], transform: Callable | None = None, normalizer: PercentileNormalizer | None = None) -> None: self.records, self.transform, self.normalizer = records, transform, normalizer
     def __len__(self) -> int: return len(self.records)
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, SampleRecord]:
-        image, mask = load_sample(self.records[index])
+        image, mask = load_sample(self.records[index], self.normalizer)
         if self.transform:
             pair = self.transform(image=image.numpy()[0], mask=mask.numpy()[0]); image = torch.from_numpy(pair["image"])[None].float(); mask = torch.from_numpy((pair["mask"] > 0).astype(np.float32))[None]
         return image, mask, self.records[index]
