@@ -8,6 +8,7 @@ from PIL import Image
 from optical_deeplab2d.datasets.dataset_2d import (
     DwiSliceDataset,
     SampleRecord,
+    calculate_pixel_class_balance,
     fit_percentile_normalizer,
     load_sample,
 )
@@ -52,3 +53,33 @@ def test_percentile_normalizer_uses_training_records_and_clips_validation_values
     assert normalizer.lower == 0
     assert normalizer.upper == 30
     assert torch.allclose(image[0], torch.tensor([[0.0, 0.5], [1.0, 1.0]]))
+
+
+def test_pixel_class_balance_uses_foreground_and_background_pixels(tmp_path: Path) -> None:
+    image_path = tmp_path / "image.npy"
+    first_mask_path = tmp_path / "first_mask.npy"
+    second_mask_path = tmp_path / "second_mask.npy"
+    np.save(image_path, np.zeros((2, 2), dtype=np.uint16))
+    np.save(first_mask_path, np.array([[1, 0], [0, 0]], dtype=np.uint8))
+    np.save(second_mask_path, np.array([[0, 0], [0, 2]], dtype=np.uint8))
+    records = [
+        SampleRecord("p1", "D1", image_path, first_mask_path, 1),
+        SampleRecord("p2", "D1", image_path, second_mask_path, 1),
+    ]
+
+    balance = calculate_pixel_class_balance(records, max_pos_weight=20)
+
+    assert balance.foreground_pixels == 2
+    assert balance.background_pixels == 6
+    assert balance.raw_pos_weight == 3
+    assert balance.pos_weight == 3
+
+
+def test_pixel_class_balance_rejects_training_records_without_foreground(tmp_path: Path) -> None:
+    image_path = tmp_path / "image.npy"
+    mask_path = tmp_path / "mask.npy"
+    np.save(image_path, np.zeros((2, 2), dtype=np.uint16))
+    np.save(mask_path, np.zeros((2, 2), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="no foreground pixels"):
+        calculate_pixel_class_balance([SampleRecord("p", "D1", image_path, mask_path, 0)])

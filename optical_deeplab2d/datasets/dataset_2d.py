@@ -30,6 +30,14 @@ class PercentileNormalizer:
             raise ValueError("Percentile normalization requires upper > lower.")
         return np.clip((image.astype(np.float32) - self.lower) / (self.upper - self.lower), 0.0, 1.0)
 
+
+@dataclass(frozen=True)
+class PixelClassBalance:
+    foreground_pixels: int
+    background_pixels: int
+    raw_pos_weight: float
+    pos_weight: float
+
 def _read_gray(path: Path) -> np.ndarray:
     if path.suffix.lower() not in SUPPORTED_SUFFIXES: raise ValueError(f"Unsupported image type: {path}")
     array = np.load(path) if path.suffix.lower() == ".npy" else np.asarray(Image.open(path))
@@ -61,6 +69,23 @@ def fit_percentile_normalizer(
     ])
     lower, upper = (float(value) for value in np.median(bounds, axis=0))
     return PercentileNormalizer(lower, upper)
+
+
+def calculate_pixel_class_balance(
+    records: list[SampleRecord], max_pos_weight: float = 20.0
+) -> PixelClassBalance:
+    foreground_pixels = sum(int((_read_gray(record.mask_path) > 0).sum()) for record in records)
+    total_pixels = sum(int(_read_gray(record.mask_path).size) for record in records)
+    background_pixels = total_pixels - foreground_pixels
+    if foreground_pixels == 0:
+        raise ValueError("Training records contain no foreground pixels.")
+    raw_pos_weight = background_pixels / foreground_pixels
+    return PixelClassBalance(
+        foreground_pixels=foreground_pixels,
+        background_pixels=background_pixels,
+        raw_pos_weight=raw_pos_weight,
+        pos_weight=min(max_pos_weight, max(1.0, raw_pos_weight)),
+    )
 
 def read_manifest(data_root: Path) -> list[SampleRecord]:
     """Load pairs from the authoritative manifest, never infer patient ID from filenames."""

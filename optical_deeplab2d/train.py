@@ -7,7 +7,7 @@ import torch, yaml
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, WeightedRandomSampler
 if __package__ in {None,""}: sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from optical_deeplab2d.datasets.dataset_2d import DwiSliceDataset,collate_samples,fit_percentile_normalizer,read_manifest
+from optical_deeplab2d.datasets.dataset_2d import DwiSliceDataset,calculate_pixel_class_balance,collate_samples,fit_percentile_normalizer,read_manifest
 from optical_deeplab2d.datasets.split import build_patient_folds,save_folds
 from optical_deeplab2d.datasets.transforms import build_transforms
 from optical_deeplab2d.evaluation.io import write_evaluation
@@ -51,14 +51,19 @@ def validate(model,loader,criterion,device,threshold):
  return total/max(len(loader),1),rows
 def main():
  a=args();cfg=yaml.safe_load(a.config.read_text());seed_everything(cfg['seed']);a.output_dir.mkdir(parents=True,exist_ok=True);records=read_manifest(a.data_root);fold=build_patient_folds(records,cfg['seed'])[a.fold];save_folds(build_patient_folds(records,cfg['seed']),a.output_dir/'splits_final.json');train=[r for r in records if r.patient in fold.train_patients];val=[r for r in records if r.patient in fold.val_patients]
- if a.overfit_small_batch:train,val=train[:4],train[:4]
+ if a.overfit_small_batch:
+  positive_records=[record for record in train if record.has_mask][:2]
+  negative_records=[record for record in train if not record.has_mask][:2]
+  train=(positive_records+negative_records)[:4];val=train
  normalizer=fit_percentile_normalizer(train) if cfg['data']['normalization']=='percentile' else None
+ pixel_balance=calculate_pixel_class_balance(train)
+ print(f"Pixel balance: foreground={pixel_balance.foreground_pixels} background={pixel_balance.background_pixels} raw_pos_weight={pixel_balance.raw_pos_weight:.4f} pos_weight={pixel_balance.pos_weight:.4f}")
  train_transform=build_transforms(training=True,image_size=cfg['data'].get('image_size'))
  pos=sum(r.has_mask for r in train);neg=len(train)-pos;weights=[1/max(pos,1) if r.has_mask else 1/max(neg,1) for r in train];sampler=WeightedRandomSampler(weights,len(train),replacement=True) if pos and neg else None
  tl=DataLoader(DwiSliceDataset(train,transform=train_transform,normalizer=normalizer),batch_size=cfg['training']['batch_size'],sampler=sampler,shuffle=sampler is None,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);vl=DataLoader(DwiSliceDataset(val,normalizer=normalizer),batch_size=cfg['training']['batch_size'],shuffle=False,num_workers=cfg['training']['num_workers'],collate_fn=collate_samples);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
  try: cls=MODEL_TYPES[cfg['model']['type']]
  except KeyError as error: raise ValueError(f"Unknown model type: {cfg['model']['type']}") from error
- model=(cls(cfg['model']['encoder_weights']) if cfg['model']['type']=='electronic_densenet121_deepseg_no_aspp' else cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights'])).to(device);criterion=CombinedBCEDiceLoss(min(20.,max(1.,neg/max(pos,1)))).to(device);optim=build_optimizer(model,cfg['training']['encoder_lr'],cfg['training']['new_layers_lr'],cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
+ model=(cls(cfg['model']['encoder_weights']) if cfg['model']['type']=='electronic_densenet121_deepseg_no_aspp' else cls(cfg['model']['encoder_name'],cfg['model']['encoder_weights'])).to(device);criterion=CombinedBCEDiceLoss(pixel_balance.pos_weight).to(device);optim=build_optimizer(model,cfg['training']['encoder_lr'],cfg['training']['new_layers_lr'],cfg['training']['weight_decay']);scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim,mode='max',patience=6,factor=.5);best=-1.;start=0
  if a.resume:
   ck=load_checkpoint(a.resume,device);validate_resume(ck,cfg);model.load_state_dict(ck['model_state_dict']);optim.load_state_dict(ck['optimizer_state_dict']);scheduler.load_state_dict(ck['scheduler_state_dict']);start=ck['epoch']+1;best=ck['best_metric']
  (a.output_dir/'config_resolved.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False));stale=0
@@ -86,7 +91,7 @@ def main():
   summary=write_evaluation(rows,a.output_dir)
   metric=summary['mean_patient_dice']
   scheduler.step(metric)
-  meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'context_module':getattr(model,'context_module','aspp'),'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg}
+  meta={'model_type':cfg['model']['type'],'encoder_name':model.resolved_encoder,'context_module':getattr(model,'context_module','aspp'),'threshold':cfg['training']['threshold'],'fold':a.fold,'seed':cfg['seed'],'normalization':cfg['data']['normalization'],'foreground_pixels':pixel_balance.foreground_pixels,'background_pixels':pixel_balance.background_pixels,'raw_pos_weight':pixel_balance.raw_pos_weight,'pos_weight':float(criterion.pos_weight.item()),'pairing_rule':'manifest image_path to mask_path','patient_id_rule':'manifest patient column','config':cfg}
   save_checkpoint(a.output_dir/'last.pt',model=model,optimizer=optim,scheduler=scheduler,epoch=epoch,best_metric=best,metadata=meta)
   if metric>best:
    best=metric
@@ -96,7 +101,7 @@ def main():
    stale+=1
   logged_epoch_seconds=time.time()-began
   completed_epoch_seconds,total_eta_seconds=complete_epoch_timing(completed_epoch_seconds,logged_epoch_seconds,cfg['training']['epochs']-epoch-1)
-  append_log(a.output_dir/'train_log.csv',{'epoch':epoch+1,'train_total_loss':np.mean(losses),'val_global_dice':summary['global']['dice'],'val_mean_image_dice':summary['mean_image_dice'],'val_mean_patient_dice':metric,'val_precision':summary['global']['precision'],'val_recall':summary['global']['recall'],'encoder_lr':optim.param_groups[0]['lr'],'new_layers_lr':optim.param_groups[0]['lr'],'epoch_time':logged_epoch_seconds,'gpu_memory_mb':gpu_mib})
+  append_log(a.output_dir/'train_log.csv',{'epoch':epoch+1,'train_total_loss':np.mean(losses),'val_global_dice':summary['global']['dice'],'val_mean_image_dice':summary['mean_image_dice'],'val_mean_patient_dice':metric,'val_precision':summary['global']['precision'],'val_recall':summary['global']['recall'],'foreground_pixels':pixel_balance.foreground_pixels,'background_pixels':pixel_balance.background_pixels,'raw_pos_weight':pixel_balance.raw_pos_weight,'pos_weight':float(criterion.pos_weight.item()),'encoder_lr':optim.param_groups[0]['lr'],'new_layers_lr':optim.param_groups[1]['lr'],'epoch_time':logged_epoch_seconds,'gpu_memory_mb':gpu_mib})
   print(format_epoch_summary(epoch+1,cfg['training']['epochs'],logged_epoch_seconds,summary['global']['dice'],metric,total_eta_seconds))
   if stale>=cfg['training']['early_stopping_patience']:
    break

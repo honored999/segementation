@@ -99,6 +99,9 @@ def test_train_script_declares_live_progress_contract() -> None:
     assert "complete_epoch_timing" in train_source
     assert "fit_percentile_normalizer(train)" in train_source
     assert "build_transforms(training=True" in train_source
+    assert "calculate_pixel_class_balance(train" in train_source
+    assert "positive_records=[record for record in train if record.has_mask][:2]" in train_source
+    assert "optim.param_groups[1]['lr']" in train_source
     assert "logged_epoch_seconds=time.time()-began" in train_source
     assert "'epoch_time':logged_epoch_seconds" in train_source
     assert (
