@@ -1,0 +1,23 @@
+# Values copied from reference/nnUNetPlans.json configurations["2d"].
+dataset_name: Dataset501_StrokeLesion
+plans_name: nnUNetPlans
+patch_size: [512, 512]
+batch_size: 12
+spacing: [0.4892368018627167, 0.4892368018627167]
+normalization: ZScoreNormalization
+use_mask_for_norm: false
+network:
+  class_name: PlainConvUNet2D
+  input_channels: 1
+  output_channels: 2
+  n_stages: 8
+  features_per_stage: [32, 64, 128, 256, 512, 512, 512, 512]
+  conv_bias: true
+  norm: InstanceNorm2d
+  norm_eps: 1.0e-5
+  norm_affine: true
+  nonlinearity: LeakyReLU
+  negative_slope: 0.01 # PyTorch nn.LeakyReLU default; absent from the supplied plans.
+  inplace: true
+  dropout: null
+  batch_dice: true

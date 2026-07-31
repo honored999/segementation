@@ -1,0 +1,5 @@
+# Do not install or upgrade dependencies as part of this phase.
+torch
+numpy
+SimpleITK
+pytest

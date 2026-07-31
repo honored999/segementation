@@ -1,0 +1,1 @@
+"""Future compound loss placeholder."""
