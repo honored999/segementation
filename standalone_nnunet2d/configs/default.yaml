@@ -21,3 +21,9 @@ network:
   inplace: true
   dropout: null
   batch_dice: true
+loss:
+  dice_weight: 1.0
+  cross_entropy_weight: 1.0
+  dice_smooth: 1.0e-5
+  include_background: false
+  deep_supervision_weights: [1.0] # Expand explicitly after source verification.

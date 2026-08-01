@@ -5,9 +5,10 @@ configuration of `Dataset501_StrokeLesion`. It does not import `nnunetv2` or
 `dynamic_network_architectures` at runtime.
 
 Current progress: reference validation, environment inspection, JSON-driven
-network construction, and CPU model-shape tests are implemented. Formal
-training, preprocessing, augmentation, loss, inference, and evaluation are not
-implemented and must not be started in this phase.
+network construction, CPU model-shape tests, a read-only data pipeline, and
+Dice-plus-cross-entropy deep-supervision loss modules are implemented. Formal
+training, augmentation, inference, and evaluation are not implemented and must
+not be started in this phase.
 
 Run the checks from the worktree root (using the required environment):
 
@@ -26,3 +27,7 @@ repository; any future generated artifacts belong under `outputs/`.
 It never scans all images. Data loading currently supports only the read-only,
 on-demand slice pipeline; no training, validation, or prediction command is
 enabled.
+
+The loss module exposes foreground batch Dice and cross-entropy. Its
+deep-supervision weights are caller-provided rather than asserted to match
+unavailable official source defaults.

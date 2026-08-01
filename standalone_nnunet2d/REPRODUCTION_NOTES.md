@@ -44,3 +44,13 @@ start training. Segmentation resampling uses linear interpolation followed by
 rounding to preserve discrete labels; this is a practical interpretation of the
 plan's segmentation `order=1` until the official preprocessing source is
 available.
+
+## Loss and deep supervision
+
+The current loss implementation uses foreground-only batch Soft Dice with
+smooth value `1e-5`, plus categorical cross-entropy at equal weights. These are
+explicit local choices, not claims of source-verified official defaults.
+Deep-supervision weights are mandatory caller-provided positive values that are
+normalized to sum to one; the project does not supply an alleged official
+seven-scale schedule. This phase implements loss computation and gradient tests
+only—no optimizer, training loop, or formal training run is enabled.
