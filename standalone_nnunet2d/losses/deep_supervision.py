@@ -23,8 +23,8 @@ class DeepSupervisionLoss(nn.Module):
     def __init__(self, base_loss: nn.Module, *, weights: Sequence[float]) -> None:
         super().__init__()
         supplied_weights = tuple(float(weight) for weight in weights)
-        if not supplied_weights or any(weight <= 0 for weight in supplied_weights):
-            raise ValueError("deep-supervision weights must all be positive")
+        if not supplied_weights or any(weight < 0 for weight in supplied_weights) or not any(supplied_weights):
+            raise ValueError("deep-supervision weights must be nonnegative with one positive weight")
         total_weight = sum(supplied_weights)
         self.base_loss = base_loss
         self.weights = tuple(weight / total_weight for weight in supplied_weights)
@@ -37,6 +37,8 @@ class DeepSupervisionLoss(nn.Module):
             raise ValueError("number of deep-supervision weights must match output count")
         total_loss: Tensor | None = None
         for logits, weight in zip(levels, self.weights, strict=True):
+            if weight == 0:
+                continue
             if logits.ndim != 4:
                 raise ValueError(f"deep-supervision logits must be (B, C, H, W), got {tuple(logits.shape)}")
             level_loss = self.base_loss(logits, resize_target_nearest(target, tuple(logits.shape[2:])))

@@ -27,3 +27,18 @@ loss:
   dice_smooth: 1.0e-5
   include_background: false
   deep_supervision_weights: [1.0] # Expand explicitly after source verification.
+sampling:
+  foreground_probability: 0.0
+augmentation:
+  horizontal_flip_probability: 0.0
+  vertical_flip_probability: 0.0
+  intensity_scale_range: [1.0, 1.0]
+smoke_run:
+  smoke_run_only: true
+  train_cases: 1
+  validation_cases: 1
+  epochs: 1
+  optimizer: SGD
+  learning_rate: 0.01
+  momentum: 0.9
+  weight_decay: 0.0

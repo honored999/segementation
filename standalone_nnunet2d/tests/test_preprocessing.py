@@ -26,3 +26,14 @@ def test_inplane_resampling_preserves_discrete_segmentation_labels() -> None:
     assert result.array.shape == (1, 4, 4)
     assert set(np.unique(result.array)).issubset({0, 1})
     assert result.array.dtype == np.int16
+
+
+def test_inplane_resampling_returns_identity_when_spacing_matches() -> None:
+    segmentation = NiftiVolume(
+        array=np.array([[[0, 1], [1, 0]], [[0, 0], [0, 1]]], dtype=np.int16),
+        spacing_xyz=(0.4892368018627167, 0.4892368018627167, 8.0),
+        origin_xyz=(1.0, 2.0, 3.0),
+    )
+    result = resample_inplane(segmentation, target_spacing_xy=(0.4892368018627167, 0.4892368018627167), is_segmentation=True)
+    np.testing.assert_array_equal(result.array, segmentation.array)
+    assert result.spacing_xyz == segmentation.spacing_xyz

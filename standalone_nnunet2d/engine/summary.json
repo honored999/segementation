@@ -1,0 +1,8 @@
+{
+  "run_type": "smoke_run_only",
+  "fold": 0,
+  "checkpoint_path": "C:\\lijialin\\segementation\\.worktrees\\standalone-nnunet2d\\standalone_nnunet2d\\outputs\\fold0_short_smoke\\checkpoints\\checkpoint_best.pth",
+  "num_cases": 3,
+  "mean_dice": 0.18728772925384898,
+  "failed_case_count": 0
+}
