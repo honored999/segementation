@@ -20,9 +20,9 @@ def limit_iterations(batches: Iterable[tuple[Tensor,Tensor]],limit:int) -> Itera
    for batch in batches: count+=1; yield batch
    if count==0: raise ValueError('batches must not be empty')
  return islice(repeated(),limit)
-def run_formal_epoch(model: nn.Module,batches: Iterable[tuple[Tensor,Tensor]],loss: nn.Module,optimizer: Optimizer,scheduler: PolyLRScheduler,device: torch.device,epoch:int,schedule: OfficialTrainerSchedule) -> tuple[TrainEpochResult,float]:
+def run_formal_epoch(model: nn.Module,batches: Iterable[tuple[Tensor,Tensor]],loss: nn.Module,optimizer: Optimizer,scheduler: PolyLRScheduler,device: torch.device,epoch:int,schedule: OfficialTrainerSchedule,*,non_blocking: bool = False) -> tuple[TrainEpochResult,float]:
  scheduler.step(epoch); scheduler._formal_last_step=epoch; scheduler.ctr=epoch+1
- result=run_train_epoch(model,limit_iterations(batches,schedule.num_iterations_per_epoch),loss,optimizer,device)
+ result=run_train_epoch(model,limit_iterations(batches,schedule.num_iterations_per_epoch),loss,optimizer,device,non_blocking=non_blocking)
  return result,scheduler.get_last_lr()[0]
 def run_formal_validation(model: nn.Module,batches: Iterable[tuple[Tensor,Tensor]],loss: nn.Module,device: torch.device,schedule: OfficialTrainerSchedule)->ValidationEpochResult:
  return run_validation_epoch(model,limit_iterations(batches,schedule.num_val_iterations_per_epoch),loss,device)

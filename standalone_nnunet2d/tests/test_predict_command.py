@@ -57,6 +57,8 @@ def test_prediction_command_requires_allow_pending_and_preserves_source_space_me
         str(output_root),
         "--device",
         "cpu",
+        "--slice-batch-size",
+        "2",
     ]
 
     with pytest.raises(ValueError, match="--allow-pending"):
@@ -73,5 +75,6 @@ def test_prediction_command_requires_allow_pending_and_preserves_source_space_me
 
     manifest = json.loads((output_root / "prediction_manifest.json").read_text(encoding="utf-8"))
     assert manifest["checkpoint"]["run_state"] == "official_alignment_pending"
+    assert manifest["policy"]["slice_batch_size"] == 2
     assert manifest["cases"][0]["source_path"] == str(source_path)
     assert manifest["cases"][0]["nifti_validation"]["passed"] is True

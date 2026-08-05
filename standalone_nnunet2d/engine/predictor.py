@@ -147,25 +147,48 @@ def predict_volume(
     mirror_axes: tuple[int, ...] = DEFAULT_MIRROR_AXES,
     patch_size: tuple[int, int] = DEFAULT_PATCH_SIZE,
     tile_step_size: float = DEFAULT_TILE_STEP_SIZE,
+    slice_batch_size: int = 1,
 ) -> np.ndarray:
     """Return one binary uint8 prediction per source-space ``(z, y, x)`` slice."""
+    if slice_batch_size <= 0:
+        raise ValueError(f"slice_batch_size must be positive, got {slice_batch_size}")
     normalized = z_score_normalize(image.array)
-    prediction = np.empty(image.array.shape, dtype=np.uint8)
-    for z_index in range(normalized.shape[0]):
-        tensor = torch.from_numpy(normalized[z_index]).unsqueeze(0).unsqueeze(0)
-        logits = predict_logits_2d(
-            model,
-            tensor,
-            device,
-            mirror_axes=mirror_axes,
-            patch_size=patch_size,
-            tile_step_size=tile_step_size,
-        )
-        mask = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
-        if mask.shape != prediction[z_index].shape:
-            raise ValueError("prediction slice shape does not match input slice")
-        prediction[z_index] = mask
-    return prediction
+    slice_count, height, width = normalized.shape
+    total_logits: Tensor | None = None
+    transformations = ((),) + mirror_combinations(mirror_axes)
+    for axes in transformations:
+        dims = tuple(axis + 2 for axis in axes)
+        for z_start in range(0, slice_count, slice_batch_size):
+            z_end = min(z_start + slice_batch_size, slice_count)
+            tensor = torch.from_numpy(normalized[z_start:z_end]).unsqueeze(1)
+            if dims:
+                tensor = torch.flip(tensor, dims=dims)
+            logits = predict_logits_2d(
+                model,
+                tensor,
+                device,
+                mirror_axes=(),
+                patch_size=patch_size,
+                tile_step_size=tile_step_size,
+            )
+            if dims:
+                logits = torch.flip(logits, dims=dims)
+            expected_shape = (z_end - z_start, 2, height, width)
+            if tuple(logits.shape) != expected_shape:
+                raise ValueError(
+                    "prediction logits shape does not match input slice batch: "
+                    f"expected {expected_shape}, got {tuple(logits.shape)}"
+                )
+            if total_logits is None:
+                total_logits = torch.zeros(
+                    (slice_count, 2, height, width),
+                    device=logits.device,
+                    dtype=logits.dtype,
+                )
+            total_logits[z_start:z_end] += logits
+    if total_logits is None:
+        return np.empty(image.array.shape, dtype=np.uint8)
+    return torch.argmax(total_logits / len(transformations), dim=1).cpu().numpy().astype(np.uint8)
 
 
 def save_and_validate_prediction(

@@ -29,10 +29,12 @@ def train_step(
     loss_fn: nn.Module,
     optimizer: Optimizer,
     device: torch.device,
+    *,
+    non_blocking: bool = False,
 ) -> TrainStepResult:
     """Execute exactly one supplied optimization step; callers control all policy."""
     model.train()
-    image, target = (value.to(device) for value in batch)
+    image, target = (value.to(device, non_blocking=non_blocking) for value in batch)
     optimizer.zero_grad(set_to_none=True)
     outputs = model(image)
     loss = loss_fn(outputs, target)
@@ -50,6 +52,8 @@ def run_train_epoch(
     loss_fn: nn.Module,
     optimizer: Optimizer,
     device: torch.device,
+    *,
+    non_blocking: bool = False,
 ) -> TrainEpochResult:
     """Run one caller-supplied sequence of optimization batches."""
     batch_count = 0
@@ -57,7 +61,7 @@ def run_train_epoch(
     output_shapes: tuple[tuple[int, ...], ...] = ()
 
     for batch in batches:
-        result = train_step(model, batch, loss_fn, optimizer, device)
+        result = train_step(model, batch, loss_fn, optimizer, device, non_blocking=non_blocking)
         batch_count += 1
         total_loss += result.loss
         output_shapes = result.output_shapes

@@ -51,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fold", type=int, default=None)
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--slice-batch-size", type=int, default=1)
     parser.add_argument("--allow-pending", action="store_true")
     return parser
 
@@ -122,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             mirror_axes=DEFAULT_MIRROR_AXES,
             patch_size=DEFAULT_PATCH_SIZE,
             tile_step_size=DEFAULT_TILE_STEP_SIZE,
+            slice_batch_size=arguments.slice_batch_size,
         )
         prediction_path = prediction_root / f"{case_id}.nii.gz"
         validation = save_and_validate_prediction(prediction_path, prediction, source)
@@ -146,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "tile_step_size": DEFAULT_TILE_STEP_SIZE,
             "tile_aggregation": "logit_mean_then_argmax",
             "postprocessing": "class_argmax_after_all_tta_and_tiles",
+            "slice_batch_size": arguments.slice_batch_size,
             "output_space": "source",
             "output_dtype": "uint8",
         },
