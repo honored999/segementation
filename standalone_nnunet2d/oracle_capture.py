@@ -71,11 +71,13 @@ def _module_version(nnunetv2: Any) -> str:
     return str(getattr(version_module, "__version__", "unknown"))
 
 
-def _find_case_file(root: Path, case_id: str, suffix: str) -> Path:
+def _find_case_file(root: Path, case_id: str, suffix: str, *, allow_missing: bool = False) -> Path | None:
     direct = root / f"{case_id}{suffix}"
     if direct.is_file():
         return direct
     candidates = sorted(path for path in root.rglob("*") if path.is_file() and path.name == direct.name)
+    if allow_missing and not candidates:
+        return None
     if len(candidates) != 1:
         raise FileNotFoundError(
             f"expected exactly one {suffix} artifact for {case_id!r} below {root}, found {len(candidates)}"
@@ -103,12 +105,32 @@ def _as_channel_free(array: np.ndarray, *, name: str) -> np.ndarray:
 
 
 def _read_preprocessed_case(root: Path, case_id: str) -> tuple[np.ndarray, np.ndarray]:
-    path = _find_case_file(root, case_id, ".npz")
-    with np.load(path, allow_pickle=False) as payload:
-        if "data" not in payload or "seg" not in payload:
-            raise OracleCaptureError(f"official preprocessed artifact is missing data/seg arrays: {path}")
-        image = _as_channel_free(payload["data"], name="preprocessed data")
-        label = _as_channel_free(payload["seg"], name="preprocessed seg")
+    npz_path = _find_case_file(root, case_id, ".npz", allow_missing=True)
+    if npz_path is not None:
+        with np.load(npz_path, allow_pickle=False) as payload:
+            if "data" not in payload or "seg" not in payload:
+                raise OracleCaptureError(f"official preprocessed artifact is missing data/seg arrays: {npz_path}")
+            image = _as_channel_free(payload["data"], name="preprocessed data")
+            label = _as_channel_free(payload["seg"], name="preprocessed seg")
+    else:
+        data_path = _find_case_file(root, case_id, ".b2nd")
+        seg_path = root / f"{case_id}_seg.b2nd"
+        if not seg_path.is_file():
+            candidates = sorted(path for path in root.rglob("*") if path.is_file() and path.name == seg_path.name)
+            if len(candidates) == 1:
+                seg_path = candidates[0]
+            else:
+                raise FileNotFoundError(f"official preprocessed segmentation artifact is missing: {seg_path}")
+        try:
+            import blosc2
+        except ModuleNotFoundError as error:
+            raise OracleCaptureError("b2nd preprocessed artifacts require blosc2 in the server environment") from error
+        image = _as_channel_free(
+            np.asarray(blosc2.open(urlpath=str(data_path), mode="r")), name="preprocessed data"
+        )
+        label = _as_channel_free(
+            np.asarray(blosc2.open(urlpath=str(seg_path), mode="r")), name="preprocessed seg"
+        )
     if image.shape != label.shape:
         raise OracleCaptureError(f"preprocessed data/seg shapes differ: {image.shape} != {label.shape}")
     return image.astype(np.float32, copy=False), label.astype(np.int16, copy=False)
@@ -153,34 +175,50 @@ def _to_numpy(value: Any, *, name: str) -> np.ndarray:
     return result
 
 
-def _official_transform(image: np.ndarray, label: np.ndarray, *, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def _official_transform(
+    image: np.ndarray, label: np.ndarray, *, seed: int, plans_path: Path
+) -> tuple[np.ndarray, np.ndarray]:
     try:
-        module = importlib.import_module("nnunetv2.training.data_augmentation.default_data_augmentation")
-        factory = getattr(module, "get_training_transforms")
+        module = importlib.import_module("nnunetv2.training.nnUNetTrainer.nnUNetTrainer")
+        trainer_class = getattr(module, "nnUNetTrainer")
+        factory = getattr(trainer_class, "get_training_transforms")
     except (ImportError, AttributeError) as error:
         raise OracleCaptureError("server nnunetv2 does not expose get_training_transforms") from error
 
+    with plans_path.open(encoding="utf-8") as handle:
+        plans = json.load(handle)
+    configuration = plans["configurations"]["2d"]
+    patch_size = tuple(int(value) for value in configuration["patch_size"])
+    use_mask_for_norm = configuration["use_mask_for_norm"]
+    rotation_limit = (15.0 if max(patch_size) / min(patch_size) > 1.5 else 180.0) / 360.0 * 2.0 * np.pi
     np.random.seed(seed)
     try:
+        import torch
+
         transform = factory(
-            patch_size=tuple(int(value) for value in image.shape),
+            patch_size=patch_size,
+            rotation_for_DA=(-rotation_limit, rotation_limit),
             deep_supervision_scales=None,
             mirror_axes=(0, 1),
             do_dummy_2d_data_aug=False,
+            use_mask_for_norm=use_mask_for_norm,
         )
-        result = transform({"data": image[None, None], "seg": label[None, None]})
+        result = transform(
+            image=torch.as_tensor(image[None]),
+            segmentation=torch.as_tensor(label[None]),
+        )
     except (TypeError, ValueError, RuntimeError) as error:
         raise OracleCaptureError(f"official transform capture failed: {error}") from error
-    if not isinstance(result, Mapping) or "data" not in result or "seg" not in result:
-        raise OracleCaptureError("official transform did not return data and seg mappings")
-    transformed_image = _to_numpy(result["data"], name="transformed image")
-    transformed_label = _to_numpy(result["seg"], name="transformed label")
+    if not isinstance(result, Mapping) or "image" not in result or "segmentation" not in result:
+        raise OracleCaptureError("official transform did not return image and segmentation mappings")
+    transformed_image = _to_numpy(result["image"], name="transformed image")
+    transformed_label = _to_numpy(result["segmentation"], name="transformed label")
     while transformed_image.ndim > 2 and transformed_image.shape[0] == 1:
         transformed_image = transformed_image[0]
     while transformed_label.ndim > 2 and transformed_label.shape[0] == 1:
         transformed_label = transformed_label[0]
     if transformed_image.shape != transformed_label.shape:
-        raise OracleCaptureError("official transform returned mismatched data and seg shapes")
+        raise OracleCaptureError("official transform returned mismatched image and segmentation shapes")
     return transformed_image.astype(np.float32, copy=False), transformed_label.astype(np.int16, copy=False)
 
 
@@ -357,7 +395,7 @@ def capture_oracle(
     elif mode == "transform":
         image, label = _read_preprocessed_case(ctx.preprocessed_root, ctx.case_id)
         image, label, z_index = _load_sample(image, label, seed=ctx.seed)
-        image, label = _official_transform(image, label, seed=ctx.seed)
+        image, label = _official_transform(image, label, seed=ctx.seed, plans_path=ctx.plans_path)
         extra_policy.update({"source": "nnunetv2_training_transform", "z_index": z_index})
     elif mode == "deep_supervision":
         image, label = _read_preprocessed_case(ctx.preprocessed_root, ctx.case_id)

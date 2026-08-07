@@ -24,6 +24,13 @@ REQUIRED_MANIFEST_FIELDS = (
     "arrays",
     "nifti_metadata",
 )
+STRICT_MANIFEST_FIELDS = (
+    "artifact_version",
+    "plans_hash",
+    "seed",
+    "case_id",
+    "nifti_metadata",
+)
 REQUIRED_ARRAYS = ("image", "label", "mask")
 
 
@@ -43,6 +50,11 @@ def _load_manifest(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
     missing_arrays = [name for name in REQUIRED_ARRAYS if name not in payload["arrays"]]
     if missing_arrays:
         return payload, [f"manifest missing mandatory arrays: {', '.join(missing_arrays)}"]
+    transform_policy = payload["transform_policy"]
+    if not isinstance(transform_policy, Mapping):
+        return payload, ["manifest field 'transform_policy' must be an object"]
+    if not isinstance(transform_policy.get("mode"), str):
+        return payload, ["manifest field 'transform_policy.mode' must be a string"]
     return payload, []
 
 
@@ -50,11 +62,23 @@ def _manifest_value_differences(
     oracle: Mapping[str, Any], standalone: Mapping[str, Any]
 ) -> list[str]:
     differences: list[str] = []
-    for field in REQUIRED_MANIFEST_FIELDS:
-        if field == "arrays":
-            continue
+    for field in STRICT_MANIFEST_FIELDS:
         if oracle.get(field) != standalone.get(field):
             differences.append(f"manifest field differs: {field}")
+    oracle_transform_policy = oracle.get("transform_policy")
+    standalone_transform_policy = standalone.get("transform_policy")
+    oracle_mode = (
+        oracle_transform_policy.get("mode")
+        if isinstance(oracle_transform_policy, Mapping)
+        else None
+    )
+    standalone_mode = (
+        standalone_transform_policy.get("mode")
+        if isinstance(standalone_transform_policy, Mapping)
+        else None
+    )
+    if oracle_mode != standalone_mode:
+        differences.append("manifest capture mode differs")
     oracle_arrays = oracle.get("arrays")
     standalone_arrays = standalone.get("arrays")
     if isinstance(oracle_arrays, Mapping) and isinstance(standalone_arrays, Mapping):

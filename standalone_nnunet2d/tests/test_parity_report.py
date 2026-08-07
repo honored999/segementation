@@ -38,7 +38,7 @@ def _write_artifact(
         "plans_hash": "plan-sha256",
         "seed": 17,
         "case_id": "case001",
-        "transform_policy": {"name": "fixed"},
+        "transform_policy": {"mode": "transform", "name": "fixed"},
         "sampling_policy": {"name": "fixed"},
         "arrays": array_manifest,
         "nifti_metadata": {
@@ -52,18 +52,93 @@ def _write_artifact(
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _write_pair(tmp_path: Path, *, image_delta: float = 0.0) -> tuple[Path, Path]:
+def _write_pair(
+    tmp_path: Path,
+    *,
+    image_delta: float = 0.0,
+    oracle_manifest_overrides: dict[str, object] | None = None,
+    standalone_manifest_overrides: dict[str, object] | None = None,
+) -> tuple[Path, Path]:
     label = np.array([[0, 1], [1, 0]], dtype=np.int16)
     mask = np.array([[0, 1], [1, 0]], dtype=np.uint8)
     image = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-    _write_artifact(tmp_path / "oracle", image=image, label=label, mask=mask)
+    _write_artifact(
+        tmp_path / "oracle",
+        image=image,
+        label=label,
+        mask=mask,
+        manifest_overrides=oracle_manifest_overrides,
+    )
     _write_artifact(
         tmp_path / "standalone",
         image=image + image_delta,
         label=label,
         mask=mask,
+        manifest_overrides=standalone_manifest_overrides,
     )
     return tmp_path / "oracle", tmp_path / "standalone"
+
+
+def test_compare_artifacts_allows_implementation_metadata_differences(tmp_path: Path) -> None:
+    oracle, standalone = _write_pair(
+        tmp_path,
+        oracle_manifest_overrides={
+            "nnunetv2_version": "2.5.1",
+            "transform_policy": {
+                "mode": "transform",
+                "implementation": "oracle",
+                "interpolation": "nearest",
+            },
+            "sampling_policy": {"seed": 17, "fold": 0, "implementation": "oracle"},
+        },
+        standalone_manifest_overrides={
+            "nnunetv2_version": "2.6.0",
+            "transform_policy": {
+                "mode": "transform",
+                "implementation": "standalone",
+                "interpolation": "nearest",
+            },
+            "sampling_policy": {"seed": 17, "fold": 0, "implementation": "standalone"},
+        },
+    )
+
+    report = compare_artifacts(oracle, standalone)
+
+    assert report["status"] == "passed"
+    assert report["components"]["manifest"]["status"] == "passed"
+    assert report["run_state"] == "official_alignment_pending"
+
+
+def test_compare_artifacts_rejects_seed_mismatch(tmp_path: Path) -> None:
+    oracle, standalone = _write_pair(tmp_path, standalone_manifest_overrides={"seed": 18})
+
+    report = compare_artifacts(oracle, standalone)
+
+    assert report["status"] == "failed"
+    assert "manifest field differs: seed" in report["diagnostics"]
+
+
+def test_compare_artifacts_rejects_case_id_mismatch(tmp_path: Path) -> None:
+    oracle, standalone = _write_pair(tmp_path, standalone_manifest_overrides={"case_id": "case002"})
+
+    report = compare_artifacts(oracle, standalone)
+
+    assert report["status"] == "failed"
+    assert "manifest field differs: case_id" in report["diagnostics"]
+
+
+def test_compare_artifacts_rejects_capture_mode_mismatch(tmp_path: Path) -> None:
+    oracle, standalone = _write_pair(
+        tmp_path,
+        standalone_manifest_overrides={
+            "transform_policy": {"mode": "inference", "implementation": "standalone"}
+        },
+    )
+
+    report = compare_artifacts(oracle, standalone)
+
+    assert report["status"] == "failed"
+    assert "manifest capture mode differs" in report["diagnostics"]
 
 
 def test_compare_artifacts_accepts_only_declared_float_tolerance(tmp_path: Path) -> None:
