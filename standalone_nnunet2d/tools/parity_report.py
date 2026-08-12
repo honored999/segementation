@@ -12,6 +12,8 @@ import numpy as np
 
 
 RUN_STATE = "official_alignment_pending"
+REPEATED_INFERENCE_POLICY = "repeat_oracle_stability_v1"
+MINIMUM_ORACLE_REPEATS = 3
 MANIFEST_NAME = "manifest.json"
 REQUIRED_MANIFEST_FIELDS = (
     "artifact_version",
@@ -207,6 +209,315 @@ def compare_artifacts(
     }
 
 
+def _resolved_distinct_roots(oracle_roots: Sequence[Path]) -> tuple[Path, ...]:
+    roots = tuple(Path(root).resolve() for root in oracle_roots)
+    if len(roots) < MINIMUM_ORACLE_REPEATS:
+        raise ValueError("repeated inference parity requires at least three oracle roots")
+    if len(set(roots)) != len(roots):
+        raise ValueError("repeated inference parity requires distinct oracle roots")
+    return roots
+
+
+def _coordinates(mask: np.ndarray) -> list[list[int]]:
+    return np.argwhere(mask).astype(int, copy=False).tolist()
+
+
+def _mask_schema_diagnostic(
+    name: str,
+    reference: np.ndarray,
+    candidate: np.ndarray,
+) -> str | None:
+    if reference.shape != candidate.shape:
+        return f"{name}: shape differs: {reference.shape} != {candidate.shape}"
+    if reference.dtype != candidate.dtype:
+        return f"{name}: dtype differs: {reference.dtype} != {candidate.dtype}"
+    if not np.issubdtype(candidate.dtype, np.integer):
+        return f"{name}: expected an integer dtype, got {candidate.dtype}"
+    return None
+
+
+def _inference_context_diagnostics(
+    manifests: Sequence[dict[str, Any] | None],
+    oracle_repeat_count: int,
+) -> list[str]:
+    diagnostics: list[str] = []
+    contexts: list[Mapping[str, Any] | None] = []
+    for index, manifest in enumerate(manifests):
+        if manifest is None:
+            contexts.append(None)
+            continue
+        value = manifest.get("inference_context")
+        if not isinstance(value, Mapping):
+            diagnostics.append(f"artifact[{index}]: inference_context must be an object")
+            contexts.append(None)
+            continue
+        fold = value.get("fold")
+        source_sha256 = value.get("source_checkpoint_sha256")
+        device = value.get("device")
+        valid = True
+        if isinstance(fold, bool) or not isinstance(fold, int) or fold < 0:
+            diagnostics.append(
+                f"artifact[{index}]: inference_context.fold must be a non-negative integer"
+            )
+            valid = False
+        if (
+            not isinstance(source_sha256, str)
+            or len(source_sha256) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in source_sha256)
+        ):
+            diagnostics.append(
+                f"artifact[{index}]: inference_context.source_checkpoint_sha256 must be a 64-character SHA256"
+            )
+            valid = False
+        if device == "cpu":
+            pass
+        elif isinstance(device, str) and device.startswith("cuda:"):
+            index_text = device.removeprefix("cuda:")
+            if not index_text.isdigit() or str(int(index_text)) != index_text:
+                diagnostics.append(
+                    f"artifact[{index}]: inference_context.device must be cpu or canonical cuda:<index>"
+                )
+                valid = False
+        else:
+            diagnostics.append(
+                f"artifact[{index}]: inference_context.device must be cpu or canonical cuda:<index>"
+            )
+            valid = False
+        contexts.append(value if valid else None)
+
+    if all(context is not None for context in contexts):
+        baseline = contexts[0]
+        assert baseline is not None
+        for index, context in enumerate(contexts[1:], start=1):
+            assert context is not None
+            if dict(context) != dict(baseline):
+                diagnostics.append(f"artifact[{index}]: inference_context differs")
+
+    sampling_keys: list[tuple[int, int] | None] = []
+    for index in range(oracle_repeat_count):
+        manifest = manifests[index]
+        if manifest is None:
+            sampling_keys.append(None)
+            continue
+        policy = manifest.get("sampling_policy")
+        if not isinstance(policy, Mapping):
+            diagnostics.append(f"artifact[{index}]: sampling_policy must be an object")
+            sampling_keys.append(None)
+            continue
+        fold = policy.get("fold")
+        seed = policy.get("seed")
+        if isinstance(fold, bool) or not isinstance(fold, int) or fold < 0:
+            diagnostics.append(
+                f"artifact[{index}]: sampling_policy.fold must be a non-negative integer"
+            )
+            sampling_keys.append(None)
+            continue
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            diagnostics.append(f"artifact[{index}]: sampling_policy.seed must be an integer")
+            sampling_keys.append(None)
+            continue
+        sampling_keys.append((fold, seed))
+    if all(key is not None for key in sampling_keys):
+        baseline = sampling_keys[0]
+        assert baseline is not None
+        for index, key in enumerate(sampling_keys[1:], start=1):
+            assert key is not None
+            if key != baseline:
+                diagnostics.append(f"artifact[{index}]: sampling_policy fold/seed differs")
+    return diagnostics
+
+
+def compare_repeated_oracle_inference(
+    oracle_roots: Sequence[Path],
+    standalone_root: Path,
+    image_atol: float = 0.0,
+) -> dict[str, Any]:
+    """Compare standalone inference against repeated official mask behavior."""
+    if image_atol != 0.0 or not np.isfinite(image_atol):
+        raise ValueError("repeated inference parity requires finite image_atol=0.0")
+    roots = _resolved_distinct_roots(oracle_roots)
+    standalone_root = Path(standalone_root).resolve()
+    if any(
+        oracle_root == standalone_root
+        or oracle_root in standalone_root.parents
+        or standalone_root in oracle_root.parents
+        for oracle_root in roots
+    ):
+        raise ValueError(
+            "repeated inference parity requires standalone and oracle roots to be independent; "
+            "artifact roots must not overlap"
+        )
+
+    all_roots = (*roots, standalone_root)
+    manifests: list[dict[str, Any] | None] = []
+    manifest_diagnostics: list[str] = []
+    for index, root in enumerate(all_roots):
+        manifest, errors = _load_manifest(root)
+        manifests.append(manifest)
+        prefix = f"artifact[{index}]"
+        manifest_diagnostics.extend(f"{prefix}: {error}" for error in errors)
+        if manifest is not None:
+            policy = manifest.get("transform_policy")
+            mode = policy.get("mode") if isinstance(policy, Mapping) else None
+            if mode != "inference":
+                raise ValueError(f"{prefix} must use inference mode")
+
+    if all(manifest is not None for manifest in manifests):
+        baseline = manifests[0]
+        assert baseline is not None
+        for index, manifest in enumerate(manifests[1:], start=1):
+            assert manifest is not None
+            manifest_diagnostics.extend(
+                f"artifact[{index}]: {difference}"
+                for difference in _manifest_value_differences(baseline, manifest)
+            )
+        manifest_diagnostics.extend(
+            _inference_context_diagnostics(manifests, len(roots))
+        )
+
+    components: dict[str, dict[str, Any]] = {
+        "manifest": {
+            "status": "passed" if not manifest_diagnostics else "failed",
+            "diagnostics": manifest_diagnostics,
+        },
+        "image": {"status": "failed", "diagnostics": []},
+        "label": {"status": "failed", "diagnostics": []},
+        "mask": {"status": "failed", "diagnostics": []},
+    }
+    diagnostics = list(manifest_diagnostics)
+
+    arrays_by_name: dict[str, list[np.ndarray | None]] = {
+        name: [] for name in REQUIRED_ARRAYS
+    }
+    for root, manifest in zip(all_roots, manifests):
+        for name in REQUIRED_ARRAYS:
+            if manifest is None:
+                arrays_by_name[name].append(None)
+                continue
+            try:
+                arrays_by_name[name].append(_load_array(root, manifest, name))
+            except (OSError, ValueError) as error:
+                arrays_by_name[name].append(None)
+                message = f"artifact array '{name}' could not be loaded: {error}"
+                components[name]["diagnostics"].append(message)
+                diagnostics.append(message)
+
+    for name in ("image", "label"):
+        arrays = arrays_by_name[name]
+        if all(array is not None for array in arrays):
+            reference = arrays[0]
+            assert reference is not None
+            array_diagnostics: list[str] = []
+            for index, candidate in enumerate(arrays[1:], start=1):
+                assert candidate is not None
+                passed, diagnostic = _array_matches(
+                    name,
+                    reference,
+                    candidate,
+                    image_atol=0.0,
+                )
+                if not passed and diagnostic is not None:
+                    array_diagnostics.append(f"artifact[{index}]: {diagnostic}")
+            components[name]["diagnostics"].extend(array_diagnostics)
+            diagnostics.extend(array_diagnostics)
+        elif not components[name]["diagnostics"]:
+            components[name]["diagnostics"].append("manifest validation failed")
+            diagnostics.append(f"{name}: manifest validation failed")
+        components[name]["status"] = "passed" if not components[name]["diagnostics"] else "failed"
+
+    oracle_masks = arrays_by_name["mask"][: len(roots)]
+    standalone_mask = arrays_by_name["mask"][-1]
+    pairwise: list[dict[str, int]] = []
+    unstable_coordinates: list[list[int]] = []
+    stable_mismatch_coordinates: list[list[int]] = []
+    unobserved_coordinates: list[list[int]] = []
+    if all(mask is not None for mask in (*oracle_masks, standalone_mask)):
+        reference_mask = oracle_masks[0]
+        assert reference_mask is not None
+        schema_diagnostics: list[str] = []
+        for index, candidate in enumerate((*oracle_masks[1:], standalone_mask), start=1):
+            assert candidate is not None
+            diagnostic = _mask_schema_diagnostic("mask", reference_mask, candidate)
+            if diagnostic is not None:
+                schema_diagnostics.append(f"artifact[{index}]: {diagnostic}")
+        if not np.issubdtype(reference_mask.dtype, np.integer):
+            schema_diagnostics.append(
+                f"artifact[0]: mask: expected an integer dtype, got {reference_mask.dtype}"
+            )
+        components["mask"]["diagnostics"].extend(schema_diagnostics)
+        diagnostics.extend(schema_diagnostics)
+        if not schema_diagnostics:
+            stack = np.stack([mask for mask in oracle_masks if mask is not None], axis=0)
+            assert standalone_mask is not None
+            pairwise = [
+                {
+                    "left_index": left,
+                    "right_index": right,
+                    "difference_count": int(np.count_nonzero(stack[left] != stack[right])),
+                }
+                for left in range(len(roots))
+                for right in range(left + 1, len(roots))
+            ]
+            stable = np.all(stack == stack[0], axis=0)
+            unstable = ~stable
+            stable_mismatch = stable & (standalone_mask != stack[0])
+            observed = np.any(stack == standalone_mask[None], axis=0)
+            unobserved = unstable & ~observed
+            unstable_coordinates = _coordinates(unstable)
+            stable_mismatch_coordinates = _coordinates(stable_mismatch)
+            unobserved_coordinates = _coordinates(unobserved)
+            components["mask"]["diagnostics"].extend(
+                [
+                    *(
+                        [
+                            f"mask: standalone differs on {len(stable_mismatch_coordinates)} stable voxels"
+                        ]
+                        if stable_mismatch_coordinates
+                        else []
+                    ),
+                    *(
+                        [
+                            f"mask: standalone uses unobserved labels on {len(unobserved_coordinates)} unstable voxels"
+                        ]
+                        if unobserved_coordinates
+                        else []
+                    ),
+                ]
+            )
+    elif not components["mask"]["diagnostics"]:
+        components["mask"]["diagnostics"].append("manifest validation failed")
+        diagnostics.append("mask: manifest validation failed")
+
+    if stable_mismatch_coordinates:
+        diagnostics.append(
+            f"mask: standalone differs on {len(stable_mismatch_coordinates)} stable voxels"
+        )
+    if unobserved_coordinates:
+        diagnostics.append(
+            f"mask: standalone uses unobserved labels on {len(unobserved_coordinates)} unstable voxels"
+        )
+    components["mask"]["status"] = "passed" if not components["mask"]["diagnostics"] else "failed"
+
+    return {
+        "parity_policy": REPEATED_INFERENCE_POLICY,
+        "oracle_roots": [str(root) for root in roots],
+        "oracle_repeat_count": len(roots),
+        "oracle_pairwise_mask_difference_counts": pairwise,
+        "oracle_unstable_voxel_count": len(unstable_coordinates),
+        "oracle_unstable_voxel_coordinates": unstable_coordinates,
+        "stable_mask_mismatch_count": len(stable_mismatch_coordinates),
+        "stable_mask_mismatch_coordinates": stable_mismatch_coordinates,
+        "unobserved_standalone_label_count": len(unobserved_coordinates),
+        "unobserved_standalone_label_coordinates": unobserved_coordinates,
+        "status": "passed" if not diagnostics else "failed",
+        "run_state": RUN_STATE,
+        "standalone_root": str(standalone_root),
+        "image_atol": float(image_atol),
+        "components": components,
+        "diagnostics": diagnostics,
+    }
+
+
 def write_report(path: Path, report: Mapping[str, Any]) -> Path:
     """Write a JSON-safe parity report to a caller-selected path."""
     destination = Path(path).resolve()
@@ -217,7 +528,7 @@ def write_report(path: Path, report: Mapping[str, Any]) -> Path:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare oracle and standalone parity artifacts")
-    parser.add_argument("--oracle-root", required=True, type=Path)
+    parser.add_argument("--oracle-root", required=True, action="append", type=Path)
     parser.add_argument("--standalone-root", required=True, type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--image-atol", type=float, default=0.0)
@@ -225,12 +536,22 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
-    report = compare_artifacts(
-        arguments.oracle_root,
-        arguments.standalone_root,
-        image_atol=arguments.image_atol,
-    )
+    parser = _parser()
+    arguments = parser.parse_args(argv)
+    if len(arguments.oracle_root) == 2:
+        parser.error("provide one oracle root or at least three distinct oracle roots")
+    if len(arguments.oracle_root) == 1:
+        report = compare_artifacts(
+            arguments.oracle_root[0],
+            arguments.standalone_root,
+            image_atol=arguments.image_atol,
+        )
+    else:
+        report = compare_repeated_oracle_inference(
+            arguments.oracle_root,
+            arguments.standalone_root,
+            image_atol=arguments.image_atol,
+        )
     if arguments.output is not None:
         write_report(arguments.output, report)
     print(json.dumps(report, indent=2, sort_keys=True))

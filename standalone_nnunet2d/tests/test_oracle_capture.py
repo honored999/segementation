@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -480,3 +481,119 @@ def test_official_transform_passes_torch_tensors_to_bgv2_transform(
 
     np.testing.assert_array_equal(result_image, image)
     np.testing.assert_array_equal(result_label, label)
+
+
+def test_official_transform_seeds_numpy_and_torch_before_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torch
+
+    image = np.arange(6, dtype=np.float32).reshape(2, 3)
+    label = np.zeros((2, 3), dtype=np.int16)
+    plans_path = tmp_path / "nnUNetPlans.json"
+    plans_path.write_text(
+        json.dumps({"configurations": {"2d": {"patch_size": [512, 512], "use_mask_for_norm": [True]}}}),
+        encoding="utf-8",
+    )
+    events: list[tuple[str, int | None]] = []
+
+    class Trainer:
+        @classmethod
+        def get_training_transforms(cls, **kwargs: object) -> object:
+            del cls, kwargs
+
+            def transform(*, image: torch.Tensor, segmentation: torch.Tensor) -> dict[str, torch.Tensor]:
+                events.append(("transform", None))
+                return {"image": image, "segmentation": segmentation}
+
+            return transform
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        del args, kwargs
+        if name != "nnunetv2.training.nnUNetTrainer.nnUNetTrainer":
+            raise ModuleNotFoundError(name)
+        return SimpleNamespace(nnUNetTrainer=Trainer)
+
+    monkeypatch.setattr(oracle_capture.importlib, "import_module", fake_import)
+    monkeypatch.setattr(np.random, "seed", lambda seed: events.append(("numpy", seed)))
+    monkeypatch.setattr(torch, "manual_seed", lambda seed: events.append(("torch", seed)))
+
+    oracle_capture._official_transform(image, label, seed=7, plans_path=plans_path)
+
+    assert events == [("numpy", 7), ("torch", 7), ("transform", None)]
+
+
+def test_oracle_inference_artifact_records_checkpoint_context_and_normalized_device(
+    tmp_path: Path,
+) -> None:
+    plans_path = tmp_path / "plans.json"
+    plans_path.write_text("{}", encoding="utf-8")
+    checkpoint = tmp_path / "model" / "fold_2" / "checkpoint_best.pth"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"official checkpoint")
+    context = oracle_capture.CaptureContext(
+        mode="inference",
+        raw_root=tmp_path / "raw",
+        preprocessed_root=tmp_path / "preprocessed",
+        results_root=tmp_path / "results",
+        output_root=tmp_path / "output",
+        case_id="case001",
+        fold=2,
+        seed=17,
+        plans_path=plans_path,
+        model_folder=checkpoint.parent.parent,
+        device="cpu",
+        checkpoint_name=checkpoint.name,
+        nnunetv2_version="2.5.1",
+    )
+
+    artifact_root = oracle_capture._write_artifact(
+        context,
+        {
+            "image": np.zeros((2, 2), dtype=np.float32),
+            "label": np.zeros((2, 2), dtype=np.int16),
+            "mask": np.zeros((2, 2), dtype=np.uint8),
+        },
+        nifti_metadata={"space": "raw"},
+    )
+
+    manifest = json.loads((artifact_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["inference_context"] == {
+        "fold": 2,
+        "source_checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "device": "cpu",
+    }
+    assert manifest["sampling_policy"] == {"seed": 17, "fold": 2}
+
+
+def test_oracle_inference_artifact_rejects_missing_checkpoint_context(
+    tmp_path: Path,
+) -> None:
+    plans_path = tmp_path / "plans.json"
+    plans_path.write_text("{}", encoding="utf-8")
+    context = oracle_capture.CaptureContext(
+        mode="inference",
+        raw_root=tmp_path / "raw",
+        preprocessed_root=tmp_path / "preprocessed",
+        results_root=tmp_path / "results",
+        output_root=tmp_path / "output",
+        case_id="case001",
+        fold=2,
+        seed=17,
+        plans_path=plans_path,
+        model_folder=tmp_path / "model",
+        device="cpu",
+        checkpoint_name="checkpoint_best.pth",
+        nnunetv2_version="2.5.1",
+    )
+
+    with pytest.raises((FileNotFoundError, oracle_capture.OracleCaptureError), match="checkpoint"):
+        oracle_capture._write_artifact(
+            context,
+            {
+                "image": np.zeros((2, 2), dtype=np.float32),
+                "label": np.zeros((2, 2), dtype=np.int16),
+                "mask": np.zeros((2, 2), dtype=np.uint8),
+            },
+            nifti_metadata={"space": "raw"},
+        )

@@ -11,7 +11,7 @@ from torch import Tensor
 
 from standalone_nnunet2d.data.dataset import SplitName, StrokeSliceDataset
 from standalone_nnunet2d.training.batch_sampler import PatchRequest
-from standalone_nnunet2d.training.official_augmentation import apply_official_2d_augmentation
+from standalone_nnunet2d.training.official_augmentation import apply_official_2d_batchgeneratorsv2
 from standalone_nnunet2d.training.patch_sampler import crop_or_pad, sample_patch_center
 
 
@@ -26,6 +26,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         split: SplitName,
         case_ids: tuple[str, ...] | None = None,
         patch_size: tuple[int, int] = (512, 512),
+        use_mask_for_norm: tuple[bool, ...] = (False,),
         oversample_foreground_percent: float = 0.33,
         rng: np.random.Generator | None = None,
         augment: bool = True,
@@ -36,6 +37,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         if not 0.0 <= oversample_foreground_percent <= 1.0:
             raise ValueError("oversample_foreground_percent must be in [0, 1]")
         self.patch_size = patch_size
+        self.use_mask_for_norm = tuple(use_mask_for_norm)
         self.oversample_foreground_percent = oversample_foreground_percent
         self.patch_rng = rng or np.random.default_rng()
         self.augment = augment
@@ -68,7 +70,14 @@ class FormalPatchDataset(StrokeSliceDataset):
             )
         image_patch, label_patch = crop_or_pad(image_slice, label_slice, center, self.patch_size)
         if self.augment:
-            image_patch, label_patch = apply_official_2d_augmentation(image_patch, label_patch, self.patch_rng, self.patch_size)
+            seed = int(self.patch_rng.integers(0, 2**32 - 1))
+            image_patch, label_patch = apply_official_2d_batchgeneratorsv2(
+                image_patch,
+                label_patch,
+                patch_size=self.patch_size,
+                use_mask_for_norm=self.use_mask_for_norm,
+                seed=seed,
+            )
         label_patch = np.where(label_patch < 0, 0, label_patch).astype(np.int64, copy=False)
         if not np.isin(label_patch, (0, 1)).all():
             raise ValueError("formal patch labels must contain only 0 and 1")

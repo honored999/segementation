@@ -191,10 +191,11 @@ def _official_transform(
     patch_size = tuple(int(value) for value in configuration["patch_size"])
     use_mask_for_norm = configuration["use_mask_for_norm"]
     rotation_limit = (15.0 if max(patch_size) / min(patch_size) > 1.5 else 180.0) / 360.0 * 2.0 * np.pi
-    np.random.seed(seed)
     try:
         import torch
 
+        np.random.seed(seed)
+        torch.manual_seed(seed)
         transform = factory(
             patch_size=patch_size,
             rotation_for_DA=(-rotation_limit, rotation_limit),
@@ -248,6 +249,7 @@ def _official_deep_supervision(label: np.ndarray) -> tuple[np.ndarray, ...]:
 def _official_inference(ctx: CaptureContext) -> tuple[np.ndarray, np.ndarray, np.ndarray, NiftiVolume]:
     if ctx.model_folder is None:
         raise OracleCaptureError("inference capture requires --model-folder")
+    _inference_context(ctx)
     image, label, image_path, _ = _read_raw_case(ctx)
     try:
         module = importlib.import_module("nnunetv2.inference.predict_from_raw_data")
@@ -306,6 +308,56 @@ def _plans_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _normalize_device(device: str) -> str:
+    try:
+        import torch
+
+        resolved = torch.device(device)
+    except (ImportError, RuntimeError, TypeError, ValueError) as error:
+        raise OracleCaptureError(f"invalid inference device: {device!r}") from error
+    if resolved.type == "cpu":
+        return "cpu"
+    if resolved.type == "cuda":
+        index = resolved.index
+        if index is None:
+            try:
+                index = int(torch.cuda.current_device())
+            except (RuntimeError, AssertionError) as error:
+                raise OracleCaptureError(
+                    "cannot resolve the active CUDA index for inference device 'cuda'"
+                ) from error
+        return f"cuda:{index}"
+    raise OracleCaptureError(f"inference device must be cpu or cuda, got {resolved}")
+
+
+def _inference_context(ctx: CaptureContext) -> dict[str, object]:
+    if ctx.mode != "inference":
+        raise OracleCaptureError("inference_context is only valid for inference capture")
+    if ctx.model_folder is None:
+        raise OracleCaptureError("inference capture requires --model-folder")
+    checkpoint_name = Path(ctx.checkpoint_name)
+    if checkpoint_name.is_absolute() or ".." in checkpoint_name.parts:
+        raise OracleCaptureError("checkpoint name must be relative to the fold model folder")
+    checkpoint_path = (
+        ctx.model_folder / f"fold_{ctx.fold}" / checkpoint_name
+    ).resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"official checkpoint does not exist: {checkpoint_path}")
+    return {
+        "fold": int(ctx.fold),
+        "source_checkpoint_sha256": _sha256(checkpoint_path),
+        "device": _normalize_device(ctx.device),
+    }
+
+
 def _write_artifact(
     ctx: CaptureContext,
     arrays: Mapping[str, np.ndarray],
@@ -333,6 +385,8 @@ def _write_artifact(
         "nifti_metadata": dict(nifti_metadata),
         "run_state": RUN_STATE,
     }
+    if ctx.mode == "inference":
+        manifest["inference_context"] = _inference_context(ctx)
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return destination
 

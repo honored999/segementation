@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import csv
+import copy
 import json
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from standalone_nnunet2d import alignment_evidence as alignment_evidence_module
 from standalone_nnunet2d.data.dataset import load_fold_cases, validate_raw_root
 from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.engine.predictor import predict_volume, save_and_validate_prediction
@@ -44,7 +46,18 @@ def _write_fold_report(
     fold: int,
     records: list[dict[str, str | float | int]],
     failed_cases: list[dict[str, str]],
+    run_state: str = DEFAULT_RUN_STATE,
+    alignment_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    resolved_state, validated_evidence = (
+        alignment_evidence_module.validate_checkpoint_alignment_metadata(
+            {
+                "run_type": run_state,
+                "run_state": run_state,
+                "alignment_evidence": alignment_evidence,
+            }
+        )
+    )
     report: dict[str, Any] = {
         "schema_version": 1,
         "fold": fold,
@@ -54,8 +67,10 @@ def _write_fold_report(
         "aggregation": METRIC_POLICY["aggregation"],
         "failed_case_count": len(failed_cases),
         "failed_cases": failed_cases,
-        "run_state": DEFAULT_RUN_STATE,
+        "run_state": resolved_state,
     }
+    if validated_evidence is not None:
+        report["alignment_evidence"] = copy.deepcopy(validated_evidence)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return report
@@ -68,12 +83,23 @@ def validate_fold(
     fold: int,
     output_root: Path,
     device: torch.device,
+    run_state: str = DEFAULT_RUN_STATE,
+    alignment_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate every held-out case with source-space full-volume inference.
 
     This path intentionally operates on one complete NIfTI volume at a time,
     independently of the online patch-level validation helper.
     """
+    resolved_state, validated_evidence = (
+        alignment_evidence_module.validate_checkpoint_alignment_metadata(
+            {
+                "run_type": run_state,
+                "run_state": run_state,
+                "alignment_evidence": alignment_evidence,
+            }
+        )
+    )
     root = validate_raw_root(raw_root)
     case_ids = load_fold_cases(fold, "val")
     destination = output_root.resolve()
@@ -102,4 +128,6 @@ def validate_fold(
         fold=fold,
         records=records,
         failed_cases=failed_cases,
+        run_state=resolved_state,
+        alignment_evidence=validated_evidence,
     )

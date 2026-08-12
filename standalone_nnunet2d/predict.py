@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,6 +15,10 @@ import torch
 from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.data.dataset import load_fold_cases
 from standalone_nnunet2d.data.nifti_io import read_nifti
+from standalone_nnunet2d.alignment_evidence import (
+    OFFICIAL_ALIGNED,
+    validate_checkpoint_alignment_metadata,
+)
 from standalone_nnunet2d.engine.predictor import (
     DEFAULT_MIRROR_AXES,
     DEFAULT_PATCH_SIZE,
@@ -101,11 +106,11 @@ def _source_path(raw_root: Path, case_id: str) -> Path:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     _, checkpoint_metadata = _read_checkpoint(arguments.checkpoint)
-    run_state = str(checkpoint_metadata.get("run_state", checkpoint_metadata.get("run_type", "")))
+    run_state, alignment_evidence = validate_checkpoint_alignment_metadata(
+        checkpoint_metadata
+    )
     if run_state == DEFAULT_RUN_STATE and not arguments.allow_pending:
         raise ValueError("pending checkpoint requires explicit --allow-pending")
-    if run_state == "official_aligned":
-        raise ValueError("official alignment cannot be claimed without a passed parity report")
 
     device = torch.device(arguments.device)
     model, loaded_metadata = _load_model(arguments.checkpoint, device)
@@ -140,7 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema_version": 1,
         "policy": {
             "run_state": run_state,
-            "alignment_status": "official_alignment_pending" if run_state == DEFAULT_RUN_STATE else "unverified",
+            "alignment_status": run_state,
             "full_resolution_logits": True,
             "mirror_axes": list(DEFAULT_MIRROR_AXES),
             "mirror_aggregation": "unflip_logits_then_mean",
@@ -158,6 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "cases": case_records,
     }
+    if alignment_evidence is not None:
+        manifest["policy"]["alignment_evidence"] = copy.deepcopy(alignment_evidence)
     manifest_path = arguments.output_root.resolve() / "prediction_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(_json_safe(manifest), indent=2, sort_keys=True), encoding="utf-8")

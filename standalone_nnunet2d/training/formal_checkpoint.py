@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from torch.optim import Optimizer
 
 from standalone_nnunet2d.engine.checkpoint import load_checkpoint, save_checkpoint
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
+from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, validate_alignment_evidence_record
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class FormalCheckpointRestore:
     plan_hash: str
     policies: dict[str, Any]
     run_state: str
+    alignment_evidence: dict[str, Any] | None
 
     @property
     def epoch(self) -> int:
@@ -62,6 +65,7 @@ class FormalCheckpointRestore:
                 and self.plan_hash == other.plan_hash
                 and self.policies == other.policies
                 and self.run_state == other.run_state
+                and self.alignment_evidence == other.alignment_evidence
             )
         return NotImplemented
 
@@ -157,6 +161,34 @@ def _normalise_save_arguments(
     return scheduler, path, state, dict(resolved_config)
 
 
+def _resolve_contract(
+    *,
+    config: Mapping[str, Any],
+    run_state: str,
+    alignment_evidence: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    config_run_type = config.get("run_type", DEFAULT_RUN_STATE)
+    config_run_state = config.get("run_state", config_run_type)
+    if config_run_type != config_run_state or config_run_state != run_state:
+        raise ValueError(
+            "formal checkpoint config and run_state do not match; "
+            f"pending state is {DEFAULT_RUN_STATE}"
+        )
+    config_evidence = config.get("alignment_evidence")
+    if run_state == DEFAULT_RUN_STATE:
+        if alignment_evidence is not None or config_evidence is not None:
+            raise ValueError("pending formal checkpoint cannot carry alignment evidence")
+        return None
+    if run_state != OFFICIAL_ALIGNED:
+        raise ValueError(f"unsupported formal checkpoint run_state: {run_state}")
+    if alignment_evidence is None or config_evidence is None:
+        raise ValueError("official_aligned formal checkpoint requires alignment evidence")
+    validated = validate_alignment_evidence_record(alignment_evidence)
+    if config_evidence != validated:
+        raise ValueError("formal checkpoint config alignment evidence does not match")
+    return validated
+
+
 def save_formal_checkpoint(
     model: nn.Module,
     optimizer: Optimizer,
@@ -169,17 +201,22 @@ def save_formal_checkpoint(
     plan_hash: str | None = None,
     policies: Mapping[str, Any] | None = None,
     run_state: str = DEFAULT_RUN_STATE,
+    alignment_evidence: Mapping[str, Any] | None = None,
 ) -> Path:
     scheduler, path, state, resolved_config = _normalise_save_arguments(
         scheduler_or_path, path_or_state, state_or_config, config
     )
-    if run_state != DEFAULT_RUN_STATE or resolved_config.get("run_state") == "official_aligned":
-        raise ValueError(f"formal checkpoints must remain {DEFAULT_RUN_STATE}")
+    validated_evidence = _resolve_contract(
+        config=resolved_config,
+        run_state=run_state,
+        alignment_evidence=alignment_evidence,
+    )
     resolved_plan_hash = plan_hash or str(resolved_config.get("plan_hash") or compute_plan_hash(resolved_config))
     resolved_policies = dict(policies or resolved_config.get("policies", {}))
     metadata: dict[str, Any] = {
-        "run_type": DEFAULT_RUN_STATE,
-        "run_state": DEFAULT_RUN_STATE,
+        "run_type": run_state,
+        "run_state": run_state,
+        "alignment_evidence": deepcopy(validated_evidence),
         "epoch": state.epoch,
         "global_step": state.global_step,
         "best_validation_dice": state.best_validation_dice,
@@ -203,6 +240,8 @@ def load_formal_checkpoint(
     fold: int,
     plan_hash: str | None = None,
     policies: Mapping[str, Any] | None = None,
+    run_state: str = DEFAULT_RUN_STATE,
+    alignment_evidence: Mapping[str, Any] | None = None,
 ) -> FormalCheckpointRestore:
     if path is None:
         scheduler = None
@@ -210,15 +249,28 @@ def load_formal_checkpoint(
     else:
         scheduler = scheduler_or_path
         checkpoint_path = Path(path)
-    expected: dict[str, Any] = {"run_type": DEFAULT_RUN_STATE, "fold": fold}
+    expected_evidence = _resolve_contract(
+        config={"run_type": run_state, "run_state": run_state, "alignment_evidence": alignment_evidence},
+        run_state=run_state,
+        alignment_evidence=alignment_evidence,
+    )
+    expected: dict[str, Any] = {
+        "run_type": run_state,
+        "run_state": run_state,
+        "alignment_evidence": expected_evidence,
+        "fold": fold,
+    }
     if plan_hash is not None:
         expected["plan_hash"] = plan_hash
     if policies is not None:
         expected["policies"] = dict(policies)
     metadata = load_checkpoint(model, optimizer, checkpoint_path, expected)
-    run_state = str(metadata.get("run_state", metadata.get("run_type", "")))
-    if run_state != DEFAULT_RUN_STATE:
-        raise ValueError(f"formal checkpoint has unsupported run_state: {run_state}")
+    actual_run_state = str(metadata.get("run_state", metadata.get("run_type", "")))
+    actual_evidence = _resolve_contract(
+        config=dict(metadata.get("resolved_config", metadata.get("config", {}))),
+        run_state=actual_run_state,
+        alignment_evidence=metadata.get("alignment_evidence"),
+    )
     state = FormalTrainerState(
         int(metadata["epoch"]),
         int(metadata["global_step"]),
@@ -240,5 +292,6 @@ def load_formal_checkpoint(
         config=dict(metadata.get("resolved_config", metadata.get("config", {}))),
         plan_hash=str(metadata.get("plan_hash", "")),
         policies=dict(metadata.get("policies", {})),
-        run_state=run_state,
+        run_state=actual_run_state,
+        alignment_evidence=deepcopy(actual_evidence),
     )

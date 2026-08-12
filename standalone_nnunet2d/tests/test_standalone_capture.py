@@ -22,7 +22,12 @@ def _write_fixture(tmp_path: Path, *, oracle_mode: str = "transform") -> dict[st
     oracle_root = tmp_path / "oracle"
     output_root = tmp_path / "standalone"
     plans_path = tmp_path / "nnUNetPlans.json"
-    plans_path.write_bytes(b'{"plans": "tiny"}\n')
+    plans_path.write_text(
+        json.dumps(
+            {"configurations": {"2d": {"patch_size": [2, 3], "use_mask_for_norm": [True]}}}
+        ),
+        encoding="utf-8",
+    )
 
     image = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
     label = np.zeros((2, 4, 4), dtype=np.int16)
@@ -74,6 +79,12 @@ def _write_fixture(tmp_path: Path, *, oracle_mode: str = "transform") -> dict[st
         "nifti_metadata": {"space": "raw"},
         "run_state": "official_alignment_pending",
     }
+    if oracle_mode == "inference":
+        manifest["inference_context"] = {
+            "fold": 0,
+            "source_checkpoint_sha256": "a" * 64,
+            "device": "cpu",
+        }
     (oracle_root / "manifest.json").write_text(
         json.dumps(manifest),
         encoding="utf-8",
@@ -98,7 +109,7 @@ def test_capture_standalone_transform_writes_source_derived_artifact(tmp_path: P
     label = np.load(artifact_root / "label.npy")
     mask = np.load(artifact_root / "mask.npy")
     np.testing.assert_array_equal(mask, (label > 0).astype(np.uint8))
-    assert image.shape == label.shape == mask.shape == (4, 4)
+    assert image.shape == label.shape == mask.shape == (2, 3)
     assert not np.array_equal(image, np.load(fixture["oracle_root"] / "image.npy"))
     assert not np.array_equal(label, np.load(fixture["oracle_root"] / "label.npy"))
 
@@ -115,6 +126,21 @@ def test_capture_standalone_transform_writes_source_derived_artifact(tmp_path: P
     ).hexdigest()
     assert manifest["nifti_metadata"]["space"] == "raw"
     assert manifest["nifti_metadata"]["spacing_xyz"] == [0.5, 0.75, 3.0]
+
+
+def test_capture_standalone_transform_uses_plan_config_and_oracle_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = _write_fixture(tmp_path)
+    calls: list[tuple[tuple[int, int], tuple[bool, ...], int]] = []
+
+    def fake_adapter(image, label, *, patch_size, use_mask_for_norm, seed):
+        calls.append((patch_size, tuple(use_mask_for_norm), seed))
+        return image[:2, :3], label[:2, :3]
+
+    monkeypatch.setattr(standalone_capture, "apply_official_2d_batchgeneratorsv2", fake_adapter, raising=False)
+
+    capture_standalone_transform(**fixture)
+
+    assert calls == [((2, 3), (True,), 7)]
 
 
 def test_capture_standalone_transform_rejects_non_transform_oracle(tmp_path: Path) -> None:
@@ -164,7 +190,11 @@ def test_capture_standalone_inference_writes_source_derived_artifact(
 
     def fake_load_model(path: Path, device: torch.device) -> tuple[object, dict[str, object]]:
         loader_calls.append((path, device))
-        return loaded_model, {"run_state": "official_alignment_pending"}
+        return loaded_model, {
+            "run_state": "official_alignment_pending",
+            "fold": 0,
+            "source_sha256": "a" * 64,
+        }
 
     def fake_predict_volume(
         model: object,
@@ -220,7 +250,63 @@ def test_capture_standalone_inference_writes_source_derived_artifact(
     ).hexdigest()
     assert manifest["nifti_metadata"]["space"] == "raw"
     assert manifest["nifti_metadata"]["spacing_xyz"] == [0.5, 0.75, 3.0]
+    assert manifest["inference_context"] == {
+        "fold": 0,
+        "source_checkpoint_sha256": "a" * 64,
+        "device": "cpu",
+    }
     assert manifest["run_state"] == "official_alignment_pending"
+
+
+@pytest.mark.parametrize(
+    "checkpoint_metadata",
+    [
+        {"run_state": "official_alignment_pending", "source_sha256": "a" * 64},
+        {
+            "run_state": "official_alignment_pending",
+            "fold": -1,
+            "source_sha256": "a" * 64,
+        },
+        {
+            "run_state": "official_alignment_pending",
+            "fold": 0,
+            "source_sha256": "not-a-sha256",
+        },
+    ],
+)
+def test_capture_standalone_inference_rejects_missing_or_invalid_checkpoint_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    checkpoint_metadata: dict[str, object],
+) -> None:
+    fixture = _write_fixture(tmp_path, oracle_mode="inference")
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint handled by mocked project loader")
+
+    monkeypatch.setattr(
+        standalone_capture,
+        "_load_model",
+        lambda path, device: (object(), checkpoint_metadata),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        standalone_capture,
+        "predict_volume",
+        lambda model, image, device, *, slice_batch_size: np.zeros(
+            image.array.shape, dtype=np.uint8
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="fold|source_sha256|provenance"):
+        standalone_capture.capture_standalone_inference(
+            oracle_root=fixture["oracle_root"],
+            raw_root=fixture["raw_root"],
+            checkpoint=checkpoint,
+            output_root=fixture["output_root"],
+            plans_path=fixture["plans_path"],
+            device="cpu",
+        )
 
 
 def test_capture_standalone_inference_rejects_non_inference_oracle(tmp_path: Path) -> None:
@@ -235,3 +321,141 @@ def test_capture_standalone_inference_rejects_non_inference_oracle(tmp_path: Pat
             plans_path=fixture["plans_path"],
             device="cpu",
         )
+
+
+def test_capture_cli_defaults_to_transform_and_prints_pending_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    destination = tmp_path / "transform" / "case001"
+
+    def fake_transform(**kwargs: object) -> Path:
+        calls.append(kwargs)
+        return destination
+
+    monkeypatch.setattr(standalone_capture, "capture_standalone_transform", fake_transform)
+
+    result = standalone_capture.main(
+        [
+            "--oracle-root",
+            str(tmp_path / "oracle"),
+            "--preprocessed-root",
+            str(tmp_path / "preprocessed"),
+            "--raw-root",
+            str(tmp_path / "raw"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--plans",
+            str(tmp_path / "plans.json"),
+        ]
+    )
+
+    assert result == 0
+    assert calls == [
+        {
+            "oracle_root": tmp_path / "oracle",
+            "preprocessed_root": tmp_path / "preprocessed",
+            "raw_root": tmp_path / "raw",
+            "output_root": tmp_path / "output",
+            "plans_path": tmp_path / "plans.json",
+        }
+    ]
+    assert json.loads(capsys.readouterr().out) == {
+        "artifact_root": str(destination),
+        "run_state": "official_alignment_pending",
+    }
+
+
+def test_capture_cli_dispatches_inference_arguments(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    destination = tmp_path / "inference" / "case001"
+
+    def fake_inference(**kwargs: object) -> Path:
+        calls.append(kwargs)
+        return destination
+
+    monkeypatch.setattr(standalone_capture, "capture_standalone_inference", fake_inference)
+
+    result = standalone_capture.main(
+        [
+            "--mode",
+            "inference",
+            "--oracle-root",
+            str(tmp_path / "oracle"),
+            "--raw-root",
+            str(tmp_path / "raw"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--plans",
+            str(tmp_path / "plans.json"),
+            "--checkpoint",
+            str(tmp_path / "checkpoint.pt"),
+            "--device",
+            "cuda:0",
+            "--slice-batch-size",
+            "4",
+        ]
+    )
+
+    assert result == 0
+    assert calls == [
+        {
+            "oracle_root": tmp_path / "oracle",
+            "raw_root": tmp_path / "raw",
+            "checkpoint": tmp_path / "checkpoint.pt",
+            "output_root": tmp_path / "output",
+            "plans_path": tmp_path / "plans.json",
+            "device": "cuda:0",
+            "slice_batch_size": 4,
+        }
+    ]
+    assert json.loads(capsys.readouterr().out) == {
+        "artifact_root": str(destination),
+        "run_state": "official_alignment_pending",
+    }
+
+
+def test_capture_cli_reports_missing_preprocessed_root_in_transform_mode(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        standalone_capture.main(
+            [
+                "--oracle-root",
+                str(tmp_path / "oracle"),
+                "--raw-root",
+                str(tmp_path / "raw"),
+                "--output-root",
+                str(tmp_path / "output"),
+                "--plans",
+                str(tmp_path / "plans.json"),
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "transform mode requires --preprocessed-root" in capsys.readouterr().err
+
+
+def test_capture_cli_reports_missing_checkpoint_in_inference_mode(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        standalone_capture.main(
+            [
+                "--mode",
+                "inference",
+                "--oracle-root",
+                str(tmp_path / "oracle"),
+                "--raw-root",
+                str(tmp_path / "raw"),
+                "--output-root",
+                str(tmp_path / "output"),
+                "--plans",
+                str(tmp_path / "plans.json"),
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "inference mode requires --checkpoint" in capsys.readouterr().err

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import json
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import torch
@@ -8,6 +11,7 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from standalone_nnunet2d import formal_train
+from standalone_nnunet2d.alignment_evidence import build_alignment_evidence
 from standalone_nnunet2d.engine import trainer
 from standalone_nnunet2d.engine.validator import ValidationEpochResult
 from standalone_nnunet2d.engine.trainer import TrainEpochResult, TrainStepResult
@@ -22,6 +26,58 @@ class _TinyDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         del index
         return torch.zeros(1, 4, 4), torch.zeros(4, 4, dtype=torch.long)
+
+
+def _components() -> dict[str, dict[str, object]]:
+    return {
+        name: {"status": "passed", "diagnostics": []}
+        for name in ("image", "label", "manifest", "mask")
+    }
+
+
+def _write_alignment_reports(tmp_path: Path, *, suffix: str = "") -> tuple[Path, Path]:
+    transform = {
+        "status": "passed",
+        "run_state": "official_alignment_pending",
+        "oracle_root": f"/oracle/transform/{suffix}",
+        "standalone_root": f"/standalone/transform/{suffix}",
+        "image_atol": 0.0,
+        "components": _components(),
+        "diagnostics": [],
+    }
+    inference = {
+        "parity_policy": "repeat_oracle_stability_v1",
+        "oracle_roots": [
+            f"/oracle/inference/{suffix}/0",
+            f"/oracle/inference/{suffix}/1",
+            f"/oracle/inference/{suffix}/2",
+        ],
+        "oracle_repeat_count": 3,
+        "stable_mask_mismatch_count": 0,
+        "stable_mask_mismatch_coordinates": [],
+        "unobserved_standalone_label_count": 0,
+        "unobserved_standalone_label_coordinates": [],
+        "status": "passed",
+        "run_state": "official_alignment_pending",
+        "standalone_root": f"/standalone/inference/{suffix}",
+        "image_atol": 0.0,
+        "components": _components(),
+        "diagnostics": [],
+    }
+    transform_path = tmp_path / f"transform{suffix}.json"
+    inference_path = tmp_path / f"inference{suffix}.json"
+    transform_path.write_text(json.dumps(transform), encoding="utf-8")
+    inference_path.write_text(json.dumps(inference), encoding="utf-8")
+    return transform_path, inference_path
+
+
+def _write_plans(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {"configurations": {"2d": {"patch_size": [64, 80], "use_mask_for_norm": [False]}}}
+        ),
+        encoding="utf-8",
+    )
 
 
 def _required(module: object, name: str):
@@ -204,9 +260,11 @@ def test_parser_exposes_explicit_performance_profile_and_loader_options() -> Non
         [
             "--raw-root",
             "raw",
-            "--output-root",
-            "out",
-            "--performance-profile",
+                "--output-root",
+                "out",
+                "--plans",
+                "plans.json",
+                "--performance-profile",
             "throughput",
             "--num-workers",
             "3",
@@ -223,6 +281,221 @@ def test_parser_exposes_explicit_performance_profile_and_loader_options() -> Non
     assert args.pin_memory == "on"
     assert args.persistent_workers is True
     assert args.prefetch_factor == 4
+
+
+def test_parser_exposes_alignment_report_paths_as_paths() -> None:
+    parser = formal_train.build_parser()
+
+    args = parser.parse_args(
+        [
+            "--raw-root",
+            "raw",
+            "--output-root",
+            "out",
+            "--plans",
+            "plans.json",
+            "--transform-parity-report",
+            "transform.json",
+            "--inference-parity-report",
+            "inference.json",
+        ]
+    )
+
+    assert args.transform_parity_report == Path("transform.json")
+    assert args.inference_parity_report == Path("inference.json")
+
+
+def test_build_formal_config_defaults_to_pending_without_alignment_evidence() -> None:
+    config = formal_train.build_formal_config(
+        fold=0,
+        epochs=2,
+        schedule=OfficialTrainerSchedule(),
+    )
+
+    assert config["run_type"] == "official_alignment_pending"
+    assert config["run_state"] == "official_alignment_pending"
+    assert "alignment_evidence" not in config
+
+
+def test_build_formal_config_embeds_deep_copied_evidence_and_hashes_it(tmp_path: Path) -> None:
+    transform_path, inference_path = _write_alignment_reports(tmp_path, suffix="_one")
+    evidence = build_alignment_evidence(transform_path, inference_path)
+
+    config = formal_train.build_formal_config(
+        fold=0,
+        epochs=2,
+        schedule=OfficialTrainerSchedule(),
+        alignment_evidence=evidence,
+    )
+
+    assert config["run_type"] == "official_aligned"
+    assert config["run_state"] == "official_aligned"
+    assert config["alignment_evidence"] == evidence
+    assert config["alignment_evidence"] is not evidence
+    evidence["sources"]["transform"]["snapshot"]["status"] = "tampered"
+    assert config["alignment_evidence"]["sources"]["transform"]["snapshot"]["status"] == "passed"
+
+    second_transform, second_inference = _write_alignment_reports(tmp_path, suffix="_two")
+    second_evidence = build_alignment_evidence(second_transform, second_inference)
+    second_config = formal_train.build_formal_config(
+        fold=0,
+        epochs=2,
+        schedule=OfficialTrainerSchedule(),
+        alignment_evidence=second_evidence,
+    )
+    assert config["plan_hash"] != second_config["plan_hash"]
+
+
+def test_main_rejects_one_alignment_report_before_output_side_effect(tmp_path: Path) -> None:
+    plans_path = tmp_path / "plans.json"
+    _write_plans(plans_path)
+    output_root = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as error:
+        formal_train.main(
+            [
+                "--raw-root",
+                str(tmp_path / "raw"),
+                "--output-root",
+                str(output_root),
+                "--plans",
+                str(plans_path),
+                "--transform-parity-report",
+                str(tmp_path / "transform.json"),
+            ]
+        )
+
+    assert error.value.code == 2
+    assert not output_root.exists()
+
+
+def test_main_rejects_invalid_alignment_pair_before_output_side_effect(tmp_path: Path) -> None:
+    plans_path = tmp_path / "plans.json"
+    _write_plans(plans_path)
+    transform_path, inference_path = _write_alignment_reports(tmp_path)
+    inference_path.write_text("{invalid", encoding="utf-8")
+    output_root = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as error:
+        formal_train.main(
+            [
+                "--raw-root",
+                str(tmp_path / "raw"),
+                "--output-root",
+                str(output_root),
+                "--plans",
+                str(plans_path),
+                "--transform-parity-report",
+                str(transform_path),
+                "--inference-parity-report",
+                str(inference_path),
+            ]
+        )
+
+    assert error.value.code == 2
+    assert not output_root.exists()
+
+
+def test_main_valid_alignment_dry_run_reports_aligned_without_output_side_effect(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plans_path = tmp_path / "plans.json"
+    _write_plans(plans_path)
+    transform_path, inference_path = _write_alignment_reports(tmp_path)
+    output_root = tmp_path / "output"
+
+    assert formal_train.main(
+        [
+            "--raw-root",
+            str(tmp_path / "raw"),
+            "--output-root",
+            str(output_root),
+            "--plans",
+            str(plans_path),
+            "--transform-parity-report",
+            str(transform_path),
+            "--inference-parity-report",
+            str(inference_path),
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["config"]["run_type"] == "official_aligned"
+    assert payload["config"]["run_state"] == "official_aligned"
+    assert output_root.exists() is False
+
+
+def test_parser_requires_plans_path() -> None:
+    parser = formal_train.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--raw-root", "raw", "--output-root", "out"])
+
+
+def test_load_2d_plan_config_reads_patch_and_mask_fields_only(tmp_path: Path) -> None:
+    plans_path = tmp_path / "nnUNetPlans.json"
+    plans_path.write_text(
+        json.dumps(
+            {
+                "configurations": {
+                    "2d": {"patch_size": [64, 80], "use_mask_for_norm": [True]},
+                    "3d_fullres": {"patch_size": [12, 384, 384], "use_mask_for_norm": [False]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert formal_train.load_2d_plan_config(plans_path) == ((64, 80), (True,))
+
+
+def test_load_2d_plan_config_fails_normally_when_required_field_is_missing(tmp_path: Path) -> None:
+    plans_path = tmp_path / "nnUNetPlans.json"
+    plans_path.write_text(
+        json.dumps({"configurations": {"2d": {"patch_size": [64, 80]}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KeyError):
+        formal_train.load_2d_plan_config(plans_path)
+
+
+def test_formal_dataset_builder_passes_plan_config_to_train_and_validation() -> None:
+    seen: list[dict[str, object]] = []
+
+    class RecordingDataset:
+        def __init__(self, raw_root: Path, **kwargs: object) -> None:
+            seen.append({"raw_root": raw_root, **kwargs})
+
+    original = formal_train.FormalPatchDataset
+    formal_train.FormalPatchDataset = RecordingDataset  # type: ignore[assignment]
+    try:
+        train, validation = formal_train.build_formal_datasets(
+            Path("raw"), fold=2, patch_size=(64, 80), use_mask_for_norm=(True,)
+        )
+    finally:
+        formal_train.FormalPatchDataset = original
+
+    assert train is not None and validation is not None
+    assert seen == [
+        {
+            "raw_root": Path("raw"),
+            "fold": 2,
+            "split": "train",
+            "patch_size": (64, 80),
+            "use_mask_for_norm": (True,),
+            "augment": True,
+        },
+        {
+            "raw_root": Path("raw"),
+            "fold": 2,
+            "split": "val",
+            "patch_size": (64, 80),
+            "use_mask_for_norm": (True,),
+            "augment": False,
+            "oversample_foreground_percent": 0.0,
+        },
+    ]
 
 
 def test_resolved_config_records_profile_loader_settings_and_disabled_optimizations() -> None:

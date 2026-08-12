@@ -85,12 +85,32 @@ test pass, a smoke result, or an online `validation_dice` value is not an
 official reproduction. Smoke results and online validation are not official
 reproduction.
 
+Smoke and online validation are never official. Before formal training,
+synchronize the current final source from this worktree to the runtime
+checkout. Sync the source tree only; do not copy `outputs/`, checkpoints,
+caches, or other generated artifacts. Use a fresh output root for the aligned
+run:
+
+```text
+C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold
+```
+
 All formal training, prediction, fold-validation, and OOF artifacts are labeled
 `official_alignment_pending` before alignment is established. The local parity
 report also remains `official_alignment_pending` even when its comparison status
-is `passed`. Only both a passed transform parity report and a passed inference
-parity report permit a later artifact/result to be labeled `official_aligned`;
-neither report alone is sufficient.
+is `passed`. Only a passed transform parity report together with a passed
+`repeat_oracle_stability_v1` report permits a later artifact/result to be
+labeled `official_aligned`; a single-root inference report is diagnostic only,
+and neither report alone is sufficient.
+
+For a new training run, only when both `--transform-parity-report` and
+`--inference-parity-report` are supplied and both reports pass may training
+write `official_aligned`. Omitting both reports leaves the run
+`official_alignment_pending`; supplying only one report is also rejected.
+The epoch 999/fold 0 is not retroactively upgraded, and no historical artifact
+is relabeled by a later parity result. Parity reports
+themselves remain `official_alignment_pending` as evidence; only newly
+generated artifacts may be labeled `official_aligned`.
 
 ## Server oracle capture (server-only)
 
@@ -146,90 +166,99 @@ standalone artifact produced from the same case, seed, and policy:
 conda run -n newconda python -m standalone_nnunet2d.tools.parity_report `
   --oracle-root standalone_nnunet2d\outputs\oracle\preprocess\case_0001 `
   --standalone-root standalone_nnunet2d\outputs\standalone\preprocess\case_0001 `
-  --image-atol 1e-6 `
-  --output standalone_nnunet2d\outputs\transform_parity_report.json
+  --image-atol 0 `
+  --output C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json
 ```
 
-Run the inference parity report with the corresponding inference artifacts:
+Run a single-root inference comparison with the corresponding inference artifacts
+only as a diagnostic exact comparison:
 
 ```powershell
 conda run -n newconda python -m standalone_nnunet2d.tools.parity_report `
   --oracle-root standalone_nnunet2d\outputs\oracle\inference\case_0001 `
   --standalone-root standalone_nnunet2d\outputs\standalone\inference\case_0001 `
-  --image-atol 1e-6 `
+  --image-atol 0 `
   --output standalone_nnunet2d\outputs\inference_parity_report.json
 ```
 
-Both JSON reports must have `status: "passed"`. Their own `run_state` remains
-`official_alignment_pending`; the pair is the gate that permits a later
-`official_aligned` label.
-
-## Fold-0 formal train, prediction, and validation
-
-After the server artifacts and both local parity reports are available, run the
-standalone fold-0 sequence in `newconda`. The formal train command requires the
-explicit `--confirm-run` boundary and writes pending checkpoints:
+The accepted inference gate is `repeat_oracle_stability_v1`. It requires at
+least three independent oracle runs, with each official artifact produced by a
+separate server `nnunetv2` invocation and stored below a different root:
 
 ```powershell
-conda run -n newconda python standalone_nnunet2d\formal_train.py `
-  --raw-root C:\path\to\Dataset501_StrokeLesion `
-  --output-root standalone_nnunet2d\outputs\formal\fold_0 `
-  --fold 0 `
-  --device cuda:0 `
-  --epochs 1000 `
-  --confirm-run
+conda run -n newconda python -m standalone_nnunet2d.tools.parity_report `
+  --oracle-root standalone_nnunet2d\outputs\oracle_inference_run1\inference\case_0001 `
+  --oracle-root standalone_nnunet2d\outputs\oracle_inference_run2\inference\case_0001 `
+  --oracle-root standalone_nnunet2d\outputs\oracle_inference_run3\inference\case_0001 `
+  --standalone-root standalone_nnunet2d\outputs\standalone_inference\inference\case_0001 `
+  --image-atol 0 `
+  --output standalone_nnunet2d\outputs\inference_repeat_parity_report.json
 ```
 
-Export the fold-0 validation cases from the best checkpoint. `--allow-pending`
-is required because the checkpoint is not officially aligned yet:
+The stable voxel exact rule is that every stable voxel must match the
+unanimous official label exactly. An unstable voxel only accepts labels
+observed across oracle repeats. The report must report all unstable coordinates
+and pairwise differences. It uses no Dice threshold, morphological cleanup,
+nonzero tolerance, retry-until-match behavior, or hidden fallback.
+
+Inference artifacts must include the `inference_context` containing the fold,
+official source-checkpoint SHA256, and normalized device. Existing inference
+artifacts without this context must be recaptured; they are not automatically
+compatible and the gate has no legacy fallback.
+
+Both the transform report and the repeated inference report must have
+`status: "passed"` before an external alignment decision. The report remains
+`official_alignment_pending`, and a passing repeated report does not
+automatically relabel historical runs `official_aligned`; existing training,
+prediction, validation, and OOF artifacts remain pending.
+
+## Final five-fold aligned training and OOF sequence
+
+Use these Windows paths for the current run. If the actual transform report
+filename differs, replace that path consistently in every command. The batch
+size is fixed at 12. The throughput profile does not enable AMP, TF32, or
+compile; it only selects the approved loader-throughput settings.
+
+After the current final source has been synchronized and the fresh output root
+is empty or newly created, run each formal train command once, for folds 0--4:
 
 ```powershell
-conda run -n newconda python standalone_nnunet2d\predict.py `
-  --checkpoint standalone_nnunet2d\outputs\formal\fold_0\checkpoint_best.pth `
-  --raw-root C:\path\to\Dataset501_StrokeLesion `
-  --fold 0 `
-  --output-root standalone_nnunet2d\outputs\formal\fold_0_predictions `
-  --device cuda:0 `
-  --allow-pending
+conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --plans "C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json" --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_0" --fold 0 --device cuda:0 --epochs 1000 --performance-profile throughput --transform-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json" --inference-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\inference_repeat_parity_case005_ctx.json" --confirm-run
+conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --plans "C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json" --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_1" --fold 1 --device cuda:0 --epochs 1000 --performance-profile throughput --transform-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json" --inference-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\inference_repeat_parity_case005_ctx.json" --confirm-run
+conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --plans "C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json" --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_2" --fold 2 --device cuda:0 --epochs 1000 --performance-profile throughput --transform-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json" --inference-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\inference_repeat_parity_case005_ctx.json" --confirm-run
+conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --plans "C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json" --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_3" --fold 3 --device cuda:0 --epochs 1000 --performance-profile throughput --transform-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json" --inference-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\inference_repeat_parity_case005_ctx.json" --confirm-run
+conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --plans "C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json" --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_4" --fold 4 --device cuda:0 --epochs 1000 --performance-profile throughput --transform-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\transform_parity_case005_v3.json" --inference-parity-report "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\inference_repeat_parity_case005_ctx.json" --confirm-run
 ```
 
-Create the source-space fold-0 case report and prediction export:
+The raw root is
+`C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion` and the
+plans file is
+`C:\lijialin\models3d\nnUNet\nnUNet_preprocessed\Dataset501_StrokeLesion\nnUNetPlans.json`.
+
+After each training command, run the matching fold validation immediately; it
+does not require a separate `predict.py` run. Do not run a duplicate
+`predict.py` command. The fold-validation command uses
+the aligned checkpoint without `--allow-pending`, performs full-volume
+prediction, and writes the prediction manifest and fold report. Fold reports
+share one `crossval` directory:
 
 ```powershell
-conda run -n newconda python standalone_nnunet2d\validate_cv.py fold `
-  --checkpoint standalone_nnunet2d\outputs\formal\fold_0\checkpoint_best.pth `
-  --raw-root C:\path\to\Dataset501_StrokeLesion `
-  --fold 0 `
-  --output-root standalone_nnunet2d\outputs\formal\crossval `
-  --device cuda:0 `
-  --allow-pending
+conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_0\checkpoint_best.pth" --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --fold 0 --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval" --device cuda:0
+conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_1\checkpoint_best.pth" --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --fold 1 --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval" --device cuda:0
+conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_2\checkpoint_best.pth" --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --fold 2 --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval" --device cuda:0
+conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_3\checkpoint_best.pth" --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --fold 3 --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval" --device cuda:0
+conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\formal\fold_4\checkpoint_best.pth" --raw-root "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion" --fold 4 --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval" --device cuda:0
 ```
 
-This writes `fold_0_report.json` and `fold_0_case_metrics.csv` under the common
-`crossval` directory, both still marked `official_alignment_pending`.
-
-## Five-fold training and OOF sequence
-
-Repeat the formal train, pending prediction, and pending fold validation
-sequence for folds `1`, `2`, `3`, and `4`, changing only the fold number and the
-training output directory. Keep all five validation reports in the same
-`standalone_nnunet2d\outputs\formal\crossval` directory:
+After all five fold reports exist, aggregate only when the directory contains
+`fold_0_report.json` through `fold_4_report.json`. The aggregate requires
+fold_0_report.json through fold_4_report.json, exactly 95 unique IDs, zero
+failed cases, and identical evidence across all five aligned reports. It
+writes an `official_aligned` `oof_summary.json` and
+the OOF case metrics:
 
 ```powershell
-conda run -n newconda python standalone_nnunet2d\formal_train.py --raw-root C:\path\to\Dataset501_StrokeLesion --output-root standalone_nnunet2d\outputs\formal\fold_<FOLD> --fold <FOLD> --device cuda:0 --epochs 1000 --confirm-run
-conda run -n newconda python standalone_nnunet2d\predict.py --checkpoint standalone_nnunet2d\outputs\formal\fold_<FOLD>\checkpoint_best.pth --raw-root C:\path\to\Dataset501_StrokeLesion --fold <FOLD> --output-root standalone_nnunet2d\outputs\formal\fold_<FOLD>_predictions --device cuda:0 --allow-pending
-conda run -n newconda python standalone_nnunet2d\validate_cv.py fold --checkpoint standalone_nnunet2d\outputs\formal\fold_<FOLD>\checkpoint_best.pth --raw-root C:\path\to\Dataset501_StrokeLesion --fold <FOLD> --output-root standalone_nnunet2d\outputs\formal\crossval --device cuda:0 --allow-pending
+conda run -n newconda python standalone_nnunet2d\validate_cv.py aggregate --output-root "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval"
+cd "C:\lijialin\segementation\.worktrees\standalone-nnunet2d\standalone_nnunet2d\outputs\official_aligned_5fold\crossval"
+type oof_summary.json
 ```
-
-Replace `<FOLD>` with `1`, `2`, `3`, and `4` in order. After exactly five
-reports exist, aggregate the 95 unique validation cases:
-
-```powershell
-conda run -n newconda python standalone_nnunet2d\validate_cv.py aggregate `
-  --output-root standalone_nnunet2d\outputs\formal\crossval
-```
-
-The aggregate command requires `fold_0_report.json` through
-`fold_4_report.json`, exactly 95 unique validation IDs, and writes
-`oof_per_case_metrics.csv` plus `oof_summary.json`. The OOF summary remains
-`official_alignment_pending` until both parity reports have passed.

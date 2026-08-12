@@ -16,7 +16,9 @@ from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.engine.predictor import predict_volume
 from standalone_nnunet2d.predict import _load_model
 from standalone_nnunet2d.tools.parity_report import RUN_STATE
-from standalone_nnunet2d.training.official_augmentation import apply_official_2d_augmentation
+from standalone_nnunet2d.training.official_augmentation import (
+    apply_official_2d_batchgeneratorsv2,
+)
 
 
 MANIFEST_NAME = "manifest.json"
@@ -148,6 +150,50 @@ def _plans_hash(plans_path: Path) -> str:
     return hashlib.sha256(plans_path.read_bytes()).hexdigest()
 
 
+def _normalize_device(device: str | torch.device) -> str:
+    try:
+        resolved = torch.device(device)
+    except (RuntimeError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid inference device: {device!r}") from error
+    if resolved.type == "cpu":
+        return "cpu"
+    if resolved.type == "cuda":
+        index = resolved.index
+        if index is None:
+            try:
+                index = int(torch.cuda.current_device())
+            except (RuntimeError, AssertionError) as error:
+                raise ValueError(
+                    "cannot resolve the active CUDA index for inference device 'cuda'"
+                ) from error
+        return f"cuda:{index}"
+    raise ValueError(f"inference device must be cpu or cuda, got {resolved}")
+
+
+def _inference_context_from_metadata(
+    metadata: Mapping[str, Any], device: torch.device
+) -> dict[str, object]:
+    fold = metadata.get("fold")
+    if isinstance(fold, bool) or not isinstance(fold, int) or fold < 0:
+        raise ValueError("checkpoint metadata provenance field 'fold' must be a non-negative integer")
+    source_sha256 = metadata.get("source_sha256")
+    if not isinstance(source_sha256, str) or len(source_sha256) != 64:
+        raise ValueError(
+            "checkpoint metadata provenance field 'source_sha256' must be a 64-character SHA256"
+        )
+    try:
+        int(source_sha256, 16)
+    except ValueError as error:
+        raise ValueError(
+            "checkpoint metadata provenance field 'source_sha256' must be a 64-character SHA256"
+        ) from error
+    return {
+        "fold": fold,
+        "source_checkpoint_sha256": source_sha256,
+        "device": _normalize_device(device),
+    }
+
+
 def _array_description(array: np.ndarray, filename: str) -> dict[str, object]:
     return {
         "file": filename,
@@ -203,12 +249,17 @@ def capture_standalone_transform(
 
     source_image = np.array(image_volume[z_index], dtype=np.float32, copy=True)
     source_label = np.array(label_volume[z_index], dtype=np.int16, copy=True)
-    rng = np.random.default_rng(seed)
-    transformed_image, transformed_label = apply_official_2d_augmentation(
+    with plans_path.open(encoding="utf-8") as handle:
+        plans = json.load(handle)
+    configuration = plans["configurations"]["2d"]
+    patch_size = tuple(int(value) for value in configuration["patch_size"])
+    use_mask_for_norm = configuration["use_mask_for_norm"]
+    transformed_image, transformed_label = apply_official_2d_batchgeneratorsv2(
         source_image,
         source_label,
-        rng,
-        patch_size=tuple(int(value) for value in source_image.shape),
+        patch_size=patch_size,
+        use_mask_for_norm=use_mask_for_norm,
+        seed=seed,
     )
     image = np.asarray(transformed_image, dtype=np.float32)
     label = np.asarray(transformed_label, dtype=np.int16)
@@ -312,7 +363,8 @@ def capture_standalone_inference(
     source_image = np.asarray(raw_image.array, dtype=np.float32).copy()
     source_label = np.asarray(raw_label.array, dtype=np.int16).copy()
     torch_device = torch.device(device)
-    model, _ = _load_model(checkpoint, torch_device)
+    model, checkpoint_metadata = _load_model(checkpoint, torch_device)
+    inference_context = _inference_context_from_metadata(checkpoint_metadata, torch_device)
     prediction = np.asarray(
         predict_volume(model, raw_image, torch_device, slice_batch_size=slice_batch_size)
     )
@@ -352,9 +404,11 @@ def capture_standalone_inference(
         },
         "sampling_policy": {
             "seed": seed,
+            "fold": inference_context["fold"],
             "implementation": "standalone",
             "source": "oracle_manifest",
         },
+        "inference_context": inference_context,
         "arrays": array_manifest,
         "nifti_metadata": {
             "space": "raw",
@@ -372,24 +426,44 @@ def capture_standalone_inference(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Capture one standalone transform artifact")
+    parser = argparse.ArgumentParser(description="Capture one standalone artifact")
+    parser.add_argument("--mode", choices=(TRANSFORM_MODE, INFERENCE_MODE), default=TRANSFORM_MODE)
     parser.add_argument("--oracle-root", required=True, type=Path)
-    parser.add_argument("--preprocessed-root", required=True, type=Path)
+    parser.add_argument("--preprocessed-root", type=Path)
     parser.add_argument("--raw-root", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--plans", "--plans-path", dest="plans_path", required=True, type=Path)
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--slice-batch-size", type=int, default=1)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
-    destination = capture_standalone_transform(
-        oracle_root=arguments.oracle_root,
-        preprocessed_root=arguments.preprocessed_root,
-        raw_root=arguments.raw_root,
-        output_root=arguments.output_root,
-        plans_path=arguments.plans_path,
-    )
+    parser = _parser()
+    arguments = parser.parse_args(argv)
+    if arguments.mode == TRANSFORM_MODE:
+        if arguments.preprocessed_root is None:
+            parser.error("transform mode requires --preprocessed-root")
+        destination = capture_standalone_transform(
+            oracle_root=arguments.oracle_root,
+            preprocessed_root=arguments.preprocessed_root,
+            raw_root=arguments.raw_root,
+            output_root=arguments.output_root,
+            plans_path=arguments.plans_path,
+        )
+    else:
+        if arguments.checkpoint is None:
+            parser.error("inference mode requires --checkpoint")
+        destination = capture_standalone_inference(
+            oracle_root=arguments.oracle_root,
+            raw_root=arguments.raw_root,
+            checkpoint=arguments.checkpoint,
+            output_root=arguments.output_root,
+            plans_path=arguments.plans_path,
+            device=arguments.device,
+            slice_batch_size=arguments.slice_batch_size,
+        )
     print(json.dumps({"artifact_root": str(destination), "run_state": RUN_STATE}, sort_keys=True))
     return 0
 

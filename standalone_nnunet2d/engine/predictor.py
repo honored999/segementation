@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 import torch
 from torch import Tensor, nn
 
@@ -17,6 +20,51 @@ from standalone_nnunet2d.data.preprocessing import z_score_normalize
 DEFAULT_MIRROR_AXES = (0, 1)
 DEFAULT_PATCH_SIZE = (512, 512)
 DEFAULT_TILE_STEP_SIZE = 0.5
+
+
+@lru_cache(maxsize=2)
+def compute_gaussian(
+    tile_size: tuple[int, ...] | list[int],
+    sigma_scale: float = 1.0 / 8.0,
+    value_scaling_factor: float = 1.0,
+    *,
+    dtype: torch.dtype = torch.float16,
+    device: torch.device | str = torch.device("cpu"),
+) -> Tensor:
+    """Build the nnU-Net Gaussian importance map for one prediction tile."""
+    tile_size = tuple(int(value) for value in tile_size)
+    tmp = np.zeros(tile_size)
+    center_coords = [value // 2 for value in tile_size]
+    sigmas = [value * sigma_scale for value in tile_size]
+    tmp[tuple(center_coords)] = 1
+    gaussian_importance_map = gaussian_filter(
+        tmp,
+        sigmas,
+        order=0,
+        mode="constant",
+        cval=0,
+    )
+    gaussian_importance_map /= np.max(gaussian_importance_map) / value_scaling_factor
+    gaussian_importance_map = torch.from_numpy(gaussian_importance_map).to(
+        device=torch.device(device),
+        dtype=dtype,
+    )
+    mask = gaussian_importance_map == 0
+    gaussian_importance_map[mask] = torch.min(gaussian_importance_map[~mask])
+    return gaussian_importance_map
+
+
+def _autocast_context(device: torch.device):
+    """Use the official CUDA autocast policy without enabling CPU autocast."""
+    if device.type == "cuda":
+        return torch.autocast(device.type, enabled=True)
+    return nullcontext()
+
+
+def _configure_inference_backend(device: torch.device) -> None:
+    """Match nnU-Net's CUDA inference constructor backend setting."""
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
 
 
 def mirror_combinations(mirror_axes: Iterable[int]) -> tuple[tuple[int, ...], ...]:
@@ -44,14 +92,12 @@ def _full_resolution_logits(outputs: Tensor | tuple[Tensor, ...] | list[Tensor])
     return outputs
 
 
-def _tile_starts(size: int, patch: int, step: int) -> tuple[int, ...]:
+def _tile_starts(size: int, patch: int, step: float) -> tuple[int, ...]:
     if size <= patch:
         return (0,)
-    starts = list(range(0, size - patch + 1, step))
-    final_start = size - patch
-    if starts[-1] != final_start:
-        starts.append(final_start)
-    return tuple(starts)
+    num_steps = int(np.ceil((size - patch) / (patch * step))) + 1
+    actual_step = (size - patch) / (num_steps - 1)
+    return tuple(int(np.round(actual_step * index)) for index in range(num_steps))
 
 
 def _normalise_patch_size(patch_size: tuple[int, int] | list[int]) -> tuple[int, int]:
@@ -67,8 +113,9 @@ def _predict_tile_logits(
     mirror_axes: tuple[int, ...],
 ) -> Tensor:
     """Average base and mirrored logits after undoing each input mirror."""
-    spatial_dims = tuple(axis + 2 for axis in mirror_axes)
     logits = _full_resolution_logits(model(tile))
+    if logits.shape[0] != tile.shape[0]:
+        raise ValueError("model changed batch size between tile input and logits")
     if logits.shape[2:] != tile.shape[2:]:
         raise ValueError(
             "predictor requires full-resolution logits: "
@@ -103,38 +150,79 @@ def predict_logits_2d(
         raise ValueError(f"tile_step_size must be in (0, 1], got {tile_step_size}")
     patch_height, patch_width = _normalise_patch_size(patch_size)
     height, width = image.shape[2:]
-    step_height = max(1, int(round(patch_height * tile_step_size)))
-    step_width = max(1, int(round(patch_width * tile_step_size)))
-    y_starts = _tile_starts(height, min(patch_height, height), step_height)
-    x_starts = _tile_starts(width, min(patch_width, width), step_width)
 
-    model_device = device
+    model_device = torch.device(device)
+    _configure_inference_backend(model_device)
     tensor = image.to(model_device)
+    original_height, original_width = tensor.shape[2:]
+    padding_height = max(0, patch_height - original_height)
+    padding_width = max(0, patch_width - original_width)
+    padding_top = padding_height // 2
+    padding_left = padding_width // 2
+    padded_height = original_height + padding_height
+    padded_width = original_width + padding_width
+    if (padded_height, padded_width) != (original_height, original_width):
+        padded = torch.zeros(
+            (tensor.shape[0], tensor.shape[1], padded_height, padded_width),
+            device=model_device,
+            dtype=tensor.dtype,
+        )
+        padded[
+            :,
+            :,
+            padding_top : padding_top + original_height,
+            padding_left : padding_left + original_width,
+        ] = tensor
+        tensor = padded
     was_training = model.training
     model.eval()
     try:
-        with torch.no_grad():
-            accumulator: Tensor | None = None
-            weights = torch.zeros((1, 1, height, width), device=model_device, dtype=torch.float32)
+        with torch.inference_mode(), _autocast_context(model_device):
+            predicted_logits = torch.zeros(
+                (tensor.shape[0], 2, padded_height, padded_width),
+                device=model_device,
+                dtype=torch.half,
+            )
+            n_predictions = torch.zeros(
+                (padded_height, padded_width),
+                device=model_device,
+                dtype=torch.half,
+            )
+            gaussian = compute_gaussian(
+                (patch_height, patch_width),
+                sigma_scale=1.0 / 8.0,
+                value_scaling_factor=10.0,
+                dtype=torch.half,
+                device=model_device,
+            )
+            y_starts = _tile_starts(padded_height, patch_height, tile_step_size)
+            x_starts = _tile_starts(padded_width, patch_width, tile_step_size)
             for y_start in y_starts:
-                y_end = min(y_start + patch_height, height)
+                y_end = y_start + patch_height
                 for x_start in x_starts:
-                    x_end = min(x_start + patch_width, width)
+                    x_end = x_start + patch_width
                     tile = tensor[:, :, y_start:y_end, x_start:x_end]
-                    tile_logits = _predict_tile_logits(model, tile, mirror_axes=tuple(mirror_axes))
-                    if accumulator is None:
-                        accumulator = torch.zeros(
-                            (tile_logits.shape[0], tile_logits.shape[1], height, width),
-                            device=tile_logits.device,
-                            dtype=tile_logits.dtype,
-                        )
-                    if tile_logits.shape[0] != accumulator.shape[0]:
-                        raise ValueError("model changed batch size between tiles")
-                    accumulator[:, :, y_start:y_end, x_start:x_end] += tile_logits
-                    weights[:, :, y_start:y_end, x_start:x_end] += 1.0
-            if accumulator is None or torch.any(weights == 0):
+                    prediction = _predict_tile_logits(
+                        model,
+                        tile,
+                        mirror_axes=tuple(mirror_axes),
+                    ).to(device=model_device)
+                    prediction *= gaussian
+                    predicted_logits[:, :, y_start:y_end, x_start:x_end] += prediction
+                    n_predictions[y_start:y_end, x_start:x_end] += gaussian
+            if torch.any(n_predictions == 0):
                 raise RuntimeError("tile aggregation did not cover the complete image")
-            return accumulator / weights.to(dtype=accumulator.dtype)
+            torch.div(
+                predicted_logits,
+                n_predictions.view(1, 1, padded_height, padded_width),
+                out=predicted_logits,
+            )
+            return predicted_logits[
+                :,
+                :,
+                padding_top : padding_top + height,
+                padding_left : padding_left + width,
+            ]
     finally:
         model.train(was_training)
 
@@ -155,40 +243,33 @@ def predict_volume(
     normalized = z_score_normalize(image.array)
     slice_count, height, width = normalized.shape
     total_logits: Tensor | None = None
-    transformations = ((),) + mirror_combinations(mirror_axes)
-    for axes in transformations:
-        dims = tuple(axis + 2 for axis in axes)
-        for z_start in range(0, slice_count, slice_batch_size):
-            z_end = min(z_start + slice_batch_size, slice_count)
-            tensor = torch.from_numpy(normalized[z_start:z_end]).unsqueeze(1)
-            if dims:
-                tensor = torch.flip(tensor, dims=dims)
-            logits = predict_logits_2d(
-                model,
-                tensor,
-                device,
-                mirror_axes=(),
-                patch_size=patch_size,
-                tile_step_size=tile_step_size,
+    for z_start in range(0, slice_count, slice_batch_size):
+        z_end = min(z_start + slice_batch_size, slice_count)
+        tensor = torch.from_numpy(normalized[z_start:z_end]).unsqueeze(1)
+        logits = predict_logits_2d(
+            model,
+            tensor,
+            device,
+            mirror_axes=tuple(mirror_axes),
+            patch_size=patch_size,
+            tile_step_size=tile_step_size,
+        )
+        expected_shape = (z_end - z_start, 2, height, width)
+        if tuple(logits.shape) != expected_shape:
+            raise ValueError(
+                "prediction logits shape does not match input slice batch: "
+                f"expected {expected_shape}, got {tuple(logits.shape)}"
             )
-            if dims:
-                logits = torch.flip(logits, dims=dims)
-            expected_shape = (z_end - z_start, 2, height, width)
-            if tuple(logits.shape) != expected_shape:
-                raise ValueError(
-                    "prediction logits shape does not match input slice batch: "
-                    f"expected {expected_shape}, got {tuple(logits.shape)}"
-                )
-            if total_logits is None:
-                total_logits = torch.zeros(
-                    (slice_count, 2, height, width),
-                    device=logits.device,
-                    dtype=logits.dtype,
-                )
-            total_logits[z_start:z_end] += logits
+        if total_logits is None:
+            total_logits = torch.zeros(
+                (slice_count, 2, height, width),
+                device=logits.device,
+                dtype=logits.dtype,
+            )
+        total_logits[z_start:z_end] += logits
     if total_logits is None:
         return np.empty(image.array.shape, dtype=np.uint8)
-    return torch.argmax(total_logits / len(transformations), dim=1).cpu().numpy().astype(np.uint8)
+    return torch.argmax(total_logits, dim=1).cpu().numpy().astype(np.uint8)
 
 
 def save_and_validate_prediction(

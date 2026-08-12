@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,52 @@ import pytest
 import torch
 
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti, write_nifti
+from standalone_nnunet2d.alignment_evidence import build_alignment_evidence
 from standalone_nnunet2d.engine import formal_validation
+
+
+def _aligned_evidence(tmp_path: Path) -> dict[str, object]:
+    components = {
+        name: {"status": "passed", "diagnostics": []}
+        for name in ("image", "label", "manifest", "mask")
+    }
+    transform_path = tmp_path / "transform.json"
+    inference_path = tmp_path / "inference.json"
+    transform_path.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "run_state": "official_alignment_pending",
+                "oracle_root": "/oracle/transform",
+                "standalone_root": "/standalone/transform",
+                "image_atol": 0.0,
+                "components": components,
+                "diagnostics": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    inference_path.write_text(
+        json.dumps(
+            {
+                "parity_policy": "repeat_oracle_stability_v1",
+                "oracle_roots": ["/oracle/0", "/oracle/1", "/oracle/2"],
+                "oracle_repeat_count": 3,
+                "stable_mask_mismatch_count": 0,
+                "stable_mask_mismatch_coordinates": [],
+                "unobserved_standalone_label_count": 0,
+                "unobserved_standalone_label_coordinates": [],
+                "status": "passed",
+                "run_state": "official_alignment_pending",
+                "standalone_root": "/standalone/inference",
+                "image_atol": 0.0,
+                "components": components,
+                "diagnostics": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return build_alignment_evidence(transform_path, inference_path)
 
 
 def _write_raw_case(raw_root: Path, case_id: str, label_array: np.ndarray) -> None:
@@ -87,3 +133,56 @@ def test_validate_fold_uses_full_volume_for_every_validation_case_and_writes_rep
         and report_json.get("aggregation") == "case_macro_mean"
         for report_json in json_reports
     )
+
+
+def test_validate_fold_propagates_aligned_state_and_deep_copies_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw_root = tmp_path / "raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    (raw_root / "labelsTr").mkdir()
+    validation_ids = ("case001",)
+    _write_raw_case(raw_root, validation_ids[0], np.zeros((1, 2, 2), dtype=np.uint8))
+    monkeypatch.setattr(formal_validation, "load_fold_cases", lambda *_: validation_ids)
+    monkeypatch.setattr(
+        formal_validation,
+        "predict_volume",
+        lambda *_args, **_kwargs: np.zeros((1, 2, 2), dtype=np.uint8),
+    )
+    evidence = _aligned_evidence(tmp_path)
+
+    report = formal_validation.validate_fold(
+        object(),
+        raw_root,
+        fold=0,
+        output_root=tmp_path / "aligned-fold",
+        device=torch.device("cpu"),
+        run_state="official_aligned",
+        alignment_evidence=evidence,
+    )
+
+    assert report["run_state"] == "official_aligned"
+    assert report["alignment_evidence"] == evidence
+    assert report["alignment_evidence"] is not evidence
+    report["alignment_evidence"]["sources"]["transform"]["snapshot"]["status"] = "changed"
+    assert evidence["sources"]["transform"]["snapshot"]["status"] == "passed"
+    persisted = json.loads(
+        (tmp_path / "aligned-fold" / "fold_0_report.json").read_text(encoding="utf-8")
+    )
+    assert persisted["run_state"] == "official_aligned"
+    assert persisted["alignment_evidence"] == evidence
+
+
+def test_validate_fold_rejects_aligned_state_without_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(formal_validation, "validate_raw_root", lambda root: root)
+    with pytest.raises(ValueError, match="alignment evidence"):
+        formal_validation.validate_fold(
+            object(),
+            tmp_path / "raw",
+            fold=0,
+            output_root=tmp_path / "output",
+            device=torch.device("cpu"),
+            run_state="official_aligned",
+        )
