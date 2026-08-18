@@ -1,5 +1,5 @@
 CI-1/
-data/
+/data/
 results/
 __pycache__/
 .worktrees/
