@@ -192,7 +192,7 @@ def test_compare_predictions_writes_full_volume_csv_and_json(tmp_path):
     }
     assert summary["case_count"] == 2
     assert summary["case_ids"] == ["caseA", "caseB"]
-    assert summary["formal_eligible"] is True
+    assert summary["formal_eligible"] is False
     assert summary["stage2_minus_stage1"]["dice"] == pytest.approx(-1 / 6)
     assert summary["global"]["stage1"]["tp"] == 2
     assert summary["global"]["stage2"]["fp"] == 2
@@ -212,5 +212,58 @@ def test_compare_predictions_rejects_cropped_stage1_prediction(tmp_path):
             stage1_dir=cropped_stage1,
             stage2_restored_dir=stage1_dir,
             output_dir=tmp_path / "evaluation",
+            expected_case_count=2,
+        )
+
+
+@pytest.mark.parametrize("overlap_dir", ["labels", "stage1", "stage2"])
+def test_compare_predictions_rejects_output_dir_overlapping_input(tmp_path, overlap_dir):
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    _, labels_dir, stage1_dir, _, case_info = _make_synthetic_case_data(tmp_path)
+    restored_dir = tmp_path / "restored"
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+
+    restored_dir = restore_predictions(
+        manifest=Path(case_info["__manifest__"][0]),
+        cropped_predictions=tmp_path / "stage2_cropped",
+        dataset501_raw=tmp_path / "dataset501",
+        output_dir=restored_dir,
+    )
+    input_dirs = {
+        "labels": labels_dir,
+        "stage1": stage1_dir,
+        "stage2": restored_dir,
+    }
+    with pytest.raises(ValueError, match="output_dir.*overlap"):
+        compare_full_volume_predictions(
+            labels_dir=labels_dir,
+            stage1_dir=stage1_dir,
+            stage2_restored_dir=restored_dir,
+            output_dir=input_dirs[overlap_dir],
+            expected_case_count=2,
+        )
+
+
+def test_compare_predictions_rejects_existing_nonempty_output_dir(tmp_path):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    _, labels_dir, stage1_dir, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    restored_dir = restore_predictions(
+        manifest=Path(case_info["__manifest__"][0]),
+        cropped_predictions=cropped_dir,
+        dataset501_raw=tmp_path / "dataset501",
+        output_dir=tmp_path / "restored",
+    )
+    output_dir = tmp_path / "evaluation"
+    output_dir.mkdir()
+    (output_dir / "sentinel.txt").write_text("preserve", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        compare_full_volume_predictions(
+            labels_dir=labels_dir,
+            stage1_dir=stage1_dir,
+            stage2_restored_dir=restored_dir,
+            output_dir=output_dir,
             expected_case_count=2,
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,27 @@ def _require_exact_ids(
     extra = sorted(actual - expected)
     if missing or extra:
         raise ValueError(f"{kind} IDs mismatch: missing={missing}, extra={extra}")
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
+def _has_verified_formal_provenance(
+    provenance: Mapping[str, Any] | None, *, expected_case_count: int
+) -> bool:
+    if expected_case_count != 95 or not isinstance(provenance, Mapping):
+        return False
+    required = {
+        "verified": True,
+        "stage1_trainer": "nnUNetTrainer",
+        "stage1_prediction_source": "complete_5_fold_oof",
+        "roi_source": "stage1_prediction_only",
+        "split_policy": "fixed_5_fold_patient_level",
+        "num_folds": 5,
+        "case_count": 95,
+    }
+    return all(provenance.get(key) == value for key, value in required.items())
 
 
 def _metrics_from_counts(
@@ -180,8 +202,9 @@ def compare_full_volume_predictions(
     stage2_restored_dir: Path,
     output_dir: Path,
     expected_case_count: int = 95,
+    provenance: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path]:
-    """Compare Stage 1 and restored Stage 2 masks in original full-volume space."""
+    """Compare predictions in original space with optional verified provenance."""
     if expected_case_count <= 0:
         raise ValueError("expected_case_count must be positive")
     labels = _discover_nifti_files(Path(labels_dir).resolve(), kind="labels")
@@ -209,7 +232,21 @@ def compare_full_volume_predictions(
         total_voxels += int(reference.array.size)
 
     output_root = Path(output_dir).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+    input_roots = {
+        "labels": Path(labels_dir).resolve(),
+        "Stage1 predictions": Path(stage1_dir).resolve(),
+        "Stage2 restored predictions": Path(stage2_restored_dir).resolve(),
+    }
+    for kind, input_root in input_roots.items():
+        if _paths_overlap(output_root, input_root):
+            raise ValueError(f"output_dir overlaps {kind} directory: {output_root}")
+    if output_root.exists():
+        if not output_root.is_dir():
+            raise ValueError(f"output_dir is not a directory: {output_root}")
+        if any(output_root.iterdir()):
+            raise ValueError(f"output_dir must be empty or absent: {output_root}")
+    else:
+        output_root.mkdir(parents=True)
     csv_path = output_root / "stage1_vs_stage2_case_metrics.csv"
     json_path = output_root / "stage1_vs_stage2_summary.json"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -226,7 +263,9 @@ def compare_full_volume_predictions(
             "gt_source": "Dataset501_labelsTr",
             "case_aggregation": "equal_case_macro",
         },
-        "formal_eligible": True,
+        "formal_eligible": _has_verified_formal_provenance(
+            provenance, expected_case_count=expected_case_count
+        ),
         "case_count": len(rows),
         "case_ids": sorted(expected_ids),
         "stage1_case_macro": stage1_macro,
