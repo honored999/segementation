@@ -9,6 +9,7 @@ from typing import Any
 
 from ..dataset import EXPECTED_NUM_CASES, build_dataset504
 from ..evaluate import _has_verified_formal_provenance
+from ..provenance import validate_stage1_provenance
 
 
 def _read_provenance(path: Path) -> dict[str, Any]:
@@ -58,7 +59,23 @@ def generate_dataset504(
     """Call the Dataset504 builder and record its Stage1 provenance."""
     if len(min_roi_size) != 2 or any(size < 1 for size in min_roi_size):
         raise ValueError("min_roi_size must contain two positive integers")
-    provenance = _read_provenance(stage1_provenance)
+    provenance = validate_stage1_provenance(stage1_provenance)
+    expected_inputs = {
+        "dataset501_raw": Path(provenance["dataset501_raw"]).resolve(),
+        "stage1_oof_dir": Path(provenance["stage1_oof_dir"]).resolve(),
+        "splits": Path(provenance["splits_path"]).resolve(),
+    }
+    actual_inputs = {
+        "dataset501_raw": dataset501_raw.resolve(),
+        "stage1_oof_dir": stage1_oof_dir.resolve(),
+        "splits": splits.resolve(),
+    }
+    for argument_name, expected_path in expected_inputs.items():
+        if actual_inputs[argument_name] != expected_path:
+            raise ValueError(
+                f"{argument_name} does not match verified provenance: "
+                f"expected {expected_path}, got {actual_inputs[argument_name]}"
+            )
     destination = build_dataset504(
         dataset501_raw,
         stage1_oof_dir,

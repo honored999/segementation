@@ -83,16 +83,13 @@ def _has_verified_formal_provenance(
 ) -> bool:
     if expected_case_count != 95 or not isinstance(provenance, Mapping):
         return False
-    required = {
-        "verified": True,
-        "stage1_trainer": "nnUNetTrainer",
-        "stage1_prediction_source": "complete_5_fold_oof",
-        "roi_source": "stage1_prediction_only",
-        "split_policy": "fixed_5_fold_patient_level",
-        "num_folds": 5,
-        "case_count": 95,
-    }
-    return all(provenance.get(key) == value for key, value in required.items())
+    from .provenance import validate_stage1_provenance
+
+    try:
+        validate_stage1_provenance(provenance)
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
 
 
 def _metrics_from_counts(
