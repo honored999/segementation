@@ -1,4 +1,5 @@
 from dataclasses import replace
+import inspect
 
 import numpy as np
 import pytest
@@ -42,11 +43,62 @@ def test_prediction_roi_unions_disconnected_foreground_across_all_z_slices():
     assert roi.fallback is False
 
 
+def test_prediction_roi_keeps_raw_bbox_and_adds_requested_margin():
+    prediction = np.zeros((2, 12, 14), dtype=np.uint8)
+    prediction[:, 4:6, 5:8] = 1
+
+    roi = compute_prediction_roi(prediction, margin=2, min_width=1, min_height=1)
+
+    assert roi.raw_prediction_bbox == (5, 4, 8, 6)
+    assert roi.bbox == (3, 2, 10, 8)
+    assert roi.roi_margin == 2
+    assert roi.min_roi_width == 1
+    assert roi.min_roi_height == 1
+
+
+def test_prediction_roi_default_context_policy_expands_small_foreground():
+    prediction = np.zeros((2, 256, 256), dtype=np.uint8)
+    prediction[:, 100:103, 120:123] = 1
+
+    roi = compute_prediction_roi(prediction)
+
+    assert roi.raw_prediction_bbox == (120, 100, 123, 103)
+    assert roi.bbox == (58, 38, 186, 166)
+    assert roi.x1 - roi.x0 >= 128
+    assert roi.y1 - roi.y0 >= 128
+    assert roi.roi_margin == 32
+    assert roi.min_roi_width == 128
+    assert roi.min_roi_height == 128
+
+
+def test_prediction_roi_shifts_left_and_top_windows_to_preserve_minimum_size():
+    prediction = np.zeros((1, 256, 256), dtype=np.uint8)
+    prediction[0, 10, 12] = 1
+
+    roi = compute_prediction_roi(prediction, min_width=128, min_height=128)
+
+    assert roi.bbox == (0, 0, 128, 128)
+    assert roi.x1 - roi.x0 == 128
+    assert roi.y1 - roi.y0 == 128
+
+
+def test_prediction_roi_shifts_right_and_bottom_windows_to_preserve_minimum_size():
+    prediction = np.zeros((1, 256, 256), dtype=np.uint8)
+    prediction[0, 245, 246] = 1
+
+    roi = compute_prediction_roi(prediction, min_width=128, min_height=128)
+
+    assert roi.bbox == (128, 128, 256, 256)
+    assert roi.x1 - roi.x0 == 128
+    assert roi.y1 - roi.y0 == 128
+
+
 def test_prediction_roi_empty_prediction_falls_back_to_full_xy():
     roi = compute_prediction_roi(np.zeros((2, 5, 7), dtype=np.uint8))
 
     assert roi.bbox == (0, 0, 7, 5)
     assert roi.fallback is True
+    assert roi.raw_prediction_bbox is None
 
 
 def test_validate_binary_prediction_rejects_nonbinary_nonfinite_and_non3d_inputs():
@@ -67,6 +119,23 @@ def test_prediction_roi_respects_edges_and_minimum_size():
     assert roi.bbox == (0, 0, 4, 3)
     assert 0 <= roi.x0 < roi.x1 <= 9
     assert 0 <= roi.y0 < roi.y1 <= 6
+
+
+def test_prediction_roi_uses_full_extent_when_source_is_smaller_than_minimum():
+    prediction = np.zeros((2, 6, 8), dtype=np.uint8)
+    prediction[:, 2, 3] = 1
+
+    roi = compute_prediction_roi(prediction, margin=1, min_width=128, min_height=128)
+
+    assert roi.bbox == (0, 0, 8, 6)
+    assert roi.x1 - roi.x0 == 8
+    assert roi.y1 - roi.y0 == 6
+
+
+def test_prediction_roi_api_has_no_ground_truth_parameter():
+    parameters = inspect.signature(compute_prediction_roi).parameters
+
+    assert not any("gt" in name.lower() or "label" in name.lower() for name in parameters)
 
 
 def test_crop_and_restore_preserve_array_and_reference_space_with_direction():

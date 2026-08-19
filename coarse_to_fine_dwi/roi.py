@@ -11,6 +11,11 @@ import numpy as np
 from .nifti import NiftiVolume, XYBBox
 
 
+DEFAULT_ROI_MARGIN = 32
+DEFAULT_MIN_ROI_WIDTH = 128
+DEFAULT_MIN_ROI_HEIGHT = 128
+
+
 @dataclass(frozen=True)
 class PredictionROI:
     x0: int
@@ -18,6 +23,10 @@ class PredictionROI:
     x1: int
     y1: int
     fallback: bool = False
+    raw_prediction_bbox: XYBBox | None = None
+    roi_margin: int | tuple[int, int] = DEFAULT_ROI_MARGIN
+    min_roi_width: int = DEFAULT_MIN_ROI_WIDTH
+    min_roi_height: int = DEFAULT_MIN_ROI_HEIGHT
 
     @property
     def bbox(self) -> XYBBox:
@@ -64,26 +73,27 @@ def _margin_xy(margin: object) -> tuple[int, int]:
     raise ValueError("margin must be a non-negative integer or an (x, y) pair")
 
 
-def _expand_interval(low: int, high: int, minimum: int, limit: int) -> tuple[int, int]:
-    if high - low >= minimum:
+def _fit_interval(low: int, high: int, minimum: int, limit: int) -> tuple[int, int]:
+    requested = min(minimum, limit)
+    if high - low >= requested:
         return low, high
-    deficit = minimum - (high - low)
-    low = max(0, low - deficit // 2)
-    high = min(limit, high + deficit - deficit // 2)
-    if high - low < minimum:
-        if low == 0:
-            high = minimum
-        else:
-            low = limit - minimum
+    low = low - (requested - (high - low)) // 2
+    high = low + requested
+    if low < 0:
+        low = 0
+        high = requested
+    if high > limit:
+        high = limit
+        low = limit - requested
     return low, high
 
 
 def compute_prediction_roi(
     prediction: np.ndarray | NiftiVolume,
     *,
-    margin: int | tuple[int, int] = 0,
-    min_width: int = 1,
-    min_height: int = 1,
+    margin: int | tuple[int, int] = DEFAULT_ROI_MARGIN,
+    min_width: int = DEFAULT_MIN_ROI_WIDTH,
+    min_height: int = DEFAULT_MIN_ROI_HEIGHT,
 ) -> PredictionROI:
     """Return one XY box from the foreground union across every z slice."""
     array = prediction.array if isinstance(prediction, NiftiVolume) else prediction
@@ -92,18 +102,42 @@ def compute_prediction_roi(
     margin_x, margin_y = _margin_xy(margin)
     minimum_width = _positive_integer(min_width, "min_width")
     minimum_height = _positive_integer(min_height, "min_height")
-    if minimum_width > width or minimum_height > height:
-        raise ValueError("minimum ROI size cannot exceed prediction dimensions")
+    normalized_margin: int | tuple[int, int]
+    if isinstance(margin, Integral) and not isinstance(margin, bool):
+        normalized_margin = int(margin)
+    else:
+        normalized_margin = (margin_x, margin_y)
 
     foreground_xy = np.any(binary == 1, axis=0)
     if not foreground_xy.any():
-        return PredictionROI(0, 0, width, height, fallback=True)
+        return PredictionROI(
+            0,
+            0,
+            width,
+            height,
+            fallback=True,
+            raw_prediction_bbox=None,
+            roi_margin=normalized_margin,
+            min_roi_width=minimum_width,
+            min_roi_height=minimum_height,
+        )
 
     ys, xs = np.where(foreground_xy)
-    x0 = max(0, int(xs.min()) - margin_x)
-    y0 = max(0, int(ys.min()) - margin_y)
-    x1 = min(width, int(xs.max()) + 1 + margin_x)
-    y1 = min(height, int(ys.max()) + 1 + margin_y)
-    x0, x1 = _expand_interval(x0, x1, minimum_width, width)
-    y0, y1 = _expand_interval(y0, y1, minimum_height, height)
-    return PredictionROI(x0, y0, x1, y1, fallback=False)
+    raw_bbox: XYBBox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+    x0 = max(0, raw_bbox[0] - margin_x)
+    y0 = max(0, raw_bbox[1] - margin_y)
+    x1 = min(width, raw_bbox[2] + margin_x)
+    y1 = min(height, raw_bbox[3] + margin_y)
+    x0, x1 = _fit_interval(x0, x1, minimum_width, width)
+    y0, y1 = _fit_interval(y0, y1, minimum_height, height)
+    return PredictionROI(
+        x0,
+        y0,
+        x1,
+        y1,
+        fallback=False,
+        raw_prediction_bbox=raw_bbox,
+        roi_margin=normalized_margin,
+        min_roi_width=minimum_width,
+        min_roi_height=minimum_height,
+    )

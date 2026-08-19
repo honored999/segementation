@@ -10,6 +10,7 @@ from typing import Any
 from ..dataset import EXPECTED_NUM_CASES, build_dataset504
 from ..evaluate import _has_verified_formal_provenance
 from ..provenance import validate_stage1_provenance
+from ..roi import DEFAULT_MIN_ROI_HEIGHT, DEFAULT_MIN_ROI_WIDTH, DEFAULT_ROI_MARGIN
 
 
 def _read_provenance(path: Path) -> dict[str, Any]:
@@ -52,13 +53,33 @@ def generate_dataset504(
     stage1_oof_dir: Path,
     output_root: Path,
     splits: Path,
-    margin_px: int,
-    min_roi_size: tuple[int, int],
     stage1_provenance: Path,
+    roi_margin: int | tuple[int, int] | None = None,
+    min_roi_width: int | None = None,
+    min_roi_height: int | None = None,
+    margin_px: int | None = None,
+    min_roi_size: tuple[int, int] | None = None,
 ) -> Path:
     """Call the Dataset504 builder and record its Stage1 provenance."""
-    if len(min_roi_size) != 2 or any(size < 1 for size in min_roi_size):
-        raise ValueError("min_roi_size must contain two positive integers")
+    preferred_values = (roi_margin, min_roi_width, min_roi_height)
+    legacy_values = (margin_px, min_roi_size)
+    if any(value is not None for value in preferred_values) and any(value is not None for value in legacy_values):
+        raise ValueError("preferred ROI arguments cannot be combined with legacy ROI arguments")
+
+    if any(value is not None for value in legacy_values):
+        resolved_margin = DEFAULT_ROI_MARGIN if margin_px is None else margin_px
+        if min_roi_size is None:
+            resolved_width = DEFAULT_MIN_ROI_WIDTH
+            resolved_height = DEFAULT_MIN_ROI_HEIGHT
+        else:
+            if len(min_roi_size) != 2 or any(size < 1 for size in min_roi_size):
+                raise ValueError("min_roi_size must contain two positive integers")
+            resolved_width, resolved_height = min_roi_size
+    else:
+        resolved_margin = DEFAULT_ROI_MARGIN if roi_margin is None else roi_margin
+        resolved_width = DEFAULT_MIN_ROI_WIDTH if min_roi_width is None else min_roi_width
+        resolved_height = DEFAULT_MIN_ROI_HEIGHT if min_roi_height is None else min_roi_height
+
     provenance = validate_stage1_provenance(stage1_provenance)
     expected_inputs = {
         "dataset501_raw": Path(provenance["dataset501_raw"]).resolve(),
@@ -81,9 +102,9 @@ def generate_dataset504(
         stage1_oof_dir,
         output_root,
         splits_path=splits,
-        margin=margin_px,
-        min_width=min_roi_size[0],
-        min_height=min_roi_size[1],
+        margin=resolved_margin,
+        min_width=resolved_width,
+        min_height=resolved_height,
     )
     return _write_roi_manifest(destination, provenance)
 
@@ -94,13 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage1-oof-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--splits", type=Path, required=True)
-    parser.add_argument("--margin-px", type=int, required=True)
+    parser.add_argument("--roi-margin", type=int, default=None)
+    parser.add_argument("--min-roi-width", type=int, default=None)
+    parser.add_argument("--min-roi-height", type=int, default=None)
+    parser.add_argument("--margin-px", type=int, default=None)
     parser.add_argument(
         "--min-roi-size",
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
-        required=True,
+        default=None,
     )
     parser.add_argument("--stage1-provenance", type=Path, required=True)
     return parser
@@ -114,9 +138,12 @@ def main(argv: list[str] | None = None) -> int:
             stage1_oof_dir=args.stage1_oof_dir,
             output_root=args.output_root,
             splits=args.splits,
-            margin_px=args.margin_px,
-            min_roi_size=tuple(args.min_roi_size),
             stage1_provenance=args.stage1_provenance,
+            roi_margin=args.roi_margin,
+            min_roi_width=args.min_roi_width,
+            min_roi_height=args.min_roi_height,
+            margin_px=args.margin_px,
+            min_roi_size=None if args.min_roi_size is None else tuple(args.min_roi_size),
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Dataset504 generation failed: {error}")

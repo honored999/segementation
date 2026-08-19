@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from .nifti import NiftiVolume, assert_compatible, crop_xy
-from .roi import compute_prediction_roi, validate_binary_prediction
+from .roi import (
+    DEFAULT_MIN_ROI_HEIGHT,
+    DEFAULT_MIN_ROI_WIDTH,
+    DEFAULT_ROI_MARGIN,
+    compute_prediction_roi,
+    validate_binary_prediction,
+)
 
 EXPECTED_NUM_CASES = 95
 EXPECTED_NUM_FOLDS = 5
@@ -136,9 +142,9 @@ def build_dataset504(
     output_root: str | Path,
     *,
     splits_path: str | Path = DEFAULT_SPLITS_PATH,
-    margin: int | tuple[int, int] = 0,
-    min_width: int = 1,
-    min_height: int = 1,
+    margin: int | tuple[int, int] = DEFAULT_ROI_MARGIN,
+    min_width: int = DEFAULT_MIN_ROI_WIDTH,
+    min_height: int = DEFAULT_MIN_ROI_HEIGHT,
 ) -> Path:
     """Create Dataset504 from complete five-fold Stage-1 OOF predictions.
 
@@ -203,6 +209,12 @@ def build_dataset504(
             "split": "val",
             "roi": list(roi.bbox),
             "fallback": roi.fallback,
+            "raw_prediction_bbox": None if roi.raw_prediction_bbox is None else list(roi.raw_prediction_bbox),
+            "roi_width": roi.x1 - roi.x0,
+            "roi_height": roi.y1 - roi.y0,
+            "roi_margin": roi.roi_margin,
+            "min_roi_width": roi.min_roi_width,
+            "min_roi_height": roi.min_roi_height,
             "source_image": f"imagesTr/{case_id}_0000.nii.gz",
             "source_label": f"labelsTr/{case_id}.nii.gz",
             "stage1_prediction": prediction_paths[case_id].name,

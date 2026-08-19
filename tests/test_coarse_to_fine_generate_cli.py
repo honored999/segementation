@@ -222,6 +222,95 @@ def test_cli_forwards_explicit_arguments_to_builder(tmp_path, monkeypatch):
     assert manifest["formal_eligible"] is True
 
 
+def test_cli_forwards_preferred_roi_arguments_to_builder(tmp_path, monkeypatch):
+    from coarse_to_fine_dwi.cli import generate_dataset
+
+    raw_root, oof_root, provenance = _build_valid_provenance(tmp_path)
+    captured = {}
+
+    def fake_builder(raw, oof, output, *, splits_path, margin, min_width, min_height):
+        captured.update(margin=margin, min_width=min_width, min_height=min_height)
+        output.mkdir(parents=True)
+        (output / "manifest.json").write_text(
+            json.dumps({"roi_source": "stage1_prediction_only"}), encoding="utf-8"
+        )
+        return output
+
+    monkeypatch.setattr(generate_dataset, "build_dataset504", fake_builder)
+
+    result = generate_dataset.main(
+        [
+            "--dataset501-raw",
+            str(raw_root),
+            "--stage1-oof-dir",
+            str(oof_root),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--splits",
+            str(REFERENCE_SPLITS),
+            "--roi-margin",
+            "11",
+            "--min-roi-width",
+            "17",
+            "--min-roi-height",
+            "19",
+            "--stage1-provenance",
+            str(provenance),
+        ]
+    )
+
+    assert result == 0
+    assert captured == {"margin": 11, "min_width": 17, "min_height": 19}
+
+
+def test_cli_defaults_to_contextual_roi_policy(tmp_path, monkeypatch):
+    from coarse_to_fine_dwi.cli import generate_dataset
+
+    raw_root, oof_root, provenance = _build_valid_provenance(tmp_path)
+    captured = {}
+
+    def fake_builder(raw, oof, output, *, splits_path, margin, min_width, min_height):
+        captured.update(margin=margin, min_width=min_width, min_height=min_height)
+        output.mkdir(parents=True)
+        (output / "manifest.json").write_text("{}", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(generate_dataset, "build_dataset504", fake_builder)
+
+    assert generate_dataset.main(
+        [
+            "--dataset501-raw",
+            str(raw_root),
+            "--stage1-oof-dir",
+            str(oof_root),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--splits",
+            str(REFERENCE_SPLITS),
+            "--stage1-provenance",
+            str(provenance),
+        ]
+    ) == 0
+    assert captured == {"margin": 32, "min_width": 128, "min_height": 128}
+
+
+def test_cli_rejects_conflicting_preferred_and_legacy_roi_arguments(tmp_path):
+    from coarse_to_fine_dwi.cli import generate_dataset
+
+    raw_root, oof_root, provenance = _build_valid_provenance(tmp_path)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        generate_dataset.generate_dataset504(
+            dataset501_raw=raw_root,
+            stage1_oof_dir=oof_root,
+            output_root=tmp_path / "derived",
+            splits=REFERENCE_SPLITS,
+            stage1_provenance=provenance,
+            roi_margin=11,
+            margin_px=7,
+        )
+
+
 def test_tampered_generated_provenance_is_rejected_before_builder(tmp_path, monkeypatch):
     from coarse_to_fine_dwi.cli import generate_dataset
 

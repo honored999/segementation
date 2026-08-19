@@ -89,9 +89,17 @@ def test_build_dataset504_uses_exact_fixed_folds_and_writes_prediction_guided_ma
     assert manifest["num_cases"] == 95
     assert manifest["num_folds"] == 5
     assert manifest["case_ids"] == _fixed_case_ids()
-    assert manifest["cases"]["case005"]["roi"] == [1, 0, 4, 3]
+    assert manifest["cases"]["case005"]["roi"] == [0, 0, 8, 6]
+    assert manifest["cases"]["case005"]["raw_prediction_bbox"] == [2, 1, 3, 2]
+    assert manifest["cases"]["case005"]["roi_width"] == 8
+    assert manifest["cases"]["case005"]["roi_height"] == 6
+    assert manifest["cases"]["case005"]["roi_margin"] == 1
+    assert manifest["cases"]["case005"]["min_roi_width"] == 128
+    assert manifest["cases"]["case005"]["min_roi_height"] == 128
     assert manifest["cases"]["case005"]["fallback"] is False
     assert manifest["cases"]["case001"]["fallback"] is True
+    assert manifest["cases"]["case001"]["raw_prediction_bbox"] is None
+    assert manifest["cases"]["case001"]["roi"] == [0, 0, 8, 6]
     assert json.loads((output_root / "splits_final.json").read_text(encoding="utf-8")) == json.loads(
         REFERENCE_SPLITS.read_text(encoding="utf-8")
     )
@@ -103,6 +111,8 @@ def test_build_dataset504_uses_exact_fixed_folds_and_writes_prediction_guided_ma
 
     empty_case = NiftiVolume.read(output_root / "imagesTr" / "case001_0000.nii.gz")
     assert empty_case.shape_zyx == (2, 6, 8)
+    nonempty_case = NiftiVolume.read(output_root / "imagesTr" / "case005_0000.nii.gz")
+    assert nonempty_case.shape_zyx[0] == 2
 
 
 def test_builder_derives_roi_from_prediction_before_reading_gt(tmp_path, monkeypatch):
@@ -137,6 +147,16 @@ def test_builder_derives_roi_from_prediction_before_reading_gt(tmp_path, monkeyp
     )
 
     assert events.index("roi") < events.index("gt")
+
+
+def test_builder_does_not_pass_ground_truth_to_roi_api():
+    import inspect
+    import coarse_to_fine_dwi.dataset as dataset_module
+
+    assert not any(
+        "gt" in name.lower() or "label" in name.lower()
+        for name in inspect.signature(dataset_module.compute_prediction_roi).parameters
+    )
 
 
 def test_builder_binds_cropped_label_metadata_to_cropped_image_grid(tmp_path):
