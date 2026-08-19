@@ -11,6 +11,9 @@ import numpy as np
 
 XYBBox: TypeAlias = tuple[int, int, int, int]
 _METADATA_TOLERANCE = 1e-6
+# Crop origins accumulate direction/offset arithmetic before NIfTI header
+# serialization; keep this tolerance local to restore-time origin checking.
+_CROP_ORIGIN_SERIALIZATION_TOLERANCE = 1e-5
 
 
 def _vector3(values: object, name: str) -> tuple[float, float, float]:
@@ -139,7 +142,12 @@ def restore_xy(cropped: NiftiVolume, reference: NiftiVolume, bbox: XYBBox) -> Ni
     )
     if not np.allclose(cropped.spacing_xyz, reference.spacing_xyz, atol=_METADATA_TOLERANCE, rtol=0.0):
         raise ValueError("crop metadata mismatch: spacing")
-    if not np.allclose(cropped.origin_xyz, expected_origin, atol=_METADATA_TOLERANCE, rtol=0.0):
+    if not np.allclose(
+        cropped.origin_xyz,
+        expected_origin,
+        atol=_CROP_ORIGIN_SERIALIZATION_TOLERANCE,
+        rtol=0.0,
+    ):
         raise ValueError("crop metadata mismatch: origin")
     if not np.allclose(
         cropped.direction,

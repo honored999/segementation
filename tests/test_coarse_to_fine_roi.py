@@ -112,6 +112,56 @@ def test_nifti_round_trip_uses_simpleitk_metadata(tmp_path):
     assert_compatible(loaded, source)
 
 
+def test_restore_xy_accepts_serialized_oblique_crop_origin_roundoff(tmp_path):
+    pytest.importorskip("SimpleITK")
+    source = NiftiVolume(
+        array=np.zeros((16, 512, 512), dtype=np.uint8),
+        spacing_xyz=(0.4892368018627167, 0.4892368018627167, 7.999998569488525),
+        origin_xyz=(-114.60359191894531, -105.38716888427734, 51.46718215942383),
+        direction=(
+            0.9470567631478918,
+            -0.038241729030622694,
+            0.3187805757673911,
+            -0.1062297453790248,
+            0.8996375798568397,
+            0.42351796805047803,
+            -0.3029830499756473,
+            -0.4349595326810035,
+            0.8479454435586082,
+        ),
+    )
+    source_path = tmp_path / "source.nii.gz"
+    crop_path = tmp_path / "crop.nii.gz"
+    source.write(source_path)
+    serialized_source = NiftiVolume.read(source_path)
+    bbox = (51, 323, 242, 450)
+    crop_xy(serialized_source, bbox).write(crop_path)
+    serialized_crop = NiftiVolume.read(crop_path)
+
+    expected_origin = (
+        serialized_source.origin_xyz
+        + serialized_source.direction_matrix
+        @ np.array(
+            [
+                bbox[0] * serialized_source.spacing_xyz[0],
+                bbox[1] * serialized_source.spacing_xyz[1],
+                0.0,
+            ]
+        )
+    )
+    assert max(abs(actual - expected) for actual, expected in zip(serialized_crop.origin_xyz, expected_origin)) > 1e-6
+    restore_xy(serialized_crop, serialized_source, bbox)
+
+
+def test_restore_xy_rejects_crop_origin_beyond_serialization_roundoff_tolerance():
+    source = make_volume(np.zeros((2, 6, 8), dtype=np.uint8))
+    cropped = crop_xy(source, (1, 1, 5, 5))
+    shifted = replace(cropped, origin_xyz=(cropped.origin_xyz[0] + 1.1e-5, *cropped.origin_xyz[1:]))
+
+    with pytest.raises(ValueError, match="origin"):
+        restore_xy(shifted, source, (1, 1, 5, 5))
+
+
 def test_direction_metadata_allows_round_trip_noise_but_rejects_material_difference():
     source = make_volume(np.zeros((2, 6, 8), dtype=np.uint8))
     nearly_identical = replace(
