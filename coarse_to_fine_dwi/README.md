@@ -58,6 +58,8 @@ Verified from the current checkout:
   derived Dataset504 plus manifest.
 - `coarse_to_fine_dwi.nifti` uses SimpleITK metadata with arrays in `(z, y, x)`
   order and implements reversible XY cropping.
+- `python -m coarse_to_fine_dwi.cli.generate_dataset` builds the prediction-
+  guided Dataset504 and writes `manifest.json` plus `roi_manifest.json`.
 - `python -m coarse_to_fine_dwi.cli.restore_predictions` restores cropped
   predictions to original space.
 - `python -m coarse_to_fine_dwi.cli.compare_predictions` compares original
@@ -122,6 +124,7 @@ $SplitFile = Join-Path $RepoRoot 'standalone_nnunet2d\reference\splits_final.jso
 $RunRoot = Join-Path $DerivedRoot '<unique-run-id>'
 $Stage1WorkRoot = Join-Path $RunRoot 'stage1_fold_runs'
 $Stage1OofDir = Join-Path $RunRoot 'stage1_oof'
+$Stage1Provenance = Join-Path $RunRoot 'stage1_provenance.json'
 $Stage2WorkRoot = Join-Path $RunRoot 'stage2_fold_runs'
 $Stage2CroppedPredictions = Join-Path $RunRoot 'stage2_cropped_predictions'
 $Stage2RestoredDir = Join-Path $RunRoot 'stage2_restored_full_volume'
@@ -206,21 +209,28 @@ do not rename or silently repair predictions to bypass those checks.
 
 ### 3. Build the prediction-guided Dataset504
 
-There is currently no Dataset504 builder CLI. Use the existing Python API from
-the repository checkout, with all paths passed through environment variables:
+Use the Dataset504 builder CLI from the repository checkout. The provenance
+file is required and must describe the Stage 1 source; an unverified record
+keeps the generated manifest non-formal (`formal_eligible: false`). Do not
+write a hand-authored assertion merely to enable formal reporting.
 
 ```powershell
-$env:CTF_DATASET501_RAW = $Dataset501Raw
-$env:CTF_STAGE1_OOF = $Stage1OofDir
-$env:CTF_DATASET504_RAW = $Dataset504Raw
-$env:CTF_SPLITS = $SplitFile
-
-conda run -n $ServerEnv python -c "import os; from pathlib import Path; from coarse_to_fine_dwi.dataset import build_dataset504; build_dataset504(Path(os.environ['CTF_DATASET501_RAW']), Path(os.environ['CTF_STAGE1_OOF']), Path(os.environ['CTF_DATASET504_RAW']), splits_path=Path(os.environ['CTF_SPLITS']), margin=$RoiMargin, min_width=$RoiMinWidth, min_height=$RoiMinHeight)"
+conda run -n $ServerEnv python -m coarse_to_fine_dwi.cli.generate_dataset `
+  --dataset501-raw $Dataset501Raw `
+  --stage1-oof-dir $Stage1OofDir `
+  --output-root $Dataset504Raw `
+  --splits $SplitFile `
+  --margin-px $RoiMargin `
+  --min-roi-size $RoiMinWidth $RoiMinHeight `
+  --stage1-provenance $Stage1Provenance
 ```
 
 This writes only derived Dataset504 data, `dataset.json`, the fixed
-`splits_final.json`, and `manifest.json`. It does not alter Dataset501. If the
-destination already exists or overlaps a source root, the API rejects it.
+`splits_final.json`, `manifest.json`, and `roi_manifest.json`. It does not
+alter Dataset501. Missing or extra OOF case IDs, fixed-split mismatches, shape
+or spatial-metadata mismatches, an existing destination, or overlap with a
+source root cause the CLI to fail; missing predictions are never silently
+skipped. An empty prediction uses the documented full-XY fallback.
 
 ### 4. Plan, preprocess, and train default Stage 2 2D nnU-Net
 
