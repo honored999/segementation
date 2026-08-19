@@ -91,7 +91,12 @@ def assert_compatible(reference: NiftiVolume, candidate: NiftiVolume) -> None:
         candidate.origin_xyz,
         atol=_METADATA_TOLERANCE,
         rtol=0.0,
-    ) or not np.array_equal(reference.direction, candidate.direction):
+    ) or not np.allclose(
+        reference.direction,
+        candidate.direction,
+        atol=_METADATA_TOLERANCE,
+        rtol=0.0,
+    ):
         raise ValueError("metadata mismatch between volumes")
 
 
@@ -136,7 +141,12 @@ def restore_xy(cropped: NiftiVolume, reference: NiftiVolume, bbox: XYBBox) -> Ni
         raise ValueError("crop metadata mismatch: spacing")
     if not np.allclose(cropped.origin_xyz, expected_origin, atol=_METADATA_TOLERANCE, rtol=0.0):
         raise ValueError("crop metadata mismatch: origin")
-    if not np.array_equal(cropped.direction, reference.direction):
+    if not np.allclose(
+        cropped.direction,
+        reference.direction,
+        atol=_METADATA_TOLERANCE,
+        rtol=0.0,
+    ):
         raise ValueError("crop metadata mismatch: direction")
 
     restored = np.zeros_like(reference.array)

@@ -110,3 +110,24 @@ def test_nifti_round_trip_uses_simpleitk_metadata(tmp_path):
 
     assert np.array_equal(loaded.array, source.array)
     assert_compatible(loaded, source)
+
+
+def test_direction_metadata_allows_round_trip_noise_but_rejects_material_difference():
+    source = make_volume(np.zeros((2, 6, 8), dtype=np.uint8))
+    nearly_identical = replace(
+        source,
+        direction=(1e-8, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+    )
+    materially_different = replace(
+        source,
+        direction=(2e-6, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+    )
+
+    assert_compatible(source, nearly_identical)
+    with pytest.raises(ValueError, match="metadata mismatch"):
+        assert_compatible(source, materially_different)
+
+    cropped = crop_xy(source, (1, 1, 5, 5))
+    assert_compatible(restore_xy(replace(cropped, direction=nearly_identical.direction), source, (1, 1, 5, 5)), source)
+    with pytest.raises(ValueError, match="direction"):
+        restore_xy(replace(cropped, direction=materially_different.direction), source, (1, 1, 5, 5))
