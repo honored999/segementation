@@ -188,8 +188,16 @@ def build_dataset504(
             direction=label.direction,
         )
 
-        crop_xy(image, roi.bbox).write(destination_images / f"{case_id}_0000.nii.gz")
-        crop_xy(label, roi.bbox).write(destination_labels / f"{case_id}.nii.gz")
+        cropped_image = crop_xy(image, roi.bbox)
+        cropped_label = crop_xy(label, roi.bbox)
+        cropped_label = NiftiVolume(
+            array=cropped_label.array,
+            spacing_xyz=cropped_image.spacing_xyz,
+            origin_xyz=cropped_image.origin_xyz,
+            direction=cropped_image.direction,
+        )
+        cropped_image.write(destination_images / f"{case_id}_0000.nii.gz")
+        cropped_label.write(destination_labels / f"{case_id}.nii.gz")
         manifest_cases[case_id] = {
             "fold": fold_by_case[case_id],
             "split": "val",

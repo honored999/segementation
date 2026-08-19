@@ -34,6 +34,7 @@ def _make_synthetic_inputs(
     *,
     target_case: str = "case005",
     empty_prediction_case: str = "case001",
+    shape: tuple[int, int, int] = (2, 6, 8),
 ) -> tuple[Path, Path]:
     pytest.importorskip("SimpleITK")
     raw_root = tmp_path / "dataset501"
@@ -45,10 +46,10 @@ def _make_synthetic_inputs(
     prediction_root.mkdir()
 
     for index, case_id in enumerate(_fixed_case_ids()):
-        image = np.full((2, 6, 8), index, dtype=np.float32)
-        label = np.zeros((2, 6, 8), dtype=np.uint8)
+        image = np.full(shape, index, dtype=np.float32)
+        label = np.zeros(shape, dtype=np.uint8)
         label[:, 4:6, 6:8] = 1
-        prediction = np.zeros((2, 6, 8), dtype=np.uint8)
+        prediction = np.zeros(shape, dtype=np.uint8)
         if case_id == target_case:
             prediction[:, 1, 2] = 1
         if case_id == empty_prediction_case:
@@ -136,6 +137,50 @@ def test_builder_derives_roi_from_prediction_before_reading_gt(tmp_path, monkeyp
     )
 
     assert events.index("roi") < events.index("gt")
+
+
+def test_builder_binds_cropped_label_metadata_to_cropped_image_grid(tmp_path):
+    from coarse_to_fine_dwi.dataset import build_dataset504
+
+    raw_root, prediction_root = _make_synthetic_inputs(tmp_path, shape=(2, 64, 64))
+    image_path = raw_root / "imagesTr" / "case005_0000.nii.gz"
+    label_path = raw_root / "labelsTr" / "case005.nii.gz"
+    direction = list(_volume(np.zeros((2, 64, 64), dtype=np.float32)).direction)
+    direction[6] += 5e-7
+    NiftiVolume(
+        array=np.zeros((2, 64, 64), dtype=np.float32),
+        spacing_xyz=(1.5, 1.0, 2.0),
+        origin_xyz=(10.0, 20.0, 30.0),
+        direction=tuple(direction),
+    ).write(image_path)
+    NiftiVolume(
+        array=np.ones((2, 64, 64), dtype=np.uint8),
+        spacing_xyz=(1.5, 1.0, 2.0),
+        origin_xyz=(10.0, 20.0, 30.0),
+        direction=_volume(np.zeros((2, 64, 64), dtype=np.float32)).direction,
+    ).write(label_path)
+    prediction = np.zeros((2, 64, 64), dtype=np.uint8)
+    prediction[:, 20:48, 32:64] = 1
+    NiftiVolume(
+        array=prediction,
+        spacing_xyz=(1.5, 1.0, 2.0),
+        origin_xyz=(10.0, 20.0, 30.0),
+        direction=_volume(np.zeros((2, 64, 64), dtype=np.float32)).direction,
+    ).write(prediction_root / "case005.nii.gz")
+
+    output_root = tmp_path / "generated"
+    build_dataset504(
+        raw_root,
+        prediction_root,
+        output_root,
+        splits_path=REFERENCE_SPLITS,
+    )
+
+    cropped_image = NiftiVolume.read(output_root / "imagesTr" / "case005_0000.nii.gz")
+    cropped_label = NiftiVolume.read(output_root / "labelsTr" / "case005.nii.gz")
+    assert cropped_label.spacing_xyz == cropped_image.spacing_xyz
+    assert cropped_label.origin_xyz == cropped_image.origin_xyz
+    assert cropped_label.direction == cropped_image.direction
 
 
 @pytest.mark.parametrize("bad_prediction_case", ["missing", "extra"])
