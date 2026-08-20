@@ -292,6 +292,40 @@ def test_compare_predictions_evaluates_only_selected_subset_with_label_and_stage
     assert summary["formal_eligible"] is False
 
 
+def test_compare_predictions_keeps_selected_subset_nonformal_when_provenance_is_eligible(
+    tmp_path, monkeypatch
+):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    raw_root, labels_dir, stage1_dir, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    (cropped_dir / "caseB.nii.gz").unlink()
+    restored_dir = restore_predictions(
+        manifest=Path(case_info["__manifest__"][0]),
+        cropped_predictions=cropped_dir,
+        dataset501_raw=raw_root,
+        output_dir=tmp_path / "restored",
+        selected_case_ids=("caseA",),
+    )
+    monkeypatch.setattr(
+        "coarse_to_fine_dwi.evaluate._has_verified_formal_provenance",
+        lambda *args, **kwargs: True,
+    )
+
+    _, json_path = compare_full_volume_predictions(
+        labels_dir=labels_dir,
+        stage1_dir=stage1_dir,
+        stage2_restored_dir=restored_dir,
+        output_dir=tmp_path / "evaluation",
+        expected_case_count=95,
+        provenance={"accepted": True},
+        selected_case_ids=("caseA",),
+    )
+
+    summary = json.loads(json_path.read_text(encoding="utf-8"))
+    assert summary["formal_eligible"] is False
+
+
 @pytest.mark.parametrize("mutation", ["missing", "extra"])
 def test_compare_predictions_requires_exact_selected_stage2_ids(tmp_path, mutation):
     from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions

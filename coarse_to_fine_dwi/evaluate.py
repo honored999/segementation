@@ -286,7 +286,7 @@ def compare_full_volume_predictions(
             "gt_source": "Dataset501_labelsTr",
             "case_aggregation": "equal_case_macro",
         },
-        "formal_eligible": _has_verified_formal_provenance(
+        "formal_eligible": selected_ids is None and _has_verified_formal_provenance(
             provenance, expected_case_count=expected_case_count
         ),
         "case_count": len(rows),
