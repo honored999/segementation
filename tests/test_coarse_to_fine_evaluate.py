@@ -141,6 +141,69 @@ def test_restore_predictions_uses_manifest_and_restores_original_shape_metadata(
     assert restored.array[0, 2, 2] == 1
 
 
+def test_restore_predictions_restores_only_selected_case_with_full_space_metadata(tmp_path):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+
+    raw_root, _, _, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    (cropped_dir / "caseB.nii.gz").unlink()
+
+    result = restore_predictions(
+        manifest=Path(case_info["__manifest__"][0]),
+        cropped_predictions=cropped_dir,
+        dataset501_raw=raw_root,
+        output_dir=tmp_path / "restored",
+        selected_case_ids=("caseA",),
+    )
+
+    assert sorted(path.name for path in result.glob("*.nii.gz")) == ["caseA.nii.gz"]
+    restored = NiftiVolume.read(result / "caseA.nii.gz")
+    reference = NiftiVolume.read(raw_root / "imagesTr" / "caseA_0000.nii.gz")
+    assert restored.shape_zyx == reference.shape_zyx
+    assert restored.spacing_xyz == reference.spacing_xyz
+    assert restored.origin_xyz == reference.origin_xyz
+    assert restored.direction == reference.direction
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_restore_predictions_requires_exact_subset_cropped_prediction_ids(tmp_path, mutation):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+
+    raw_root, _, _, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    if mutation == "missing":
+        (cropped_dir / "caseA.nii.gz").unlink()
+        (cropped_dir / "caseB.nii.gz").unlink()
+    else:
+        (cropped_dir / "caseB.nii.gz").unlink()
+        _write(
+            _volume(np.zeros((2, 4, 5), dtype=np.uint8), case_index=2),
+            cropped_dir / "extra.nii.gz",
+        )
+
+    with pytest.raises(ValueError, match="missing|extra|exact"):
+        restore_predictions(
+            manifest=Path(case_info["__manifest__"][0]),
+            cropped_predictions=cropped_dir,
+            dataset501_raw=raw_root,
+            output_dir=tmp_path / "restored",
+            selected_case_ids=("caseA",),
+        )
+
+
+@pytest.mark.parametrize("selected_case_ids", [(), ("caseA", "caseA"), ("",), (1,), ("unknown",)])
+def test_restore_predictions_rejects_invalid_selected_case_ids(tmp_path, selected_case_ids):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+
+    raw_root, _, _, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    with pytest.raises(ValueError, match="selected_case_ids|selection|manifest"):
+        restore_predictions(
+            manifest=Path(case_info["__manifest__"][0]),
+            cropped_predictions=cropped_dir,
+            dataset501_raw=raw_root,
+            output_dir=tmp_path / "restored",
+            selected_case_ids=selected_case_ids,
+        )
+
+
 @pytest.mark.parametrize("mutation", ["missing", "extra"])
 def test_restore_predictions_requires_exact_cropped_prediction_ids(tmp_path, mutation):
     from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
@@ -196,6 +259,93 @@ def test_compare_predictions_writes_full_volume_csv_and_json(tmp_path):
     assert summary["stage2_minus_stage1"]["dice"] == pytest.approx(-1 / 6)
     assert summary["global"]["stage1"]["tp"] == 2
     assert summary["global"]["stage2"]["fp"] == 2
+
+
+def test_compare_predictions_evaluates_only_selected_subset_with_label_and_stage1_supersets(tmp_path):
+    from coarse_to_fine_dwi.cli.restore_predictions import restore_predictions
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    raw_root, labels_dir, stage1_dir, cropped_dir, case_info = _make_synthetic_case_data(tmp_path)
+    (cropped_dir / "caseB.nii.gz").unlink()
+    restored_dir = restore_predictions(
+        manifest=Path(case_info["__manifest__"][0]),
+        cropped_predictions=cropped_dir,
+        dataset501_raw=raw_root,
+        output_dir=tmp_path / "restored",
+        selected_case_ids=("caseA",),
+    )
+
+    csv_path, json_path = compare_full_volume_predictions(
+        labels_dir=labels_dir,
+        stage1_dir=stage1_dir,
+        stage2_restored_dir=restored_dir,
+        output_dir=tmp_path / "evaluation",
+        selected_case_ids=("caseA",),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["case_id"] for row in rows] == ["caseA"]
+    summary = json.loads(json_path.read_text(encoding="utf-8"))
+    assert summary["case_count"] == 1
+    assert summary["case_ids"] == ["caseA"]
+    assert summary["formal_eligible"] is False
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_compare_predictions_requires_exact_selected_stage2_ids(tmp_path, mutation):
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    _, labels_dir, stage1_dir, _, _ = _make_synthetic_case_data(tmp_path)
+    stage2_dir = tmp_path / "stage2_restored"
+    stage2_dir.mkdir()
+    if mutation == "extra":
+        for case_id in ("caseA", "caseB"):
+            _write(NiftiVolume.read(stage1_dir / f"{case_id}.nii.gz"), stage2_dir / f"{case_id}.nii.gz")
+
+    with pytest.raises(ValueError, match="missing|extra|exact"):
+        compare_full_volume_predictions(
+            labels_dir=labels_dir,
+            stage1_dir=stage1_dir,
+            stage2_restored_dir=stage2_dir,
+            output_dir=tmp_path / "evaluation",
+            selected_case_ids=("caseA",),
+        )
+
+
+@pytest.mark.parametrize("selected_case_ids", [(), ("caseA", "caseA"), ("",), (1,)])
+def test_compare_predictions_rejects_invalid_selected_case_ids(tmp_path, selected_case_ids):
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    _, labels_dir, stage1_dir, _, _ = _make_synthetic_case_data(tmp_path)
+    with pytest.raises(ValueError, match="selected_case_ids"):
+        compare_full_volume_predictions(
+            labels_dir=labels_dir,
+            stage1_dir=stage1_dir,
+            stage2_restored_dir=stage1_dir,
+            output_dir=tmp_path / "evaluation",
+            selected_case_ids=selected_case_ids,
+        )
+
+
+@pytest.mark.parametrize("missing_kind", ["labels", "stage1"])
+def test_compare_predictions_requires_each_selected_label_and_stage1_id(tmp_path, missing_kind):
+    from coarse_to_fine_dwi.evaluate import compare_full_volume_predictions
+
+    _, labels_dir, stage1_dir, _, _ = _make_synthetic_case_data(tmp_path)
+    (labels_dir if missing_kind == "labels" else stage1_dir).joinpath("caseA.nii.gz").unlink()
+    stage2_dir = tmp_path / "stage2_restored"
+    stage2_dir.mkdir()
+    _write(_volume(np.zeros((2, 4, 5), dtype=np.uint8)), stage2_dir / "caseA.nii.gz")
+
+    with pytest.raises(ValueError, match="missing"):
+        compare_full_volume_predictions(
+            labels_dir=labels_dir,
+            stage1_dir=stage1_dir,
+            stage2_restored_dir=stage2_dir,
+            output_dir=tmp_path / "evaluation",
+            selected_case_ids=("caseA",),
+        )
 
 
 def test_compare_predictions_rejects_cropped_stage1_prediction(tmp_path):

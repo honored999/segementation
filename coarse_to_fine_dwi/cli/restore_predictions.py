@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -104,12 +105,32 @@ def _check_optional_metadata(row: dict[str, Any], reference: NiftiVolume, croppe
             raise ValueError(f"manifest {field} mismatch for {row['case_id']}")
 
 
+def _selected_ids(selected_case_ids: Collection[str] | None, manifest_ids: set[str]) -> set[str]:
+    if selected_case_ids is None:
+        return set(manifest_ids)
+    if isinstance(selected_case_ids, str):
+        raise ValueError("selected_case_ids must be a nonempty collection of strings")
+    selected = list(selected_case_ids)
+    if not selected or any(not isinstance(case_id, str) for case_id in selected):
+        raise ValueError("selected_case_ids must be a nonempty collection of strings")
+    if len(set(selected)) != len(selected):
+        raise ValueError("selected_case_ids must not contain duplicates")
+    selected_set = set(selected)
+    if not selected_set <= manifest_ids:
+        raise ValueError(
+            f"selected_case_ids must be contained in manifest: "
+            f"missing={sorted(selected_set - manifest_ids)}"
+        )
+    return selected_set
+
+
 def restore_predictions(
     *,
     manifest: Path,
     cropped_predictions: Path,
     dataset501_raw: Path,
     output_dir: Path,
+    selected_case_ids: Collection[str] | None = None,
 ) -> Path:
     """Restore one exact cropped prediction per manifest case to original space."""
     manifest_path = Path(manifest).resolve()
@@ -120,7 +141,7 @@ def restore_predictions(
     _validate_protocol(payload)
     rows = _manifest_rows(payload)
     predictions = _discover(Path(cropped_predictions).resolve())
-    expected_ids = set(rows)
+    expected_ids = _selected_ids(selected_case_ids, set(rows))
     if set(predictions) != expected_ids:
         raise ValueError(
             f"cropped predictions IDs mismatch: missing={sorted(expected_ids - set(predictions))}, "

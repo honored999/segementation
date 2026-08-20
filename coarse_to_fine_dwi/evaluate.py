@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,23 @@ def _require_exact_ids(
     extra = sorted(actual - expected)
     if missing or extra:
         raise ValueError(f"{kind} IDs mismatch: missing={missing}, extra={extra}")
+
+
+def _selected_ids(selected_case_ids: Collection[str] | None, available_ids: set[str]) -> set[str] | None:
+    if selected_case_ids is None:
+        return None
+    if isinstance(selected_case_ids, str):
+        raise ValueError("selected_case_ids must be a nonempty collection of strings")
+    selected = list(selected_case_ids)
+    if not selected or any(not isinstance(case_id, str) for case_id in selected):
+        raise ValueError("selected_case_ids must be a nonempty collection of strings")
+    if len(set(selected)) != len(selected):
+        raise ValueError("selected_case_ids must not contain duplicates")
+    selected_set = set(selected)
+    missing = sorted(selected_set - available_ids)
+    if missing:
+        raise ValueError(f"selected_case_ids are missing from available cases: {missing}")
+    return selected_set
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -200,6 +217,7 @@ def compare_full_volume_predictions(
     output_dir: Path,
     expected_case_count: int = 95,
     provenance: Mapping[str, Any] | None = None,
+    selected_case_ids: Collection[str] | None = None,
 ) -> tuple[Path, Path]:
     """Compare predictions in original space with optional verified provenance."""
     if expected_case_count <= 0:
@@ -207,13 +225,21 @@ def compare_full_volume_predictions(
     labels = _discover_nifti_files(Path(labels_dir).resolve(), kind="labels")
     stage1 = _discover_nifti_files(Path(stage1_dir).resolve(), kind="Stage1 predictions")
     stage2 = _discover_nifti_files(Path(stage2_restored_dir).resolve(), kind="Stage2 restored predictions")
-    expected_ids = set(labels)
-    if len(expected_ids) != expected_case_count:
-        raise ValueError(
-            f"labels must contain exactly {expected_case_count} cases, found {len(expected_ids)}"
-        )
-    _require_exact_ids(stage1, expected_ids, kind="Stage1 predictions")
-    _require_exact_ids(stage2, expected_ids, kind="Stage2 restored predictions")
+    selected_ids = _selected_ids(selected_case_ids, set(labels))
+    if selected_ids is None:
+        expected_ids = set(labels)
+        if len(expected_ids) != expected_case_count:
+            raise ValueError(
+                f"labels must contain exactly {expected_case_count} cases, found {len(expected_ids)}"
+            )
+        _require_exact_ids(stage1, expected_ids, kind="Stage1 predictions")
+        _require_exact_ids(stage2, expected_ids, kind="Stage2 restored predictions")
+    else:
+        expected_ids = selected_ids
+        missing_stage1 = sorted(expected_ids - set(stage1))
+        if missing_stage1:
+            raise ValueError(f"Stage1 predictions are missing selected cases: {missing_stage1}")
+        _require_exact_ids(stage2, expected_ids, kind="Stage2 restored predictions")
 
     rows: list[dict[str, Any]] = []
     total_voxels = 0
