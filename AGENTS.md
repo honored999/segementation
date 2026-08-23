@@ -39,6 +39,23 @@ Primary validation command:
 The rules below are repository-wide unless a more specific `AGENTS.md`
 exists in a subdirectory.
 
+## Required project context
+
+For tasks involving the stroke-segmentation project, nnU-Net, datasets,
+training, evaluation, server execution, experiment results, or server paths:
+
+1. Read `SERVER_PROJECT_STRUCTURE.md` before planning or modifying anything.
+2. Treat `SERVER_PROJECT_STRUCTURE.md` as the project record of known server-side
+   structure and resource locations.
+3. Distinguish verified server information from entries marked unverified,
+   planned, historical, or pending confirmation.
+4. Do not invent missing server files, checkpoints, datasets, predictions,
+   paths, or experiment results.
+5. If required server resources are unavailable locally, prepare the necessary
+   code and server-side commands instead of substituting fake data.
+6. `AGENTS.md` defines repository workflow and safety rules;
+   `SERVER_PROJECT_STRUCTURE.md` provides project/server context.
+
 ## Project-specific scientific constraints
 
 Current primary task:
@@ -239,6 +256,29 @@ Do not allow two subagents to modify the same file concurrently.
 If two tasks depend on the same file, execute them sequentially.
 
 
+# Task decomposition economy
+
+Do not create additional subagents merely to make the workflow appear more
+structured.
+
+For a small, localized implementation, prefer:
+
+one scoped implementer
+→ validation
+→ one read-only reviewer when appropriate
+
+Use additional subagents only when work is genuinely independent, requires
+different expertise, or cannot safely share the same modification scope.
+
+Do not split one small code change across multiple implementers.
+
+Do not create parallel alternative implementations unless the user explicitly
+requests comparison of those implementations.
+
+Agent decomposition should reduce risk or execution time, not increase process
+overhead.
+
+
 # Recommended subagent roles
 
 Use specialized roles when useful.
@@ -366,6 +406,40 @@ Repository-level files should be changed only when the change genuinely
 applies repository-wide.
 
 
+# Implementation economy
+
+Prefer the smallest implementation that fully satisfies the requested behavior.
+
+Before creating new code, inspect whether existing modules, interfaces, helpers,
+training loops, data loaders, metrics, configuration, or CLI logic can be reused.
+
+Prefer:
+
+- reusing an existing module over copying it;
+- extending a narrow existing interface over duplicating a subsystem;
+- one clear implementation over multiple alternative implementations;
+- short, focused functions over unnecessary abstraction layers;
+- shallow control flow over deeply nested branching;
+- configuration only for parameters that actually need to vary.
+
+Do not add speculative extensibility.
+
+Do not introduce factories, registries, adapters, wrapper layers, base classes,
+feature flags, fallback implementations, or generalized frameworks unless they
+are required by the current task or clearly reduce existing duplication.
+
+When comparing model architectures, keep the surrounding data, training,
+evaluation, and experiment pipeline shared whenever practical and isolate the
+architectural difference to the smallest module possible.
+
+Do not duplicate data loading, preprocessing, split handling, metrics,
+evaluation, logging, or output-path logic merely to support another model.
+
+Avoid unrelated cleanup and opportunistic refactoring.
+
+A smaller diff is preferred when it provides the same verified behavior.
+
+
 # Git rules
 
 The repository root is the only Git repository unless explicitly documented.
@@ -426,6 +500,15 @@ Examples:
 - `exp(component): record ...`
 
 Do not push unless requested or clearly authorized.
+
+Keep commit subjects short and limited to the implemented functional change.
+
+Do not mention agent orchestration, review process, test counts, planning
+details, or implementation chatter in a commit message unless those are the
+actual subject of the commit.
+
+Do not create additional Git branches or worktrees unless explicitly requested
+or required to isolate independent work.
 
 
 # Working-tree safety
