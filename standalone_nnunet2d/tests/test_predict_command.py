@@ -186,6 +186,31 @@ def test_prediction_command_accepts_aligned_checkpoint_and_copies_evidence(
     assert manifest["policy"]["alignment_evidence"] is not evidence
 
 
+def test_prediction_command_rejects_checkpoint_dataset_channel_mismatch_before_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw_root = tmp_path / "raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    (raw_root / "dataset.json").write_text(
+        '{"channel_names": {"0": "DWI", "1": "ADC"}}', encoding="utf-8"
+    )
+    checkpoint = _pending_checkpoint(monkeypatch, tmp_path)
+
+    def fail_if_loaded(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("model must not load before channel validation")
+
+    monkeypatch.setattr(predict_module, "_load_model", fail_if_loaded)
+
+    with pytest.raises(ValueError, match="checkpoint input_channels=1.*dataset channels=2"):
+        main(
+            [
+                "--checkpoint", str(checkpoint), "--raw-root", str(raw_root),
+                "--case-id", "case001", "--output-root", str(tmp_path / "output"),
+                "--allow-pending",
+            ]
+        )
+
+
 @pytest.mark.parametrize("case", ["pending_with_evidence", "aligned_without_evidence", "tampered", "unknown"])
 def test_prediction_command_rejects_invalid_checkpoint_alignment_metadata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str

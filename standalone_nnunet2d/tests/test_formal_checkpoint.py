@@ -143,6 +143,26 @@ def test_formal_checkpoint_restores_scheduler_and_rng_state() -> None:
     assert metadata["resolved_config"] == config
 
 
+def test_formal_checkpoint_records_input_channels_in_metadata() -> None:
+    model = nn.Conv2d(3, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), .01)
+    scheduler = PolyLRScheduler(optimizer, .01, 1000)
+    state = FormalTrainerState(epoch=1, global_step=1, best_validation_dice=.1, fold=0)
+    path = _checkpoint_path()
+
+    save_formal_checkpoint(
+        model,
+        optimizer,
+        scheduler,
+        path,
+        state,
+        {"input_channels": 3, "run_state": "official_alignment_pending"},
+    )
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    assert payload["metadata"]["input_channels"] == 3
+
+
 def test_formal_checkpoint_rejects_official_aligned_local_state() -> None:
     model = nn.Conv2d(1, 2, 1)
     optimizer = torch.optim.SGD(model.parameters(), .01)

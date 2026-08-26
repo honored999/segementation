@@ -14,6 +14,7 @@ from torch import nn
 from torch.optim import Optimizer
 from standalone_nnunet2d.performance import PerformanceConfig, build_formal_loaders, resolve_performance_config
 from standalone_nnunet2d.config import load_model_config
+from standalone_nnunet2d.data.dataset import resolve_input_channels
 from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
 from standalone_nnunet2d.training.formal_trainer import run_formal_epoch, run_formal_validation
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE, OfficialTrainerSchedule, PolyLRScheduler, make_official_optimizer
@@ -25,9 +26,16 @@ from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, c
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, resolve_alignment_state, validate_alignment_evidence_record
 
 
-def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None) -> dict[str, object]:
+def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, input_channels: int = 1) -> dict[str, object]:
+ if isinstance(input_channels, bool) or input_channels < 1:
+  raise ValueError(f'input_channels must be a positive integer, got {input_channels}')
  if performance is None: performance=resolve_performance_config('alignment',device='cpu')
- if alignment_evidence is None:
+ if input_channels > 1:
+  if alignment_evidence is not None:
+   raise ValueError('multichannel runs are experimental and cannot carry official alignment evidence')
+  run_state=DEFAULT_RUN_STATE
+  validated_evidence=None
+ elif alignment_evidence is None:
   run_state=DEFAULT_RUN_STATE
   validated_evidence=None
  else:
@@ -37,8 +45,9 @@ def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSche
  optimizer_config={'name':'SGD','lr':.01,'momentum':.99,'nesterov':True,'weight_decay':3e-5}
  policies={'scheduler':{'name':'poly','exponent':.9,'initial_lr':.01,'max_steps':schedule.num_epochs},'training':{'iterations_per_epoch':schedule.num_iterations_per_epoch,'oversample_foreground_percent':schedule.oversample_foreground_percent},'validation':{'iterations_per_epoch':schedule.num_val_iterations_per_epoch}}
  performance_config={'profile':performance.profile,'loader':performance.as_dict(),'optimizations':{'amp':performance.amp,'tf32':performance.tf32,'compile':performance.compile}}
- plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance':performance_config}
- config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance_profile':performance.profile,'performance':performance_config,'plan_hash':compute_plan_hash(plan)}
+ plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'input_channels':input_channels,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance':performance_config}
+ config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'input_channels':input_channels,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance_profile':performance.profile,'performance':performance_config,'plan_hash':compute_plan_hash(plan)}
+ if input_channels > 1: config['experimental_extension']='multichannel'
  if validated_evidence is not None:
   config['alignment_evidence']=deepcopy(validated_evidence)
  return config
@@ -52,6 +61,16 @@ def load_2d_plan_config(path: Path) -> tuple[tuple[int, int], tuple[bool, ...]]:
  with path.open(encoding='utf-8') as handle:
   configuration=json.load(handle)['configurations']['2d']
  return tuple(int(value) for value in configuration['patch_size']), tuple(bool(value) for value in configuration['use_mask_for_norm'])
+
+def resolve_use_mask_for_channels(values: tuple[bool, ...] | list[bool], input_channels: int) -> tuple[bool, ...]:
+ if input_channels < 1:
+  raise ValueError(f'input_channels must be positive, got {input_channels}')
+ resolved=tuple(bool(value) for value in values)
+ if len(resolved)==1:
+  return resolved * input_channels
+ if len(resolved)!=input_channels:
+  raise ValueError(f'use_mask_for_norm must have length 1 or {input_channels}, got {len(resolved)}')
+ return resolved
 
 def build_formal_datasets(raw_root: Path, *, fold: int, patch_size: tuple[int, int], use_mask_for_norm: tuple[bool, ...]) -> tuple[FormalPatchDataset, FormalPatchDataset]:
  train=FormalPatchDataset(raw_root,fold=fold,split='train',patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,augment=True)
@@ -89,16 +108,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
   _, alignment_evidence=resolve_alignment_state(a.transform_parity_report,a.inference_parity_report)
  except ValueError as exc:
   p.error(str(exc))
- patch_size,use_mask_for_norm=load_2d_plan_config(a.plans)
- schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence)
+ patch_size,plan_use_mask_for_norm=load_2d_plan_config(a.plans)
+ schedule=OfficialTrainerSchedule()
+ input_channels=resolve_input_channels(a.raw_root)
+ config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,input_channels=input_channels)
  if not a.confirm_run: print(json.dumps({'execution':'not-confirmed','config':config},indent=2,default=str)); return 0
  if not 1<=a.epochs<=schedule.num_epochs: p.error('epochs must be in [1,1000]')
+ use_mask_for_norm=resolve_use_mask_for_channels(plan_use_mask_for_norm,input_channels)
+ config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,input_channels=input_channels)
  random.seed(0); np.random.seed(0); torch.manual_seed(0)
  if torch.cuda.is_available(): torch.cuda.manual_seed_all(0)
  device=torch.device(a.device); a.output_root.mkdir(parents=True,exist_ok=True); write_resolved_config(a.output_root/'resolved_config.json',config)
  train,val=build_formal_datasets(a.raw_root,fold=a.fold,patch_size=patch_size,use_mask_for_norm=use_mask_for_norm)
  train_loader,val_loader=build_formal_loaders(train,val,performance=performance,batch_size=12)
- model=PlainConvUNet2D(load_model_config(),deep_supervision=True).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); validation_loss=DiceCrossEntropyLoss(); loss=DeepSupervisionLoss(validation_loss,weights=deep_supervision_weights(7))
+ model=PlainConvUNet2D(load_model_config(input_channels=input_channels),deep_supervision=True).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); validation_loss=DiceCrossEntropyLoss(); loss=DeepSupervisionLoss(validation_loss,weights=deep_supervision_weights(7))
  state=FormalTrainerState(0,0,-1.,a.fold)
  if a.resume is not None: state=load_formal_checkpoint(model,optimizer,scheduler,a.resume,fold=a.fold,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence')).state
  log=(a.output_root/'training_log.csv').open('a',newline='',encoding='utf-8'); writer=csv.DictWriter(log,fieldnames=('epoch','global_step','train_loss','validation_dice','best_dice','lr')); 

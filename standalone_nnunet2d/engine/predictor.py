@@ -106,6 +106,30 @@ def _normalise_patch_size(patch_size: tuple[int, int] | list[int]) -> tuple[int,
     return int(patch_size[0]), int(patch_size[1])
 
 
+def _normalise_volume_inputs(
+    image: NiftiVolume | Iterable[NiftiVolume],
+) -> tuple[NiftiVolume, np.ndarray]:
+    volumes = (image,) if isinstance(image, NiftiVolume) else tuple(image)
+    if not volumes:
+        raise ValueError("predict_volume requires at least one input channel")
+    reference = volumes[0]
+    for channel_index, volume in enumerate(volumes[1:], start=1):
+        if volume.array.shape != reference.array.shape:
+            reason = f"shape expected {reference.array.shape}, got {volume.array.shape}"
+        elif not np.allclose(volume.spacing_xyz, reference.spacing_xyz, rtol=0.0, atol=1e-6):
+            reason = f"spacing expected {reference.spacing_xyz}, got {volume.spacing_xyz}"
+        elif not np.allclose(volume.origin_xyz, reference.origin_xyz, rtol=0.0, atol=1e-6):
+            reason = f"origin expected {reference.origin_xyz}, got {volume.origin_xyz}"
+        elif not np.allclose(volume.direction, reference.direction, rtol=0.0, atol=1e-6):
+            reason = "direction does not match channel 0"
+        else:
+            reason = None
+        if reason is not None:
+            raise ValueError(f"channel {channel_index} geometry mismatch against channel 0: {reason}")
+    normalized = np.stack([z_score_normalize(volume.array) for volume in volumes], axis=0)
+    return reference, normalized
+
+
 def _predict_tile_logits(
     model: nn.Module,
     tile: Tensor,
@@ -144,8 +168,8 @@ def predict_logits_2d(
     tile_step_size: float = DEFAULT_TILE_STEP_SIZE,
 ) -> Tensor:
     """Predict a 2D tensor by averaging full-resolution logits over TTA and tiles."""
-    if image.ndim != 4 or image.shape[0] < 1 or image.shape[1] != 1:
-        raise ValueError(f"image must have shape (B, 1, H, W), got {tuple(image.shape)}")
+    if image.ndim != 4 or image.shape[0] < 1 or image.shape[1] < 1:
+        raise ValueError(f"image must have shape (B, C, H, W) with C >= 1, got {tuple(image.shape)}")
     if not 0.0 < tile_step_size <= 1.0:
         raise ValueError(f"tile_step_size must be in (0, 1], got {tile_step_size}")
     patch_height, patch_width = _normalise_patch_size(patch_size)
@@ -229,7 +253,7 @@ def predict_logits_2d(
 
 def predict_volume(
     model: nn.Module,
-    image: NiftiVolume,
+    image: NiftiVolume | Iterable[NiftiVolume],
     device: torch.device,
     *,
     mirror_axes: tuple[int, ...] = DEFAULT_MIRROR_AXES,
@@ -240,12 +264,14 @@ def predict_volume(
     """Return one binary uint8 prediction per source-space ``(z, y, x)`` slice."""
     if slice_batch_size <= 0:
         raise ValueError(f"slice_batch_size must be positive, got {slice_batch_size}")
-    normalized = z_score_normalize(image.array)
-    slice_count, height, width = normalized.shape
+    reference, normalized = _normalise_volume_inputs(image)
+    _, slice_count, height, width = normalized.shape
     total_logits: Tensor | None = None
     for z_start in range(0, slice_count, slice_batch_size):
         z_end = min(z_start + slice_batch_size, slice_count)
-        tensor = torch.from_numpy(normalized[z_start:z_end]).unsqueeze(1)
+        tensor = torch.from_numpy(
+            np.transpose(normalized[:, z_start:z_end], (1, 0, 2, 3))
+        )
         logits = predict_logits_2d(
             model,
             tensor,
@@ -268,7 +294,7 @@ def predict_volume(
             )
         total_logits[z_start:z_end] += logits
     if total_logits is None:
-        return np.empty(image.array.shape, dtype=np.uint8)
+        return np.empty(reference.array.shape, dtype=np.uint8)
     return torch.argmax(total_logits, dim=1).cpu().numpy().astype(np.uint8)
 
 

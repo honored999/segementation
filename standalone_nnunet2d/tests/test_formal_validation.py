@@ -186,3 +186,57 @@ def test_validate_fold_rejects_aligned_state_without_evidence(
             device=torch.device("cpu"),
             run_state="official_aligned",
         )
+
+
+def test_validate_fold_checks_label_geometry_against_every_channel_before_predict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw_root = tmp_path / "multichannel-raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    (raw_root / "labelsTr").mkdir()
+    (raw_root / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}),
+        encoding="utf-8",
+    )
+    case_id = "case001"
+    reference = NiftiVolume(
+        np.zeros((2, 2, 2), dtype=np.float32),
+        spacing_xyz=(0.7, 0.8, 4.5),
+        origin_xyz=(11.0, -2.0, 3.5),
+    )
+    label = NiftiVolume(
+        np.zeros((2, 2, 2), dtype=np.uint8),
+        reference.spacing_xyz,
+        reference.origin_xyz,
+        reference.direction,
+    )
+    mismatched_channel = NiftiVolume(
+        np.zeros((2, 2, 3), dtype=np.float32),
+        reference.spacing_xyz,
+        reference.origin_xyz,
+        reference.direction,
+    )
+    write_nifti(raw_root / "imagesTr" / f"{case_id}_0000.nii.gz", reference)
+    write_nifti(raw_root / "imagesTr" / f"{case_id}_0001.nii.gz", mismatched_channel)
+    write_nifti(raw_root / "labelsTr" / f"{case_id}.nii.gz", label)
+    monkeypatch.setattr(formal_validation, "load_fold_cases", lambda *_: (case_id,))
+
+    def fail_if_prediction_is_attempted(*_: object, **__: object) -> None:
+        raise AssertionError("predict_volume must not run before channel geometry validation")
+
+    monkeypatch.setattr(formal_validation, "predict_volume", fail_if_prediction_is_attempted)
+
+    report = formal_validation.validate_fold(
+        object(),
+        raw_root,
+        fold=0,
+        output_root=tmp_path / "fold-output",
+        device=torch.device("cpu"),
+    )
+
+    assert report["case_count"] == 0
+    assert report["failed_case_count"] == 1
+    error = report["failed_cases"][0]["error"]
+    assert "channel 1" in error
+    assert "geometry mismatch against label" in error
+    assert "shape expected (2, 2, 2), got (2, 2, 3)" in error

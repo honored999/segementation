@@ -36,8 +36,14 @@ def _as_pairs(values: list[list[int]]) -> tuple[tuple[int, int], ...]:
     return tuple(tuple(int(axis) for axis in value) for value in values)  # type: ignore[return-value]
 
 
-def load_model_config(reference_dir: Path | None = None) -> ModelConfig:
+def load_model_config(
+    reference_dir: Path | None = None,
+    *,
+    input_channels: int = 1,
+) -> ModelConfig:
     """Parse the 2D architecture without importing nnunetv2 at runtime."""
+    if isinstance(input_channels, bool) or input_channels < 1:
+        raise ValueError(f"input_channels must be a positive integer, got {input_channels}")
     directory = reference_dir or DEFAULT_REFERENCE_DIR
     plans_path = directory / "nnUNetPlans.json"
     with plans_path.open(encoding="utf-8") as handle:
@@ -53,7 +59,7 @@ def load_model_config(reference_dir: Path | None = None) -> ModelConfig:
     # PyTorch documents nn.LeakyReLU's default negative_slope as 0.01. The
     # supplied plans omit it, so it is explicit here rather than guessed.
     return ModelConfig(
-        input_channels=1,
+        input_channels=int(input_channels),
         output_channels=2,
         n_stages=int(architecture["n_stages"]),
         features_per_stage=tuple(int(value) for value in architecture["features_per_stage"]),

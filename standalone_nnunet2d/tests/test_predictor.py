@@ -93,6 +93,12 @@ class _DropsBatchModel(nn.Module):
         return torch.cat((torch.zeros_like(foreground), foreground), dim=1)
 
 
+class _TwoChannelModel(nn.Module):
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        foreground = image[:, :1] + 0.25 * image[:, 1:2]
+        return torch.cat((torch.zeros_like(foreground), foreground), dim=1)
+
+
 def test_predict_logits_2d_unflips_each_mirror_before_averaging() -> None:
     image = torch.tensor([[[[2.0, -1.0, -1.0], [-1.0, -1.0, -1.0]]]])
 
@@ -547,3 +553,48 @@ def test_predict_logits_2d_rejects_model_batch_size_changes() -> None:
             patch_size=(2, 2),
             tile_step_size=1.0,
         )
+
+
+def test_predict_logits_2d_accepts_multichannel_batch_and_preserves_channel_dim() -> None:
+    image = torch.randn(2, 2, 3, 4)
+
+    logits = predict_logits_2d(
+        _TwoChannelModel(), image, torch.device("cpu"), mirror_axes=(), patch_size=(3, 4)
+    )
+
+    assert tuple(logits.shape) == (2, 2, 3, 4)
+
+
+def test_predict_volume_normalizes_multimodal_channels_independently_and_batches_bchw() -> None:
+    first = NiftiVolume(np.arange(12, dtype=np.float32).reshape(2, 2, 3), (1, 1, 1), (0, 0, 0))
+    second = NiftiVolume(
+        (100 + 5 * np.arange(12, dtype=np.float32)).reshape(2, 2, 3),
+        (1, 1, 1),
+        (0, 0, 0),
+    )
+    model = _TwoChannelModel()
+    seen_shapes: list[tuple[int, ...]] = []
+    seen_inputs: list[torch.Tensor] = []
+    original_forward = model.forward
+
+    def recording_forward(image: torch.Tensor) -> torch.Tensor:
+        seen_shapes.append(tuple(image.shape))
+        seen_inputs.append(image.detach().clone())
+        return original_forward(image)
+
+    model.forward = recording_forward  # type: ignore[method-assign]
+    prediction = predict_volume(
+        model,
+        (first, second),
+        torch.device("cpu"),
+        mirror_axes=(),
+        patch_size=(2, 3),
+        slice_batch_size=2,
+    )
+
+    assert prediction.shape == first.array.shape
+    assert seen_shapes == [(2, 2, 2, 3)]
+    np.testing.assert_allclose(seen_inputs[0][:, 0].mean().item(), 0.0, atol=1e-6)
+    np.testing.assert_allclose(seen_inputs[0][:, 1].mean().item(), 0.0, atol=1e-6)
+    np.testing.assert_allclose(seen_inputs[0][:, 0].std(unbiased=False).item(), 1.0, atol=1e-6)
+    np.testing.assert_allclose(seen_inputs[0][:, 1].std(unbiased=False).item(), 1.0, atol=1e-6)

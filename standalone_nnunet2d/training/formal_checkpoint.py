@@ -89,6 +89,14 @@ def compute_plan_hash(plan: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def checkpoint_input_channels(metadata: Mapping[str, Any]) -> int:
+    """Read checkpoint input channels, treating old metadata as legacy C=1."""
+    value = metadata.get("input_channels", 1)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"checkpoint input_channels must be a positive integer, got {value!r}")
+    return value
+
+
 def capture_rng_state() -> dict[str, Any]:
     return {
         "python": random.getstate(),
@@ -213,6 +221,7 @@ def save_formal_checkpoint(
     )
     resolved_plan_hash = plan_hash or str(resolved_config.get("plan_hash") or compute_plan_hash(resolved_config))
     resolved_policies = dict(policies or resolved_config.get("policies", {}))
+    input_channels = checkpoint_input_channels(resolved_config)
     metadata: dict[str, Any] = {
         "run_type": run_state,
         "run_state": run_state,
@@ -221,6 +230,7 @@ def save_formal_checkpoint(
         "global_step": state.global_step,
         "best_validation_dice": state.best_validation_dice,
         "fold": state.fold,
+        "input_channels": input_channels,
         "config": resolved_config,
         "resolved_config": resolved_config,
         "plan_hash": resolved_plan_hash,

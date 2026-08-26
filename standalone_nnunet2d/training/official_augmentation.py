@@ -35,32 +35,64 @@ class Official2DAugmentationConfig:
  mirror_axes: tuple[int,int]=(0,1)
 
 def mirror_pair(image: np.ndarray,label: np.ndarray,axes: tuple[int,...]) -> tuple[np.ndarray,np.ndarray]:
- if image.shape!=label.shape or image.ndim!=2: raise ValueError('image and label must be equal-shaped 2D arrays')
- return np.ascontiguousarray(np.flip(image,axes)),np.ascontiguousarray(np.flip(label,axes))
+ if label.ndim != 2 or image.ndim not in (2, 3) or image.shape[-2:] != label.shape:
+  raise ValueError('image and label must have shapes (H, W) or (C, H, W) and (H, W)')
+ image_axes = axes if image.ndim == 2 else tuple(axis + 1 for axis in axes)
+ return np.ascontiguousarray(np.flip(image,image_axes)),np.ascontiguousarray(np.flip(label,axes))
 
 def rotate_pair(image: np.ndarray,label: np.ndarray,angle_degrees: float) -> tuple[np.ndarray,np.ndarray]:
- if image.shape!=label.shape or image.ndim!=2: raise ValueError('image and label must be equal-shaped 2D arrays')
- return rotate(image,angle_degrees,reshape=False,order=3,mode='constant',cval=0.0),rotate(label,angle_degrees,reshape=False,order=0,mode='constant',cval=-1)
+ if label.ndim != 2 or image.ndim not in (2, 3) or image.shape[-2:] != label.shape:
+  raise ValueError('image and label must have shapes (H, W) or (C, H, W) and (H, W)')
+ if image.ndim == 2:
+  rotated_image = rotate(image,angle_degrees,reshape=False,order=3,mode='constant',cval=0.0)
+ else:
+  rotated_image = np.stack([rotate(channel,angle_degrees,reshape=False,order=3,mode='constant',cval=0.0) for channel in image])
+ return rotated_image,rotate(label,angle_degrees,reshape=False,order=0,mode='constant',cval=-1)
 
 def scale_pair(image: np.ndarray,label: np.ndarray,scale: float,patch_size: tuple[int,int]) -> tuple[np.ndarray,np.ndarray]:
  if scale<=0: raise ValueError('scale must be positive')
- scaled_image=zoom(image,scale,order=3); scaled_label=zoom(label,scale,order=0)
+ if label.ndim != 2 or image.ndim not in (2, 3) or image.shape[-2:] != label.shape:
+  raise ValueError('image and label must have shapes (H, W) or (C, H, W) and (H, W)')
+ scaled_image=zoom(image,(1,scale,scale),order=3) if image.ndim == 3 else zoom(image,scale,order=3)
+ scaled_label=zoom(label,scale,order=0)
+ if image.ndim == 3:
+  center=(scaled_image.shape[1]//2,scaled_image.shape[2]//2)
+  output_image=np.zeros((scaled_image.shape[0],*patch_size),dtype=scaled_image.dtype)
+  output_label=np.zeros(patch_size,dtype=scaled_label.dtype)
+  for index, channel in enumerate(scaled_image):
+   output_image[index], output_label = crop_or_pad(channel,scaled_label,center,patch_size)
+  return output_image, output_label
  return crop_or_pad(scaled_image,scaled_label,(scaled_image.shape[0]//2,scaled_image.shape[1]//2),patch_size)
 
 def intensity_augment(image: np.ndarray,rng: np.random.Generator) -> np.ndarray:
  result=image.astype(np.float32,copy=True)
  if rng.random()<.1: result+=rng.normal(0,rng.uniform(0,.1),result.shape)
- if rng.random()<.2: result=gaussian_filter(result,rng.uniform(.5,1.))
- if rng.random()<.15: result*=rng.uniform(.75,1.25)
+ if rng.random()<.2:
+  sigma=rng.uniform(.5,1.)
+  result=gaussian_filter(result,(0,sigma,sigma)) if result.ndim == 3 else gaussian_filter(result,sigma)
  if rng.random()<.15:
-  mean=result.mean(); result=(result-mean)*rng.uniform(.75,1.25)+mean
+  scale=rng.uniform(.75,1.25,size=result.shape[0]) if result.ndim == 3 else rng.uniform(.75,1.25)
+  result*=scale[:,None,None] if result.ndim == 3 else scale
+ if rng.random()<.15:
+  mean=result.mean(axis=(-2,-1),keepdims=True) if result.ndim == 3 else result.mean()
+  result=(result-mean)*rng.uniform(.75,1.25)+mean
  if rng.random()<.1: result=-result
  if rng.random()<.3:
-  mean,std=result.mean(),result.std(); result=np.sign(result-mean)*np.abs(result-mean)**rng.uniform(.7,1.5); result=(result-result.mean())/(result.std()+1e-8)*std+mean
+  mean=result.mean(axis=(-2,-1),keepdims=True) if result.ndim == 3 else result.mean()
+  std=result.std(axis=(-2,-1),keepdims=True) if result.ndim == 3 else result.std()
+  result=np.sign(result-mean)*np.abs(result-mean)**rng.uniform(.7,1.5)
+  result=(result-result.mean(axis=(-2,-1),keepdims=True) if result.ndim == 3 else result-result.mean())/(result.std(axis=(-2,-1),keepdims=True)+1e-8 if result.ndim == 3 else result.std()+1e-8)*std+mean
  return result.astype(np.float32)
 
 def simulate_low_resolution(image: np.ndarray,scale: float) -> np.ndarray:
  if not .5<=scale<=1: raise ValueError('low-resolution scale must be in [0.5,1]')
+ if image.ndim == 3:
+  low=zoom(image,(1,scale,scale),order=1)
+  restored=zoom(low,(1,image.shape[1]/low.shape[1],image.shape[2]/low.shape[2]),order=1)
+  output=np.zeros_like(image,dtype=np.float32)
+  h,w=min(image.shape[1],restored.shape[1]),min(image.shape[2],restored.shape[2])
+  output[:,:h,:w]=restored[:,:h,:w]
+  return output
  low=zoom(image,scale,order=1); restored=zoom(low,(image.shape[0]/low.shape[0],image.shape[1]/low.shape[1]),order=1); output=np.zeros_like(image,dtype=np.float32); h,w=min(image.shape[0],restored.shape[0]),min(image.shape[1],restored.shape[1]); output[:h,:w]=restored[:h,:w]; return output
 
 def rotation_for_patch_size(patch_size: tuple[int, int]) -> tuple[float, float]:
@@ -75,7 +107,14 @@ def rotation_for_patch_size(patch_size: tuple[int, int]) -> tuple[float, float]:
 def apply_official_2d_augmentation(image: np.ndarray,label: np.ndarray,rng: np.random.Generator,patch_size: tuple[int,int]=(512,512)) -> tuple[np.ndarray,np.ndarray]:
  if rng.random()<.2: image,label=rotate_pair(image,label,np.degrees(rng.uniform(-np.pi,np.pi)))
  if rng.random()<.2: image,label=scale_pair(image,label,rng.uniform(.7,1.4),patch_size)
- else: image,label=crop_or_pad(image,label,(image.shape[0]//2,image.shape[1]//2),patch_size)
+ else:
+  if image.ndim == 2:
+   image,label=crop_or_pad(image,label,(image.shape[0]//2,image.shape[1]//2),patch_size)
+  else:
+   center=(image.shape[1]//2,image.shape[2]//2)
+   channel_patches=[crop_or_pad(channel,label,center,patch_size) for channel in image]
+   image=np.stack([channel_patch[0] for channel_patch in channel_patches])
+   label=channel_patches[0][1]
  axes=tuple(axis for axis in (0,1) if rng.random()<.5)
  if axes: image,label=mirror_pair(image,label,axes)
  image=intensity_augment(image,rng)
@@ -91,9 +130,21 @@ def apply_official_2d_batchgeneratorsv2(
     seed: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply the nnU-Net v2 2D training transform pipeline via batchgeneratorsv2."""
-    if image.ndim != 2 or label.ndim != 2 or image.shape != label.shape:
-        raise ValueError("image and label must be equal-shaped 2D arrays")
-    data = torch.as_tensor(np.ascontiguousarray(image[None]).copy(), dtype=torch.float32)
+    if label.ndim != 2 or image.ndim not in (2, 3) or image.shape[-2:] != label.shape:
+        raise ValueError("image and label must have shapes (H, W) or (C, H, W) and (H, W)")
+    single_channel = image.ndim == 2
+    channel_image = image[None] if single_channel else image
+    channel_count = channel_image.shape[0]
+    if use_mask_for_norm is not None:
+        use_mask_for_norm = tuple(use_mask_for_norm)
+        if len(use_mask_for_norm) == 1:
+            use_mask_for_norm *= channel_count
+        elif len(use_mask_for_norm) != channel_count:
+            raise ValueError(
+                "use_mask_for_norm must contain one value per input channel: "
+                f"expected {channel_count}, got {len(use_mask_for_norm)}"
+            )
+    data = torch.as_tensor(np.ascontiguousarray(channel_image).copy(), dtype=torch.float32)
     segmentation = torch.as_tensor(np.ascontiguousarray(label[None]).copy())
     rotation = rotation_for_patch_size(patch_size)
     transforms = ComposeTransforms([
@@ -191,7 +242,8 @@ def apply_official_2d_batchgeneratorsv2(
         np.random.seed(seed)
         torch.manual_seed(seed)
     result = transforms(image=data, segmentation=segmentation)
+    result_image = result["image"].detach().cpu().numpy()
     return (
-        result["image"].detach().cpu().numpy()[0],
+        result_image[0] if single_channel else result_image,
         result["segmentation"].detach().cpu().numpy()[0],
     )

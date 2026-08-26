@@ -11,7 +11,12 @@ from typing import Any
 import torch
 
 from standalone_nnunet2d import alignment_evidence as alignment_evidence_module
-from standalone_nnunet2d.data.dataset import load_fold_cases, validate_raw_root
+from standalone_nnunet2d.data.dataset import (
+    _geometry_mismatch_reason,
+    load_fold_cases,
+    read_case_images,
+    validate_raw_root,
+)
 from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.engine.predictor import predict_volume, save_and_validate_prediction
 from standalone_nnunet2d.metrics.segmentation_metrics import (
@@ -110,10 +115,19 @@ def validate_fold(
     failed_cases: list[dict[str, str]] = []
     for case_id in case_ids:
         try:
-            image_path, label_path = _case_paths(root, case_id)
-            image = read_nifti(image_path)
+            _, label_path = _case_paths(root, case_id)
+            images = read_case_images(root, case_id)
             label = read_nifti(label_path)
-            prediction = predict_volume(model, image, device)
+            for channel_index, image in enumerate(images):
+                reason = _geometry_mismatch_reason(label, image)
+                if reason is not None:
+                    raise ValueError(
+                        f"case {case_id} channel {channel_index} geometry "
+                        f"mismatch against label: {reason}"
+                    )
+            image = images[0]
+            prediction_input = images if len(images) > 1 else image
+            prediction = predict_volume(model, prediction_input, device)
             prediction_path = prediction_root / f"{case_id}.nii.gz"
             save_and_validate_prediction(prediction_path, prediction, image)
             records.append(case_metric_record(case_id, prediction, label.array))

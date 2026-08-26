@@ -20,6 +20,59 @@ from standalone_nnunet2d.data.sampling import central_slice_index, select_axial_
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SPLITS_PATH = PROJECT_ROOT / "reference" / "splits_final.json"
 SplitName = Literal["train", "val"]
+ChannelSpec = tuple[int, str]
+
+
+def resolve_channel_specs(raw_root: Path) -> tuple[ChannelSpec, ...]:
+    """Resolve the declared raw-data channels, with a legacy C=1 fallback."""
+    dataset_path = raw_root.resolve() / "dataset.json"
+    if not dataset_path.is_file():
+        return ((0, "legacy_single_channel"),)
+    with dataset_path.open(encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    if "channel_names" not in metadata:
+        return ((0, "legacy_single_channel"),)
+    channel_names = metadata["channel_names"]
+    if not isinstance(channel_names, dict) or not channel_names:
+        raise ValueError("dataset.json channel_names must be a non-empty object")
+    try:
+        channel_indices = [int(key) for key in channel_names]
+    except (TypeError, ValueError) as error:
+        raise ValueError("dataset.json channel_names keys must be numeric") from error
+    expected_indices = list(range(len(channel_indices)))
+    if sorted(channel_indices) != expected_indices:
+        raise ValueError(
+            "dataset.json channel_names keys must be exactly consecutive "
+            f"0..{len(channel_indices) - 1}; expected {expected_indices}, "
+            f"found {sorted(channel_indices)}"
+        )
+    if not all(isinstance(name, str) and name for name in channel_names.values()):
+        raise ValueError("dataset.json channel_names values must be non-empty strings")
+    names_by_index = {int(key): name for key, name in channel_names.items()}
+    return tuple((index, names_by_index[index]) for index in expected_indices)
+
+
+def resolve_input_channels(raw_root: Path) -> int:
+    """Return the number of declared input channels for one raw dataset."""
+    return len(resolve_channel_specs(raw_root))
+
+
+def _channel_path(raw_root: Path, case_id: str, channel_index: int) -> Path:
+    return raw_root.resolve() / "imagesTr" / f"{case_id}_{channel_index:04d}.nii.gz"
+
+
+def read_case_images(raw_root: Path, case_id: str) -> tuple[NiftiVolume, ...]:
+    """Read every declared modality for one case in declaration order."""
+    images: list[NiftiVolume] = []
+    for channel_index, channel_name in resolve_channel_specs(raw_root):
+        path = _channel_path(raw_root, case_id, channel_index)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"case {case_id} channel {channel_index} ({channel_name}) is missing: "
+                f"expected declared channel file {path}"
+            )
+        images.append(read_nifti(path))
+    return tuple(images)
 
 
 def load_fold_cases(fold: int, split: SplitName) -> tuple[str, ...]:
@@ -56,6 +109,18 @@ def _same_geometry(image: NiftiVolume, label: NiftiVolume) -> bool:
     )
 
 
+def _geometry_mismatch_reason(expected: NiftiVolume, actual: NiftiVolume) -> str | None:
+    if expected.array.shape != actual.array.shape:
+        return f"shape expected {expected.array.shape}, got {actual.array.shape}"
+    if not np.allclose(expected.spacing_xyz, actual.spacing_xyz, rtol=0.0, atol=1e-6):
+        return f"spacing expected {expected.spacing_xyz}, got {actual.spacing_xyz}"
+    if not np.allclose(expected.origin_xyz, actual.origin_xyz, rtol=0.0, atol=1e-6):
+        return f"origin expected {expected.origin_xyz}, got {actual.origin_xyz}"
+    if not np.allclose(expected.direction, actual.direction, rtol=0.0, atol=1e-6):
+        return "direction does not match the reference geometry"
+    return None
+
+
 class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
     """One deterministic axial slice per requested case, loaded only on indexing."""
 
@@ -72,6 +137,8 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         augmentation_config: AugmentationConfig | None = None,
     ) -> None:
         self.raw_root = validate_raw_root(raw_root)
+        self.channel_specs = resolve_channel_specs(self.raw_root)
+        self.input_channels = len(self.channel_specs)
         allowed_case_ids = load_fold_cases(fold, split)
         self.case_ids = case_ids if case_ids is not None else allowed_case_ids
         if not self.case_ids:
@@ -95,28 +162,70 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         """Read and process one image/label pair without retaining a cache."""
         if case_id not in self.case_ids:
             raise ValueError(f"case {case_id!r} is not available in this dataset instance")
-        image = read_nifti(self.raw_root / "imagesTr" / f"{case_id}_0000.nii.gz")
         label = read_nifti(self.raw_root / "labelsTr" / f"{case_id}.nii.gz")
-        if not _same_geometry(image, label):
-            raise ValueError(f"image and label geometry mismatch for case {case_id}")
-        processed_image = resample_inplane(image, self.target_spacing_xy, is_segmentation=False)
+        images = read_case_images(self.raw_root, case_id)
         processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
-        if processed_image.array.shape != processed_label.array.shape:
-            raise ValueError(f"resampling produced mismatched shapes for case {case_id}")
-        return z_score_normalize(processed_image.array), processed_label.array
+        processed_images: list[np.ndarray] = []
+        for channel_index, channel_name in self.channel_specs:
+            image = images[channel_index]
+            reason = _geometry_mismatch_reason(label, image)
+            if reason is not None:
+                raise ValueError(
+                    f"case {case_id} channel {channel_index} ({channel_name}) geometry "
+                    f"mismatch against label: {reason}"
+                )
+            processed_image = resample_inplane(image, self.target_spacing_xy, is_segmentation=False)
+            if processed_image.array.shape != processed_label.array.shape:
+                raise ValueError(
+                    f"case {case_id} channel {channel_index} ({channel_name}) "
+                    "resampled shape mismatch against label: "
+                    f"image {processed_image.array.shape}, label {processed_label.array.shape}"
+                )
+            processed_images.append(z_score_normalize(processed_image.array))
+        return np.stack(processed_images, axis=0), processed_label.array
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         case_id = self.case_ids[index]
         image, label = self.load_case(case_id)
         slice_index = (
-            central_slice_index(image.shape[0])
+            central_slice_index(image.shape[1])
             if self.foreground_probability == 0.0
             else select_slice_index(label, self.rng, foreground_probability=self.foreground_probability)
         )
-        image_slice, label_slice = augment_slice(
-            select_axial_slice(image, slice_index),
-            select_axial_slice(label, slice_index),
-            self.rng,
-            self.augmentation_config,
-        )
-        return torch.from_numpy(image_slice).unsqueeze(0).float(), torch.from_numpy(label_slice).long()
+        image_slice = image[:, slice_index]
+        label_slice = label[slice_index]
+        if self.input_channels == 1:
+            image_slice, label_slice = augment_slice(
+                image_slice[0],
+                label_slice,
+                self.rng,
+                self.augmentation_config,
+            )
+            image_slice = image_slice[None]
+        else:
+            image_slice, label_slice = _augment_multichannel_slice(
+                image_slice,
+                label_slice,
+                self.rng,
+                self.augmentation_config,
+            )
+        return torch.from_numpy(image_slice).float(), torch.from_numpy(label_slice).long()
+
+
+def _augment_multichannel_slice(
+    image: np.ndarray,
+    label: np.ndarray,
+    rng: np.random.Generator,
+    config: AugmentationConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    if image.ndim != 3 or label.ndim != 2 or image.shape[1:] != label.shape:
+        raise ValueError("multichannel image and label must have shapes (C, H, W) and (H, W)")
+    augmented_image, augmented_label = image.copy(), label.copy()
+    if rng.random() < config.horizontal_flip_probability:
+        augmented_image, augmented_label = augmented_image[:, :, ::-1], augmented_label[:, ::-1]
+    if rng.random() < config.vertical_flip_probability:
+        augmented_image, augmented_label = augmented_image[:, ::-1, :], augmented_label[::-1, :]
+    low, high = config.intensity_scale_range
+    scales = rng.uniform(low, high, size=augmented_image.shape[0]).astype(np.float32)
+    augmented_image = augmented_image * scales[:, None, None]
+    return np.ascontiguousarray(augmented_image), np.ascontiguousarray(augmented_label)

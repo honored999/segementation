@@ -32,6 +32,48 @@ def test_formal_training_persists_resolved_pending_configuration(tmp_path) -> No
  assert resolved['policies']==config['policies']
 
 
+def test_multichannel_formal_config_is_explicitly_experimental_and_not_aligned() -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+ config=formal_train.build_formal_config(fold=0,epochs=2,schedule=schedule,input_channels=3)
+ assert config['input_channels']==3
+ assert config['experimental_extension']=='multichannel'
+ assert config['run_state']=='official_alignment_pending'
+
+
+@pytest.mark.parametrize('declared,channels,expected', [((True,),3,(True,True,True)),((False,False),2,(False,False))])
+def test_formal_training_expands_single_plan_norm_flag_only_for_dataset_channels(declared,channels,expected) -> None:
+ assert formal_train.resolve_use_mask_for_channels(declared,channels)==expected
+
+
+def test_formal_training_rejects_plan_norm_flags_with_wrong_channel_count() -> None:
+ with pytest.raises(ValueError, match='use_mask_for_norm.*3'):
+  formal_train.resolve_use_mask_for_channels((True,False),3)
+
+
+def test_formal_training_resolves_input_channels_before_pending_config(
+    tmp_path, capsys
+) -> None:
+ raw_root=tmp_path/'raw'
+ raw_root.mkdir()
+ (raw_root/'dataset.json').write_text(json.dumps({'channel_names': {'0':'DWI','1':'ADC','2':'FLAIR'}}),encoding='utf-8')
+ result=formal_train.main(['--raw-root',str(raw_root),'--output-root',str(tmp_path/'output'),'--plans',str(formal_train.Path(__file__).resolve().parents[1]/'reference'/'nnUNetPlans.json'),'--device','cpu'])
+ assert result==0
+ payload=json.loads(capsys.readouterr().out)
+ assert payload['config']['input_channels']==3
+ assert payload['config']['experimental_extension']=='multichannel'
+
+
+def test_formal_training_rejects_multichannel_alignment_evidence_before_pending_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+ raw_root=tmp_path/'raw'
+ raw_root.mkdir()
+ (raw_root/'dataset.json').write_text(json.dumps({'channel_names': {'0':'DWI','1':'ADC'}}),encoding='utf-8')
+ monkeypatch.setattr(formal_train, 'resolve_alignment_state', lambda *_: ('official_aligned', {'fixture':'evidence'}))
+ with pytest.raises(ValueError, match='multichannel.*official alignment evidence'):
+  formal_train.main(['--raw-root',str(raw_root),'--output-root',str(tmp_path/'output'),'--plans',str(formal_train.Path(__file__).resolve().parents[1]/'reference'/'nnUNetPlans.json'),'--device','cpu'])
+
+
 def test_formal_trainer_deterministically_continues_after_checkpoint() -> None:
  torch.manual_seed(123)
  model=nn.Sequential(nn.Conv2d(1,2,1),nn.Dropout2d(p=.5))

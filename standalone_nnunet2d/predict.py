@@ -13,8 +13,7 @@ import numpy as np
 import torch
 
 from standalone_nnunet2d.config import load_model_config
-from standalone_nnunet2d.data.dataset import load_fold_cases
-from standalone_nnunet2d.data.nifti_io import read_nifti
+from standalone_nnunet2d.data.dataset import load_fold_cases, read_case_images, resolve_channel_specs
 from standalone_nnunet2d.alignment_evidence import (
     OFFICIAL_ALIGNED,
     validate_checkpoint_alignment_metadata,
@@ -28,6 +27,7 @@ from standalone_nnunet2d.engine.predictor import (
 )
 from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
+from standalone_nnunet2d.training.formal_checkpoint import checkpoint_input_channels
 
 
 def _json_safe(value: Any) -> Any:
@@ -75,9 +75,13 @@ def _read_checkpoint(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return payload["model_state_dict"], dict(metadata)
 
 
-def _load_model(path: Path, device: torch.device) -> tuple[PlainConvUNet2D, dict[str, Any]]:
+def _load_model(
+    path: Path, device: torch.device, *, input_channels: int = 1
+) -> tuple[PlainConvUNet2D, dict[str, Any]]:
     state_dict, metadata = _read_checkpoint(path)
-    model = PlainConvUNet2D(load_model_config(), deep_supervision=False)
+    model = PlainConvUNet2D(
+        load_model_config(input_channels=input_channels), deep_supervision=False
+    )
     model.load_state_dict(state_dict)
     return model.to(device), metadata
 
@@ -112,18 +116,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     if run_state == DEFAULT_RUN_STATE and not arguments.allow_pending:
         raise ValueError("pending checkpoint requires explicit --allow-pending")
 
+    dataset_channels = len(resolve_channel_specs(arguments.raw_root))
+    checkpoint_channels = checkpoint_input_channels(checkpoint_metadata)
+    if checkpoint_channels != dataset_channels:
+        raise ValueError(
+            "checkpoint input_channels="
+            f"{checkpoint_channels} does not match dataset channels={dataset_channels}"
+        )
+
     device = torch.device(arguments.device)
-    model, loaded_metadata = _load_model(arguments.checkpoint, device)
+    model, loaded_metadata = _load_model(
+        arguments.checkpoint, device, input_channels=dataset_channels
+    )
     case_ids = _resolve_case_ids(arguments.raw_root, arguments.case_id, arguments.fold)
     prediction_root = arguments.output_root.resolve() / "predictions"
     prediction_root.mkdir(parents=True, exist_ok=True)
     case_records: list[dict[str, Any]] = []
     for case_id in case_ids:
-        source_path = _source_path(arguments.raw_root, case_id)
-        source = read_nifti(source_path)
+        sources = read_case_images(arguments.raw_root, case_id)
+        source = sources[0]
+        source_paths = [
+            str(arguments.raw_root.resolve() / "imagesTr" / f"{case_id}_{index:04d}.nii.gz")
+            for index, _ in resolve_channel_specs(arguments.raw_root)
+        ]
         prediction = predict_volume(
             model,
-            source,
+            sources if len(sources) > 1 else source,
             device,
             mirror_axes=DEFAULT_MIRROR_AXES,
             patch_size=DEFAULT_PATCH_SIZE,
@@ -135,7 +153,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         case_records.append(
             {
                 "case_id": case_id,
-                "source_path": str(source_path),
+                "source_path": source_paths[0],
+                "source_paths": source_paths,
                 "prediction_path": str(prediction_path),
                 "nifti_validation": validation,
             }

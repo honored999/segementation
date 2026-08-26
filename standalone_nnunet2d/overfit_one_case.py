@@ -24,12 +24,13 @@ def main() -> int:
     image, label = dataset.load_case(a.case_id)
     nonempty_z=np.where(label.sum(axis=(1,2))>0)[0]
     if len(nonempty_z)==0: p.error("overfit case must contain at least one lesion slice")
-    batches=[(torch.from_numpy(image[z:z+1]).unsqueeze(1).float(), torch.from_numpy(label[z:z+1]).long()) for z in nonempty_z]
+    prediction_reference=NiftiVolume(image[0],(0.4892368018627167,0.4892368018627167,1.0),(0,0,0))
+    batches=[(torch.from_numpy(image[:, z]).unsqueeze(0).float(), torch.from_numpy(label[z:z+1]).long()) for z in nonempty_z]
     model=PlainConvUNet2D(load_model_config()).to(device); optimizer=torch.optim.SGD(model.parameters(),lr=0.01,momentum=0.9,weight_decay=0.0); loss=DiceCrossEntropyLoss()
     for step in range(1,a.iterations+1):
         result=train_step(model,batches[(step-1) % len(batches)],loss,optimizer,device)
         if step % 20 == 0 or step == 1:
-            prediction=predict_volume(model,NiftiVolume(image,(0.4892368018627167,0.4892368018627167,1.0),(0,0,0)),device)
+            prediction=predict_volume(model,prediction_reference,device)
             print({"smoke_run_only":True,"case_id":a.case_id,"training_z_indices":nonempty_z.astype(int).tolist(),"step":step,"loss":result.loss,**volume_metrics(prediction,label.astype(np.uint8))})
     reference=read_nifti(a.raw_root / "labelsTr" / f"{a.case_id}.nii.gz")
     image_reference=read_nifti(a.raw_root / "imagesTr" / f"{a.case_id}_0000.nii.gz")

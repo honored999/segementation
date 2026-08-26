@@ -37,7 +37,6 @@ class FormalPatchDataset(StrokeSliceDataset):
         if not 0.0 <= oversample_foreground_percent <= 1.0:
             raise ValueError("oversample_foreground_percent must be in [0, 1]")
         self.patch_size = patch_size
-        self.use_mask_for_norm = tuple(use_mask_for_norm)
         self.oversample_foreground_percent = oversample_foreground_percent
         self.patch_rng = rng or np.random.default_rng()
         self.augment = augment
@@ -45,6 +44,14 @@ class FormalPatchDataset(StrokeSliceDataset):
             case_ids = (patch_request.case_id,)
         self.patch_request = patch_request
         super().__init__(raw_root, fold=fold, split=split, case_ids=case_ids, rng=self.patch_rng, foreground_probability=0.0)
+        self.use_mask_for_norm = tuple(use_mask_for_norm)
+        if len(self.use_mask_for_norm) == 1:
+            self.use_mask_for_norm *= self.input_channels
+        elif len(self.use_mask_for_norm) != self.input_channels:
+            raise ValueError(
+                "use_mask_for_norm must contain one value per input channel: "
+                f"expected {self.input_channels}, got {len(self.use_mask_for_norm)}"
+            )
         if self.patch_request is not None and self.patch_request.case_id not in self.case_ids:
             raise ValueError(f"patch request case {self.patch_request.case_id!r} is not in this dataset")
 
@@ -61,30 +68,50 @@ class FormalPatchDataset(StrokeSliceDataset):
                 raise ValueError("patch request z_index is outside the loaded label volume")
             force_foreground = self.patch_request.force_foreground
             center = self.patch_request.center_yx
-        image_slice, label_slice = image[z_index], label[z_index]
+        image_slice, label_slice = image[:, z_index], label[z_index]
         if center is None:
             center = sample_patch_center(
                 label_slice,
                 self.patch_rng,
                 oversample_foreground_percent=1.0 if force_foreground else 0.0,
             )
-        image_patch, label_patch = crop_or_pad(image_slice, label_slice, center, self.patch_size)
+        image_patch, label_patch = _crop_or_pad_channels(image_slice, label_slice, center, self.patch_size)
         if self.augment:
             seed = int(self.patch_rng.integers(0, 2**32 - 1))
-            image_patch, label_patch = apply_official_2d_batchgeneratorsv2(
-                image_patch,
+            image_for_augmentation = image_patch[0] if self.input_channels == 1 else image_patch
+            image_for_augmentation, label_patch = apply_official_2d_batchgeneratorsv2(
+                image_for_augmentation,
                 label_patch,
                 patch_size=self.patch_size,
                 use_mask_for_norm=self.use_mask_for_norm,
                 seed=seed,
             )
+            image_patch = (
+                image_for_augmentation[None]
+                if image_for_augmentation.ndim == 2
+                else image_for_augmentation
+            )
         label_patch = np.where(label_patch < 0, 0, label_patch).astype(np.int64, copy=False)
         if not np.isin(label_patch, (0, 1)).all():
             raise ValueError("formal patch labels must contain only 0 and 1")
-        return torch.from_numpy(image_patch).unsqueeze(0).float(), torch.from_numpy(label_patch).long()
+        return torch.from_numpy(image_patch).float(), torch.from_numpy(label_patch).long()
 
     def _select_z_index(self, label: np.ndarray) -> tuple[int, bool]:
         foreground_z = np.flatnonzero(label.sum(axis=(1, 2)) > 0)
         force_foreground = len(foreground_z) > 0 and self.patch_rng.random() < self.oversample_foreground_percent
         z_index = int(self.patch_rng.choice(foreground_z)) if force_foreground else int(self.patch_rng.integers(label.shape[0]))
         return z_index, force_foreground
+
+
+def _crop_or_pad_channels(
+    image: np.ndarray,
+    label: np.ndarray,
+    center: tuple[int, int],
+    patch_size: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    if image.ndim != 3 or label.ndim != 2 or image.shape[1:] != label.shape:
+        raise ValueError("image and label must have shapes (C, H, W) and (H, W)")
+    first_patch, label_patch = crop_or_pad(image[0], label, center, patch_size)
+    image_patches = [first_patch]
+    image_patches.extend(crop_or_pad(channel, label, center, patch_size)[0] for channel in image[1:])
+    return np.stack(image_patches, axis=0), label_patch

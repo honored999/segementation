@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
@@ -41,6 +42,27 @@ def test_deep_supervision_returns_main_logits_then_descending_auxiliary_scales()
         outputs = model(image)
 
     assert isinstance(outputs, tuple)
+    assert [tuple(output.shape) for output in outputs] == [
+        (1, 2, 512, 512), (1, 2, 256, 256), (1, 2, 128, 128),
+        (1, 2, 64, 64), (1, 2, 32, 32), (1, 2, 16, 16), (1, 2, 8, 8),
+    ]
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("input_channels", [2, 3, 5])
+def test_plain_conv_unet_supports_declared_multichannel_inputs_and_deep_supervision(
+    input_channels: int,
+) -> None:
+    model = PlainConvUNet2D(
+        load_model_config(input_channels=input_channels), deep_supervision=True
+    ).eval()
+    image = torch.randn(1, input_channels, 512, 512)
+
+    outputs = model(image)
+
+    assert isinstance(outputs, tuple)
+    assert model.config.input_channels == input_channels
+    assert model.encoder_stages[0].blocks[0][0].in_channels == input_channels
     assert [tuple(output.shape) for output in outputs] == [
         (1, 2, 512, 512), (1, 2, 256, 256), (1, 2, 128, 128),
         (1, 2, 64, 64), (1, 2, 32, 32), (1, 2, 16, 16), (1, 2, 8, 8),
