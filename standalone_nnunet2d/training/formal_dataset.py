@@ -31,6 +31,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         rng: np.random.Generator | None = None,
         augment: bool = True,
         patch_request: PatchRequest | None = None,
+        symmetry_alignment: bool = False,
     ) -> None:
         if len(patch_size) != 2 or any(size <= 0 for size in patch_size):
             raise ValueError("patch_size must contain two positive values")
@@ -44,7 +45,15 @@ class FormalPatchDataset(StrokeSliceDataset):
         if patch_request is not None and case_ids is None:
             case_ids = (patch_request.case_id,)
         self.patch_request = patch_request
-        super().__init__(raw_root, fold=fold, split=split, case_ids=case_ids, rng=self.patch_rng, foreground_probability=0.0)
+        super().__init__(
+            raw_root,
+            fold=fold,
+            split=split,
+            case_ids=case_ids,
+            rng=self.patch_rng,
+            foreground_probability=0.0,
+            symmetry_alignment=symmetry_alignment,
+        )
         if self.patch_request is not None and self.patch_request.case_id not in self.case_ids:
             raise ValueError(f"patch request case {self.patch_request.case_id!r} is not in this dataset")
 

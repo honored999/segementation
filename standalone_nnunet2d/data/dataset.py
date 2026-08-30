@@ -15,6 +15,7 @@ from standalone_nnunet2d.data.augmentation import AugmentationConfig, augment_sl
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti
 from standalone_nnunet2d.data.preprocessing import resample_inplane, z_score_normalize
 from standalone_nnunet2d.data.sampling import central_slice_index, select_axial_slice, select_slice_index
+from standalone_nnunet2d.data.symmetry_alignment import align_case
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +71,7 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         rng: np.random.Generator | None = None,
         foreground_probability: float = 0.0,
         augmentation_config: AugmentationConfig | None = None,
+        symmetry_alignment: bool = False,
     ) -> None:
         self.raw_root = validate_raw_root(raw_root)
         allowed_case_ids = load_fold_cases(fold, split)
@@ -87,6 +89,7 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         self.rng = rng or np.random.default_rng()
         self.foreground_probability = foreground_probability
         self.augmentation_config = augmentation_config or AugmentationConfig()
+        self.symmetry_alignment = symmetry_alignment
 
     def __len__(self) -> int:
         return len(self.case_ids)
@@ -103,6 +106,8 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
         if processed_image.array.shape != processed_label.array.shape:
             raise ValueError(f"resampling produced mismatched shapes for case {case_id}")
+        if self.symmetry_alignment:
+            processed_image, processed_label, _ = align_case(processed_image, processed_label)
         return z_score_normalize(processed_image.array), processed_label.array
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
