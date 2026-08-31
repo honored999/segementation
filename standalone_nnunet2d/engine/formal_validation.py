@@ -17,6 +17,10 @@ from standalone_nnunet2d.data.dataset import (
     read_case_images,
     validate_raw_root,
 )
+from standalone_nnunet2d.data.inference_preprocessing import (
+    prepare_bilateral_asymmetry_case,
+    restore_bilateral_asymmetry_prediction,
+)
 from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.engine.predictor import predict_volume, save_and_validate_prediction
 from standalone_nnunet2d.metrics.segmentation_metrics import (
@@ -90,6 +94,7 @@ def validate_fold(
     device: torch.device,
     run_state: str = DEFAULT_RUN_STATE,
     alignment_evidence: dict[str, Any] | None = None,
+    bilateral_asymmetry_channel: bool = False,
 ) -> dict[str, Any]:
     """Validate every held-out case with source-space full-volume inference.
 
@@ -116,18 +121,29 @@ def validate_fold(
     for case_id in case_ids:
         try:
             _, label_path = _case_paths(root, case_id)
-            images = read_case_images(root, case_id)
             label = read_nifti(label_path)
-            for channel_index, image in enumerate(images):
+            if bilateral_asymmetry_channel:
+                prepared = prepare_bilateral_asymmetry_case(root, case_id)
+                image = prepared.source_image
                 reason = _geometry_mismatch_reason(label, image)
                 if reason is not None:
-                    raise ValueError(
-                        f"case {case_id} channel {channel_index} geometry "
-                        f"mismatch against label: {reason}"
-                    )
-            image = images[0]
-            prediction_input = images if len(images) > 1 else image
-            prediction = predict_volume(model, prediction_input, device)
+                    raise ValueError(f"case {case_id} channel 0 geometry mismatch against label: {reason}")
+                prediction = predict_volume(
+                    model, prepared.model_volumes, device, normalise_inputs=False
+                )
+                prediction = restore_bilateral_asymmetry_prediction(prepared, prediction)
+            else:
+                images = read_case_images(root, case_id)
+                for channel_index, image in enumerate(images):
+                    reason = _geometry_mismatch_reason(label, image)
+                    if reason is not None:
+                        raise ValueError(
+                            f"case {case_id} channel {channel_index} geometry "
+                            f"mismatch against label: {reason}"
+                        )
+                image = images[0]
+                prediction_input = images if len(images) > 1 else image
+                prediction = predict_volume(model, prediction_input, device)
             prediction_path = prediction_root / f"{case_id}.nii.gz"
             save_and_validate_prediction(prediction_path, prediction, image)
             records.append(case_metric_record(case_id, prediction, label.array))

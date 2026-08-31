@@ -15,6 +15,7 @@ from standalone_nnunet2d.data.augmentation import AugmentationConfig, augment_sl
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti
 from standalone_nnunet2d.data.preprocessing import resample_inplane, z_score_normalize
 from standalone_nnunet2d.data.sampling import central_slice_index, select_axial_slice, select_slice_index
+from standalone_nnunet2d.data.symmetry_alignment import align_case, build_bilateral_asymmetry_channels
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,9 +53,17 @@ def resolve_channel_specs(raw_root: Path) -> tuple[ChannelSpec, ...]:
     return tuple((index, names_by_index[index]) for index in expected_indices)
 
 
-def resolve_input_channels(raw_root: Path) -> int:
-    """Return the number of declared input channels for one raw dataset."""
-    return len(resolve_channel_specs(raw_root))
+def resolve_input_channels(raw_root: Path, *, bilateral_asymmetry_channel: bool = False) -> int:
+    """Return physical plus explicitly requested derived input channels."""
+    physical_input_channels = len(resolve_channel_specs(raw_root))
+    if bilateral_asymmetry_channel:
+        if physical_input_channels != 1:
+            raise ValueError(
+                "bilateral_asymmetry_channel requires exactly one physical DWI channel; "
+                f"found {physical_input_channels} declared channels"
+            )
+        return 2
+    return physical_input_channels
 
 
 def _channel_path(raw_root: Path, case_id: str, channel_index: int) -> Path:
@@ -135,10 +144,17 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         rng: np.random.Generator | None = None,
         foreground_probability: float = 0.0,
         augmentation_config: AugmentationConfig | None = None,
+        bilateral_asymmetry_channel: bool = False,
     ) -> None:
         self.raw_root = validate_raw_root(raw_root)
         self.channel_specs = resolve_channel_specs(self.raw_root)
-        self.input_channels = len(self.channel_specs)
+        self.physical_input_channels = len(self.channel_specs)
+        self.bilateral_asymmetry_channel = bilateral_asymmetry_channel
+        self.derived_input_channels = int(bilateral_asymmetry_channel)
+        self.input_channels = resolve_input_channels(
+            self.raw_root,
+            bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+        )
         allowed_case_ids = load_fold_cases(fold, split)
         self.case_ids = case_ids if case_ids is not None else allowed_case_ids
         if not self.case_ids:
@@ -164,6 +180,32 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
             raise ValueError(f"case {case_id!r} is not available in this dataset instance")
         label = read_nifti(self.raw_root / "labelsTr" / f"{case_id}.nii.gz")
         images = read_case_images(self.raw_root, case_id)
+        if self.bilateral_asymmetry_channel:
+            channel_index, channel_name = self.channel_specs[0]
+            image = images[0]
+            reason = _geometry_mismatch_reason(label, image)
+            if reason is not None:
+                raise ValueError(
+                    f"case {case_id} channel {channel_index} ({channel_name}) geometry "
+                    f"mismatch against label: {reason}"
+                )
+            processed_image = resample_inplane(image, self.target_spacing_xy, is_segmentation=False)
+            processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
+            if processed_image.array.shape != processed_label.array.shape:
+                raise ValueError(
+                    f"case {case_id} channel {channel_index} ({channel_name}) "
+                    "resampled shape mismatch against label: "
+                    f"image {processed_image.array.shape}, label {processed_label.array.shape}"
+                )
+            aligned_image, aligned_label, _ = align_case(processed_image, processed_label)
+            normalized_dwi = z_score_normalize(aligned_image.array)
+            normalized_volume = NiftiVolume(
+                normalized_dwi,
+                aligned_image.spacing_xyz,
+                aligned_image.origin_xyz,
+                aligned_image.direction,
+            )
+            return build_bilateral_asymmetry_channels(normalized_volume), aligned_label.array
         processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
         processed_images: list[np.ndarray] = []
         for channel_index, channel_name in self.channel_specs:

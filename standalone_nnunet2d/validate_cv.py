@@ -202,6 +202,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import torch
 
+    from standalone_nnunet2d.training.formal_checkpoint import checkpoint_bilateral_asymmetry_channel
+
+    bilateral_asymmetry_channel = checkpoint_bilateral_asymmetry_channel(metadata)
     model, _ = _load_model(arguments.checkpoint, torch.device(arguments.device))
     validate_fold(
         model,
@@ -211,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         device=torch.device(arguments.device),
         run_state=run_state,
         alignment_evidence=checkpoint_evidence,
+        bilateral_asymmetry_channel=bilateral_asymmetry_channel,
     )
     return 0
 

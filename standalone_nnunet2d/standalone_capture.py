@@ -13,8 +13,13 @@ import numpy as np
 import torch
 
 from standalone_nnunet2d.data.nifti_io import read_nifti
+from standalone_nnunet2d.data.inference_preprocessing import (
+    prepare_bilateral_asymmetry_volume,
+    restore_bilateral_asymmetry_prediction,
+)
 from standalone_nnunet2d.engine.predictor import predict_volume
 from standalone_nnunet2d.predict import _load_model
+from standalone_nnunet2d.training.formal_checkpoint import checkpoint_bilateral_asymmetry_channel
 from standalone_nnunet2d.tools.parity_report import RUN_STATE
 from standalone_nnunet2d.training.official_augmentation import (
     apply_official_2d_batchgeneratorsv2,
@@ -365,9 +370,25 @@ def capture_standalone_inference(
     torch_device = torch.device(device)
     model, checkpoint_metadata = _load_model(checkpoint, torch_device)
     inference_context = _inference_context_from_metadata(checkpoint_metadata, torch_device)
-    prediction = np.asarray(
-        predict_volume(model, raw_image, torch_device, slice_batch_size=slice_batch_size)
-    )
+    bilateral_asymmetry_channel = checkpoint_bilateral_asymmetry_channel(checkpoint_metadata)
+    if bilateral_asymmetry_channel:
+        prepared = prepare_bilateral_asymmetry_volume(raw_image)
+        prediction = restore_bilateral_asymmetry_prediction(
+            prepared,
+            np.asarray(
+                predict_volume(
+                    model,
+                    prepared.model_volumes,
+                    torch_device,
+                    slice_batch_size=slice_batch_size,
+                    normalise_inputs=False,
+                )
+            ),
+        )
+    else:
+        prediction = np.asarray(
+            predict_volume(model, raw_image, torch_device, slice_batch_size=slice_batch_size)
+        )
     if prediction.shape != source_image.shape:
         raise ValueError(
             "prediction shape must match raw image shape: "
@@ -401,6 +422,7 @@ def capture_standalone_inference(
             "predictor": "standalone_nnunet2d.engine.predictor.predict_volume",
             "device": str(torch_device),
             "slice_batch_size": slice_batch_size,
+            "bilateral_asymmetry_channel": bilateral_asymmetry_channel,
         },
         "sampling_policy": {
             "seed": seed,

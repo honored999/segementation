@@ -108,6 +108,8 @@ def _normalise_patch_size(patch_size: tuple[int, int] | list[int]) -> tuple[int,
 
 def _normalise_volume_inputs(
     image: NiftiVolume | Iterable[NiftiVolume],
+    *,
+    normalise_inputs: bool = True,
 ) -> tuple[NiftiVolume, np.ndarray]:
     volumes = (image,) if isinstance(image, NiftiVolume) else tuple(image)
     if not volumes:
@@ -126,7 +128,12 @@ def _normalise_volume_inputs(
             reason = None
         if reason is not None:
             raise ValueError(f"channel {channel_index} geometry mismatch against channel 0: {reason}")
-    normalized = np.stack([z_score_normalize(volume.array) for volume in volumes], axis=0)
+    normalized = np.stack(
+        [z_score_normalize(volume.array) for volume in volumes]
+        if normalise_inputs
+        else [np.asarray(volume.array, dtype=np.float32) for volume in volumes],
+        axis=0,
+    )
     return reference, normalized
 
 
@@ -260,11 +267,12 @@ def predict_volume(
     patch_size: tuple[int, int] = DEFAULT_PATCH_SIZE,
     tile_step_size: float = DEFAULT_TILE_STEP_SIZE,
     slice_batch_size: int = 1,
+    normalise_inputs: bool = True,
 ) -> np.ndarray:
     """Return one binary uint8 prediction per source-space ``(z, y, x)`` slice."""
     if slice_batch_size <= 0:
         raise ValueError(f"slice_batch_size must be positive, got {slice_batch_size}")
-    reference, normalized = _normalise_volume_inputs(image)
+    reference, normalized = _normalise_volume_inputs(image, normalise_inputs=normalise_inputs)
     _, slice_count, height, width = normalized.shape
     total_logits: Tensor | None = None
     for z_start in range(0, slice_count, slice_batch_size):

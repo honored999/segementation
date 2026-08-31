@@ -97,6 +97,22 @@ def checkpoint_input_channels(metadata: Mapping[str, Any]) -> int:
     return value
 
 
+def checkpoint_bilateral_asymmetry_channel(metadata: Mapping[str, Any]) -> bool:
+    """Resolve and validate the explicit bilateral-derived input provenance."""
+    config = metadata.get("resolved_config", metadata.get("config", {}))
+    if not isinstance(config, Mapping) or not config.get("bilateral_asymmetry_channel", False):
+        return False
+    physical_channels = config.get("physical_input_channels")
+    effective_channels = config.get("effective_model_input_channels")
+    checkpoint_channels = checkpoint_input_channels(metadata)
+    if physical_channels != 1 or effective_channels != 2 or checkpoint_channels != 2:
+        raise ValueError(
+            "bilateral_asymmetry_channel checkpoint must declare physical_input_channels=1, "
+            "effective_model_input_channels=2, and input_channels=2"
+        )
+    return True
+
+
 def capture_rng_state() -> dict[str, Any]:
     return {
         "python": random.getstate(),

@@ -31,6 +31,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         rng: np.random.Generator | None = None,
         augment: bool = True,
         patch_request: PatchRequest | None = None,
+        bilateral_asymmetry_channel: bool = False,
     ) -> None:
         if len(patch_size) != 2 or any(size <= 0 for size in patch_size):
             raise ValueError("patch_size must contain two positive values")
@@ -43,7 +44,15 @@ class FormalPatchDataset(StrokeSliceDataset):
         if patch_request is not None and case_ids is None:
             case_ids = (patch_request.case_id,)
         self.patch_request = patch_request
-        super().__init__(raw_root, fold=fold, split=split, case_ids=case_ids, rng=self.patch_rng, foreground_probability=0.0)
+        super().__init__(
+            raw_root,
+            fold=fold,
+            split=split,
+            case_ids=case_ids,
+            rng=self.patch_rng,
+            foreground_probability=0.0,
+            bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+        )
         self.use_mask_for_norm = tuple(use_mask_for_norm)
         if len(self.use_mask_for_norm) == 1:
             self.use_mask_for_norm *= self.input_channels
