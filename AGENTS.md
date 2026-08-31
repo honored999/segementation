@@ -53,6 +53,55 @@ Current primary task:
 - GT masks must never be used to derive inference-time ROI locations in formal coarse-to-fine experiments;
 - Stage 2 coarse-to-fine training must use out-of-fold Stage 1 predictions when prediction-guided ROIs are required.
 
+## Project-specific test and temporary-file policy
+
+The standalone 2D segmentation model may produce full checkpoints of roughly
+hundreds of MiB. Avoid generating full model checkpoints in tests unless the
+test semantics genuinely require real model weights.
+
+For `standalone_nnunet2d` tests:
+
+* metadata, alignment-status, provenance, tamper-detection, rejection, CLI
+  validation, and other pre-model-load tests should use the smallest synthetic
+  checkpoint that satisfies the reader/format contract;
+* if a test is specifically intended to reject a checkpoint before model
+  loading, use a model-loading sentinel when practical so the test also verifies
+  that validation occurs before `_load_model`;
+* preserve full `PlainConvUNet2D` checkpoints for tests that genuinely exercise
+  real model loading, full inference, state-dict compatibility, or official
+  checkpoint conversion;
+* do not weaken real integration coverage merely to reduce disk usage.
+
+When running pytest from Codex Desktop on Windows:
+
+* do not use the system drive for large persistent pytest temporary artifacts
+  when a suitable non-system drive is available;
+* prefer a fixed disposable pytest base-temp directory on the non-system drive
+  rather than creating a new uniquely named persistent base-temp directory for
+  each review, preflight, or rerun;
+* for this workstation, prefer a project-specific location such as
+  `D:\codex-pytest-temp\stroke-lesion-segmentation` when that drive is available;
+* this Windows-local temporary-path rule does not apply to Linux training
+  servers or environments where that path does not exist;
+* if the configured non-system temporary root is unavailable, do not silently
+  redirect a known large checkpoint-producing test suite to a persistent
+  directory on `C:`; use the environment's ordinary temporary mechanism or
+  report the constraint when material.
+
+Do not use different persistent pytest base-temp names such as:
+
+* `standalone-full`;
+* `standalone-full-final`;
+* `inference-related`;
+* `inference-related-final`;
+
+solely to distinguish repeated validation runs. A disposable base-temp directory
+should normally be reused and may be cleared between runs.
+
+Large test-generated `.pt` and `.pth` files are temporary artifacts, not
+experiment results. They must not be preserved merely for reviewer, preflight,
+or rerun bookkeeping.
+
 
 # Repository scope
 
