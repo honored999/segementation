@@ -13,13 +13,14 @@ import numpy as np
 import torch
 
 from standalone_nnunet2d.data.nifti_io import read_nifti
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_volume,
     restore_bilateral_asymmetry_prediction,
 )
 from standalone_nnunet2d.engine.predictor import predict_volume
 from standalone_nnunet2d.predict import _load_model
-from standalone_nnunet2d.training.formal_checkpoint import checkpoint_bilateral_asymmetry_channel
+from standalone_nnunet2d.training.formal_checkpoint import checkpoint_input_mode
 from standalone_nnunet2d.tools.parity_report import RUN_STATE
 from standalone_nnunet2d.training.official_augmentation import (
     apply_official_2d_batchgeneratorsv2,
@@ -370,7 +371,8 @@ def capture_standalone_inference(
     torch_device = torch.device(device)
     model, checkpoint_metadata = _load_model(checkpoint, torch_device)
     inference_context = _inference_context_from_metadata(checkpoint_metadata, torch_device)
-    bilateral_asymmetry_channel = checkpoint_bilateral_asymmetry_channel(checkpoint_metadata)
+    input_mode = checkpoint_input_mode(checkpoint_metadata)
+    bilateral_asymmetry_channel = input_mode is InputMode.DWI_BILATERAL
     if bilateral_asymmetry_channel:
         prepared = prepare_bilateral_asymmetry_volume(raw_image)
         prediction = restore_bilateral_asymmetry_prediction(

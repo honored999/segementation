@@ -8,10 +8,20 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 
-from standalone_nnunet2d.data.dataset import read_case_images, resolve_channel_specs
+from standalone_nnunet2d.data.dataset import (
+    build_input_channels,
+    prepare_dwi_adc_bilateral_images,
+    read_case_images,
+    resolve_channel_specs,
+)
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, from_sitk, to_sitk
 from standalone_nnunet2d.data.preprocessing import resample_inplane, z_score_normalize
-from standalone_nnunet2d.data.symmetry_alignment import AlignmentEstimate, align_case_result, build_bilateral_asymmetry_channels
+from standalone_nnunet2d.data.symmetry_alignment import (
+    AlignmentEstimate,
+    align_case_result,
+    build_bilateral_asymmetry_channels,
+)
 
 
 DEFAULT_TARGET_SPACING_XY = (0.4892368018627167, 0.4892368018627167)
@@ -29,6 +39,20 @@ class BilateralAsymmetryInferenceCase:
     model_volumes: tuple[NiftiVolume, NiftiVolume]
     physical_input_channels: int = 1
     effective_input_channels: int = 2
+
+
+@dataclass(frozen=True)
+class DwiAdcBilateralInferenceCase:
+    """Prepared C=4 DWI+ADC model input and DWI restoration geometry."""
+
+    source_image: NiftiVolume
+    resampled_source_image: NiftiVolume
+    aligned_image: NiftiVolume
+    alignment_estimate: AlignmentEstimate
+    model_input: np.ndarray
+    model_volumes: tuple[NiftiVolume, ...]
+    physical_input_channels: int = 2
+    effective_input_channels: int = 4
 
 
 def prepare_bilateral_asymmetry_volume(
@@ -81,6 +105,56 @@ def prepare_bilateral_asymmetry_case(
     return prepare_bilateral_asymmetry_volume(source_image, target_spacing_xy=target_spacing_xy)
 
 
+def prepare_dwi_adc_bilateral_case(
+    raw_root: Path,
+    case_id: str,
+    *,
+    target_spacing_xy: tuple[float, float] = DEFAULT_TARGET_SPACING_XY,
+) -> DwiAdcBilateralInferenceCase:
+    """Prepare the training-equivalent C=4 DWI+ADC bilateral input.
+
+    DWI and ADC are resampled to the same target spacing, one alignment is
+    estimated from the resampled DWI, and that image-only transform is applied
+    with linear interpolation to both modalities before separate normalization.
+    """
+    channel_specs = resolve_channel_specs(raw_root)
+    expected_specs = ((0, "DWI"), (1, "ADC"))
+    if channel_specs != expected_specs:
+        raise ValueError(
+            "dwi_adc_bilateral input requires exactly declared channels "
+            f"{expected_specs}; found {channel_specs}"
+        )
+
+    dwi, adc = read_case_images(raw_root, case_id)
+    prepared = prepare_dwi_adc_bilateral_images(
+        dwi, adc, target_spacing_xy=target_spacing_xy
+    )
+    normalized_modalities = {
+        "DWI": prepared.normalized_dwi,
+        "ADC": prepared.normalized_adc,
+    }
+    model_input = build_input_channels(
+        normalized_modalities, InputMode.DWI_ADC_BILATERAL
+    )
+    model_volumes = tuple(
+        NiftiVolume(
+            model_input[index],
+            prepared.aligned_dwi.spacing_xyz,
+            prepared.aligned_dwi.origin_xyz,
+            prepared.aligned_dwi.direction,
+        )
+        for index in range(model_input.shape[0])
+    )
+    return DwiAdcBilateralInferenceCase(
+        source_image=dwi,
+        resampled_source_image=prepared.resampled_dwi,
+        aligned_image=prepared.aligned_dwi,
+        alignment_estimate=prepared.alignment_estimate,
+        model_input=model_input,
+        model_volumes=model_volumes,
+    )
+
+
 def _alignment_inverse(estimate: AlignmentEstimate) -> sitk.Transform:
     transform = sitk.AffineTransform(3)
     transform.SetMatrix(estimate.output_to_input_matrix)
@@ -101,7 +175,8 @@ def _resample_to_reference(source: NiftiVolume, reference: NiftiVolume, transfor
 
 
 def restore_bilateral_asymmetry_prediction(
-    prepared: BilateralAsymmetryInferenceCase, prediction: np.ndarray
+    prepared: BilateralAsymmetryInferenceCase | DwiAdcBilateralInferenceCase,
+    prediction: np.ndarray,
 ) -> np.ndarray:
     """Map aligned/resampled binary labels back to the original source grid."""
     prediction_array = np.asarray(prediction)

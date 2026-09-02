@@ -14,6 +14,7 @@ from standalone_nnunet2d import validate_cv
 from standalone_nnunet2d.data import dataset as dataset_module
 from standalone_nnunet2d.data.dataset import StrokeSliceDataset
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, write_nifti
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.engine import checkpoint as checkpoint_module
 from standalone_nnunet2d.engine import formal_validation
 from standalone_nnunet2d.formal_train import build_formal_config
@@ -96,6 +97,112 @@ def test_training_and_inference_preprocessing_build_elementwise_identical_bilate
     np.testing.assert_allclose(prepared.model_input, training_channels, rtol=0.0, atol=1e-6)
 
 
+def test_public_dwi_adc_bilateral_inference_matches_dataset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from standalone_nnunet2d.data.inference_preprocessing import prepare_dwi_adc_bilateral_case
+
+    case_id = "case_synthetic"
+    raw_root = tmp_path / "raw"
+    _write_case(raw_root, case_id)
+    (raw_root / "dataset.json").write_text(
+        '{"channel_names": {"0": "DWI", "1": "ADC"}}', encoding="utf-8"
+    )
+    write_nifti(raw_root / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(_dwi() * 0.5))
+    monkeypatch.setattr(dataset_module, "load_fold_cases", lambda *_: (case_id,))
+
+    expected_dataset = StrokeSliceDataset(
+        raw_root,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+    expected_input, _ = expected_dataset.load_case(case_id)
+    prepared = prepare_dwi_adc_bilateral_case(
+        raw_root, case_id, target_spacing_xy=(1.0, 1.0)
+    )
+
+    np.testing.assert_allclose(prepared.model_input, expected_input, rtol=0.0, atol=1e-6)
+
+
+def test_dwi_adc_bilateral_inference_rejects_original_geometry_mismatch(
+    tmp_path: Path,
+) -> None:
+    from standalone_nnunet2d.data.inference_preprocessing import prepare_dwi_adc_bilateral_case
+
+    case_id = "case_synthetic"
+    raw_root = tmp_path / "raw"
+    _write_case(raw_root, case_id)
+    (raw_root / "dataset.json").write_text(
+        '{"channel_names": {"0": "DWI", "1": "ADC"}}', encoding="utf-8"
+    )
+    write_nifti(
+        raw_root / "imagesTr" / f"{case_id}_0001.nii.gz",
+        NiftiVolume(
+            _dwi() * 0.5,
+            spacing_xyz=(1.0, 1.0, 4.0),
+            origin_xyz=(1.0, 0.0, 0.0),
+            direction=IDENTITY_DIRECTION,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="geometry mismatch"):
+        prepare_dwi_adc_bilateral_case(
+            raw_root, case_id, target_spacing_xy=(1.0, 1.0)
+        )
+
+
+def test_dataset_and_inference_call_the_shared_dwi_adc_image_preparation_primitive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from standalone_nnunet2d.data import inference_preprocessing as inference_module
+
+    case_id = "case_synthetic"
+    raw_root = tmp_path / "raw"
+    _write_case(raw_root, case_id)
+    (raw_root / "dataset.json").write_text(
+        '{"channel_names": {"0": "DWI", "1": "ADC"}}', encoding="utf-8"
+    )
+    write_nifti(raw_root / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(_dwi() * 0.5))
+    monkeypatch.setattr(dataset_module, "load_fold_cases", lambda *_: (case_id,))
+
+    real_prepare = getattr(dataset_module, "prepare_dwi_adc_bilateral_images", None)
+    calls: list[str] = []
+
+    def missing_shared_primitive(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("shared DWI+ADC image preparation primitive is missing")
+
+    shared_prepare = real_prepare or missing_shared_primitive
+
+    def tracked_dataset(*args: object, **kwargs: object) -> object:
+        calls.append("dataset")
+        return shared_prepare(*args, **kwargs)
+
+    def tracked_inference(*args: object, **kwargs: object) -> object:
+        calls.append("inference")
+        return shared_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(dataset_module, "prepare_dwi_adc_bilateral_images", tracked_dataset, raising=False)
+    monkeypatch.setattr(inference_module, "prepare_dwi_adc_bilateral_images", tracked_inference, raising=False)
+
+    dataset = StrokeSliceDataset(
+        raw_root,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+    dataset.load_case(case_id)
+    inference_module.prepare_dwi_adc_bilateral_case(
+        raw_root, case_id, target_spacing_xy=(1.0, 1.0)
+    )
+
+    assert calls == ["dataset", "inference"]
+
+
 def test_resolved_checkpoint_config_records_unambiguous_bilateral_channel_provenance() -> None:
     config = _bilateral_config()
     metadata = {"input_channels": 2, "resolved_config": config}
@@ -104,6 +211,21 @@ def test_resolved_checkpoint_config_records_unambiguous_bilateral_channel_proven
     assert config["physical_input_channels"] == 1
     assert config["effective_model_input_channels"] == 2
     assert checkpoint_bilateral_asymmetry_channel(metadata) is True
+
+
+def test_checkpoint_input_mode_restores_dwi_adc_bilateral_mode() -> None:
+    from standalone_nnunet2d.training.formal_checkpoint import checkpoint_input_mode
+
+    metadata = {
+        "input_channels": 4,
+        "resolved_config": {
+            "input_mode": "dwi_adc_bilateral",
+            "physical_input_channels": 2,
+            "effective_model_input_channels": 4,
+        },
+    }
+
+    assert checkpoint_input_mode(metadata) is InputMode.DWI_ADC_BILATERAL
 
 
 def test_bilateral_checkpoint_rejects_ambiguous_channel_provenance() -> None:
@@ -275,7 +397,8 @@ def test_fold_validation_cli_restores_bilateral_mode_from_checkpoint_config(
 
     def fake_validate_fold(*args: object, **kwargs: object) -> dict[str, object]:
         calls["model"] = args[0]
-        calls["bilateral_asymmetry_channel"] = kwargs["bilateral_asymmetry_channel"]
+        calls["input_mode"] = kwargs["input_mode"]
+        assert "bilateral_asymmetry_channel" not in kwargs
         return {}
 
     monkeypatch.setattr(validate_cv, "validate_fold", fake_validate_fold)
@@ -288,4 +411,135 @@ def test_fold_validation_cli_restores_bilateral_mode_from_checkpoint_config(
     ) == 0
 
     assert calls["model"] is not None
-    assert calls["bilateral_asymmetry_channel"] is True
+    assert calls["input_mode"] is InputMode.DWI_BILATERAL
+def test_formal_train_parser_accepts_dwi_adc_bilateral():
+    from standalone_nnunet2d import formal_train
+
+    args = formal_train.build_parser().parse_args(
+        [
+            "--raw-root",
+            "raw",
+            "--output-root",
+            "outputs",
+            "--plans",
+            "plans.json",
+            "--input-mode",
+            "dwi_adc_bilateral",
+        ]
+    )
+
+    assert args.input_mode == "dwi_adc_bilateral"
+
+
+def test_formal_train_cli_resolves_legacy_bilateral_flag_and_rejects_conflicts():
+    from standalone_nnunet2d import formal_train
+
+    assert formal_train.resolve_cli_input_mode(None, True) is InputMode.DWI_BILATERAL
+    assert (
+        formal_train.resolve_cli_input_mode(InputMode.DWI_BILATERAL, True)
+        is InputMode.DWI_BILATERAL
+    )
+    with pytest.raises(ValueError, match="conflicts with input_mode"):
+        formal_train.resolve_cli_input_mode(InputMode.DWI_ADC_BILATERAL, True)
+
+
+def test_formal_train_config_records_explicit_dwi_adc_bilateral_channels():
+    config = build_formal_config(
+        fold=0,
+        epochs=1000,
+        schedule=OfficialTrainerSchedule(),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+        input_channels=4,
+        physical_input_channels=2,
+    )
+
+    assert config["input_mode"] == InputMode.DWI_ADC_BILATERAL.value
+    assert config["physical_input_channels"] == 2
+    assert config["effective_model_input_channels"] == 4
+
+
+def test_formal_train_cli_persists_dwi_adc_bilateral_c4_config(tmp_path: Path, capsys) -> None:
+    from standalone_nnunet2d import formal_train
+
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    (raw_root / "dataset.json").write_text(
+        '{"channel_names": {"0": "DWI", "1": "ADC"}}', encoding="utf-8"
+    )
+    plans = tmp_path / "plans.json"
+    plans.write_text(
+        '{"configurations": {"2d": {"patch_size": [32, 32], "use_mask_for_norm": [false]}}}',
+        encoding="utf-8",
+    )
+
+    assert formal_train.main(
+        [
+            "--raw-root", str(raw_root),
+            "--output-root", str(tmp_path / "output"),
+            "--plans", str(plans),
+            "--device", "cpu",
+            "--input-mode", "dwi_adc_bilateral",
+        ]
+    ) == 0
+
+    config = json.loads(capsys.readouterr().out)["config"]
+    assert config["input_mode"] == InputMode.DWI_ADC_BILATERAL.value
+    assert config["input_channels"] == 4
+    assert config["physical_input_channels"] == 2
+    assert config["effective_model_input_channels"] == 4
+
+
+def test_formal_train_legacy_bilateral_flag_maps_to_dwi_bilateral(tmp_path: Path, capsys) -> None:
+    from standalone_nnunet2d import formal_train
+
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    plans = tmp_path / "plans.json"
+    plans.write_text(
+        '{"configurations": {"2d": {"patch_size": [32, 32], "use_mask_for_norm": [false]}}}',
+        encoding="utf-8",
+    )
+
+    assert formal_train.main(
+        [
+            "--raw-root", str(raw_root),
+            "--output-root", str(tmp_path / "output"),
+            "--plans", str(plans),
+            "--device", "cpu",
+            "--bilateral-asymmetry-channel",
+        ]
+    ) == 0
+
+    config = json.loads(capsys.readouterr().out)["config"]
+    assert config["input_mode"] == InputMode.DWI_BILATERAL.value
+    assert config["physical_input_channels"] == 1
+    assert config["effective_model_input_channels"] == 2
+
+
+def test_formal_train_rejects_conflicting_explicit_mode_and_legacy_flag(
+    tmp_path: Path, capsys
+) -> None:
+    from standalone_nnunet2d import formal_train
+
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    plans = tmp_path / "plans.json"
+    plans.write_text(
+        '{"configurations": {"2d": {"patch_size": [32, 32], "use_mask_for_norm": [false]}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        formal_train.main(
+            [
+                "--raw-root", str(raw_root),
+                "--output-root", str(tmp_path / "output"),
+                "--plans", str(plans),
+                "--device", "cpu",
+                "--input-mode", "dwi_adc_bilateral",
+                "--bilateral-asymmetry-channel",
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "conflicts" in capsys.readouterr().err

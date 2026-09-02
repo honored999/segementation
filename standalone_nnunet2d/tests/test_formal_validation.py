@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti, write_nifti
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.alignment_evidence import build_alignment_evidence
 from standalone_nnunet2d.engine import formal_validation
 
@@ -240,3 +241,121 @@ def test_validate_fold_checks_label_geometry_against_every_channel_before_predic
     assert "channel 1" in error
     assert "geometry mismatch against label" in error
     assert "shape expected (2, 2, 2), got (2, 2, 3)" in error
+
+
+def test_validate_fold_routes_dwi_adc_bilateral_case_through_c4_prediction_and_restore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw_root = tmp_path / "synthetic-raw"
+    raw_root.mkdir()
+    case_id = "case001"
+    source_dwi = NiftiVolume(
+        np.zeros((1, 2, 2), dtype=np.float32),
+        spacing_xyz=(0.7, 0.8, 4.5),
+        origin_xyz=(11.0, -2.0, 3.5),
+    )
+    label = NiftiVolume(
+        np.zeros_like(source_dwi.array, dtype=np.uint8),
+        source_dwi.spacing_xyz,
+        source_dwi.origin_xyz,
+        source_dwi.direction,
+    )
+    model_volumes = tuple(
+        NiftiVolume(
+            np.full((1, 2, 3), index + 1, dtype=np.float32),
+            spacing_xyz=(0.5, 0.5, 4.5),
+            origin_xyz=(1.0, 2.0, 3.0),
+        )
+        for index in range(4)
+    )
+    prepared = type(
+        "PreparedDwiAdcBilateralCase",
+        (),
+        {"source_image": source_dwi, "model_volumes": model_volumes},
+    )()
+    model_prediction = np.full((1, 2, 3), 7, dtype=np.uint8)
+    restored_prediction = np.ones_like(source_dwi.array, dtype=np.uint8)
+
+    preparation_calls: list[tuple[Path, str, dict[str, object]]] = []
+    prediction_calls: list[tuple[object, object, torch.device, dict[str, object]]] = []
+    restore_calls: list[tuple[object, object]] = []
+    save_calls: list[tuple[Path, np.ndarray, NiftiVolume]] = []
+    label_reads: list[Path] = []
+
+    def fake_read_nifti(path: Path) -> NiftiVolume:
+        label_reads.append(path)
+        return label
+
+    def fake_prepare(
+        raw_root_arg: Path, case_id_arg: str, **kwargs: object
+    ) -> object:
+        preparation_calls.append((raw_root_arg, case_id_arg, kwargs))
+        return prepared
+
+    def fake_predict_volume(
+        model: object,
+        volumes: object,
+        device: torch.device,
+        **kwargs: object,
+    ) -> np.ndarray:
+        prediction_calls.append((model, volumes, device, kwargs))
+        return model_prediction
+
+    def fake_restore(prepared_arg: object, prediction_arg: object) -> np.ndarray:
+        restore_calls.append((prepared_arg, prediction_arg))
+        return restored_prediction
+
+    def fake_save_prediction(
+        path: Path, prediction: np.ndarray, reference: NiftiVolume
+    ) -> None:
+        save_calls.append((path, prediction, reference))
+
+    monkeypatch.setattr(formal_validation, "validate_raw_root", lambda root: raw_root)
+    monkeypatch.setattr(formal_validation, "load_fold_cases", lambda *_: (case_id,))
+    monkeypatch.setattr(formal_validation, "read_nifti", fake_read_nifti)
+    monkeypatch.setattr(
+        formal_validation,
+        "prepare_dwi_adc_bilateral_case",
+        fake_prepare,
+        raising=False,
+    )
+    monkeypatch.setattr(formal_validation, "predict_volume", fake_predict_volume)
+    monkeypatch.setattr(
+        formal_validation,
+        "restore_bilateral_asymmetry_prediction",
+        fake_restore,
+    )
+    monkeypatch.setattr(
+        formal_validation, "save_and_validate_prediction", fake_save_prediction
+    )
+
+    model = object()
+    report = formal_validation.validate_fold(
+        model,
+        raw_root,
+        fold=0,
+        output_root=tmp_path / "fold-output",
+        device=torch.device("cpu"),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+
+    assert label_reads == [raw_root / "labelsTr" / f"{case_id}.nii.gz"]
+    assert preparation_calls == [(raw_root, case_id, {})]
+    assert len(prediction_calls) == 1
+    predicted_model, predicted_volumes, predicted_device, prediction_kwargs = prediction_calls[0]
+    assert predicted_model is model
+    assert predicted_volumes is model_volumes
+    assert len(predicted_volumes) == 4
+    assert [volume.array[0, 0, 0] for volume in predicted_volumes] == [1, 2, 3, 4]
+    assert predicted_device == torch.device("cpu")
+    assert prediction_kwargs == {"normalise_inputs": False}
+    assert restore_calls == [(prepared, model_prediction)]
+    assert len(save_calls) == 1
+    _, saved_prediction, saved_reference = save_calls[0]
+    assert saved_prediction is restored_prediction
+    assert saved_prediction.shape == source_dwi.array.shape
+    assert saved_reference is source_dwi
+    assert saved_reference.spacing_xyz == source_dwi.spacing_xyz
+    assert saved_reference.origin_xyz == source_dwi.origin_xyz
+    assert saved_reference.direction == source_dwi.direction
+    assert report["case_count"] == 1

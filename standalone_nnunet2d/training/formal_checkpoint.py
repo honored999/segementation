@@ -16,6 +16,7 @@ from torch import nn
 from torch.optim import Optimizer
 
 from standalone_nnunet2d.engine.checkpoint import load_checkpoint, save_checkpoint
+from standalone_nnunet2d.data.input_mode import InputMode, input_spec
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, validate_alignment_evidence_record
 
@@ -90,11 +91,169 @@ def compute_plan_hash(plan: Mapping[str, Any]) -> str:
 
 
 def checkpoint_input_channels(metadata: Mapping[str, Any]) -> int:
-    """Read checkpoint input channels, treating old metadata as legacy C=1."""
-    value = metadata.get("input_channels", 1)
+    """Read effective model input channels, including legacy bilateral C=2."""
+    if not isinstance(metadata, Mapping):
+        raise TypeError("checkpoint metadata must be a mapping")
+
+    sources: list[tuple[str, Mapping[str, Any]]] = [("metadata", metadata)]
+    for key in ("resolved_config", "config"):
+        if key not in metadata:
+            continue
+        value = metadata[key]
+        if not isinstance(value, Mapping):
+            raise ValueError(f"checkpoint {key} must be a mapping")
+        sources.append((key, value))
+
+    def consistent_value(key: str) -> Any:
+        declared = [(name, source[key]) for name, source in sources if key in source]
+        if not declared:
+            return None
+        first_name, first_value = declared[0]
+        if any(value != first_value for _, value in declared[1:]):
+            details = ", ".join(f"{name}={value!r}" for name, value in declared)
+            raise ValueError(f"checkpoint {key} declarations conflict: {details}")
+        return first_value
+
+    input_mode = consistent_value("input_mode")
+    legacy_flag = consistent_value("bilateral_asymmetry_channel")
+    if legacy_flag is not None and not isinstance(legacy_flag, bool):
+        raise ValueError(
+            "checkpoint bilateral_asymmetry_channel must be a boolean, "
+            f"got {legacy_flag!r}"
+        )
+    value = consistent_value("input_channels")
+    if value is None:
+        value = consistent_value("effective_model_input_channels")
+    if value is None and legacy_flag is True and input_mode is None:
+        value = 2
+    if value is None:
+        value = 1
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"checkpoint input_channels must be a positive integer, got {value!r}")
     return value
+
+
+def checkpoint_input_mode(metadata: Mapping[str, Any]) -> InputMode:
+    """Resolve and validate the checkpoint's physical-to-model input contract."""
+    if not isinstance(metadata, Mapping):
+        raise TypeError("checkpoint metadata must be a mapping")
+
+    sources: list[tuple[str, Mapping[str, Any]]] = [("metadata", metadata)]
+    for key in ("resolved_config", "config"):
+        if key not in metadata:
+            continue
+        value = metadata[key]
+        if not isinstance(value, Mapping):
+            raise ValueError(f"checkpoint {key} must be a mapping")
+        sources.append((key, value))
+
+    def consistent_value(key: str) -> Any:
+        declared = [(name, source[key]) for name, source in sources if key in source]
+        if not declared:
+            return None
+        first_name, first_value = declared[0]
+        if any(value != first_value for _, value in declared[1:]):
+            details = ", ".join(f"{name}={value!r}" for name, value in declared)
+            raise ValueError(f"checkpoint {key} declarations conflict: {details}")
+        return first_value
+
+    mode_value = consistent_value("input_mode")
+    resolved_mode: InputMode | None = None
+    if mode_value is not None:
+        try:
+            resolved_mode = mode_value if isinstance(mode_value, InputMode) else InputMode(mode_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"unsupported checkpoint input_mode: {mode_value!r}") from error
+
+    legacy_value = consistent_value("bilateral_asymmetry_channel")
+    if legacy_value is not None and not isinstance(legacy_value, bool):
+        raise ValueError(
+            "checkpoint bilateral_asymmetry_channel must be a boolean, "
+            f"got {legacy_value!r}"
+        )
+    if legacy_value is True:
+        if resolved_mode is not None and resolved_mode is not InputMode.DWI_BILATERAL:
+            raise ValueError(
+                "checkpoint input_mode conflicts with legacy bilateral_asymmetry_channel=True"
+            )
+        resolved_mode = InputMode.DWI_BILATERAL
+    elif legacy_value is False and resolved_mode is InputMode.DWI_BILATERAL:
+        raise ValueError(
+            "checkpoint input_mode=dwi_bilateral conflicts with "
+            "legacy bilateral_asymmetry_channel=False"
+        )
+
+    input_channels = consistent_value("input_channels")
+    effective_channels = consistent_value("effective_model_input_channels")
+    physical_channels = consistent_value("physical_input_channels")
+    if legacy_value is True and mode_value is None:
+        if input_channels is None:
+            input_channels = effective_channels if effective_channels is not None else 2
+        if effective_channels is None:
+            effective_channels = 2
+        if physical_channels is None:
+            physical_channels = 1
+    else:
+        if input_channels is None:
+            input_channels = effective_channels
+        if input_channels is None:
+            input_channels = 1
+    if isinstance(input_channels, bool) or not isinstance(input_channels, int) or input_channels < 1:
+        raise ValueError(
+            "checkpoint input_channels must be a positive integer, "
+            f"got {input_channels!r}"
+        )
+
+    if resolved_mode is None:
+        if physical_channels is not None and effective_channels is not None:
+            inferred = {
+                (1, 1): InputMode.DWI,
+                (2, 2): InputMode.DWI_ADC,
+                (1, 2): InputMode.DWI_BILATERAL,
+                (2, 4): InputMode.DWI_ADC_BILATERAL,
+            }.get((physical_channels, effective_channels))
+            if inferred is None:
+                raise ValueError(
+                    "checkpoint physical/effective input channel counts do not identify "
+                    f"a supported input mode: physical={physical_channels}, "
+                    f"effective={effective_channels}"
+                )
+            resolved_mode = inferred
+        elif input_channels == 1:
+            resolved_mode = InputMode.DWI
+        elif input_channels == 2:
+            resolved_mode = InputMode.DWI_ADC
+        else:
+            raise ValueError(
+                "checkpoint input_mode is required for input_channels="
+                f"{input_channels}"
+            )
+
+    spec = input_spec(resolved_mode)
+    expected_physical = spec.physical_input_channels
+    expected_effective = spec.effective_input_channels
+    if input_channels != expected_effective:
+        raise ValueError(
+            f"checkpoint input_mode={resolved_mode.value} requires input_channels="
+            f"{expected_effective}, got {input_channels}"
+        )
+    if effective_channels is not None and effective_channels != expected_effective:
+        raise ValueError(
+            f"checkpoint input_mode={resolved_mode.value} requires "
+            f"effective_model_input_channels={expected_effective}, got {effective_channels}"
+        )
+    if physical_channels is not None and physical_channels != expected_physical:
+        raise ValueError(
+            f"checkpoint input_mode={resolved_mode.value} requires "
+            f"physical_input_channels={expected_physical}, got {physical_channels}"
+        )
+    if resolved_mode in (InputMode.DWI_BILATERAL, InputMode.DWI_ADC_BILATERAL):
+        if physical_channels is None or effective_channels is None:
+            raise ValueError(
+                f"checkpoint input_mode={resolved_mode.value} must declare physical_input_channels="
+                f"{expected_physical} and effective_model_input_channels={expected_effective}"
+            )
+    return resolved_mode
 
 
 def checkpoint_bilateral_asymmetry_channel(metadata: Mapping[str, Any]) -> bool:

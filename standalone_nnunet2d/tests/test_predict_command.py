@@ -265,3 +265,231 @@ def test_prediction_command_rejects_invalid_checkpoint_alignment_metadata(
                 "--allow-pending",
             ]
         )
+
+
+def test_prediction_command_routes_dwi_adc_bilateral_checkpoint_through_c4_preparation_and_restoration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint_metadata = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "input_mode": "dwi_adc_bilateral",
+        "physical_input_channels": 2,
+        "effective_model_input_channels": 4,
+        "input_channels": 4,
+    }
+    checkpoint = tmp_path / "c4-pending.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": {},
+            "metadata": checkpoint_metadata,
+        },
+        checkpoint,
+    )
+
+    mismatch_raw_root = tmp_path / "mismatch-raw"
+    (mismatch_raw_root / "imagesTr").mkdir(parents=True)
+    (mismatch_raw_root / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI"}}), encoding="utf-8"
+    )
+    load_attempts: list[object] = []
+
+    def fail_if_model_loaded(*_args: object, **_kwargs: object) -> object:
+        load_attempts.append(True)
+        raise AssertionError("model must not load before raw physical-channel validation")
+
+    monkeypatch.setattr(predict_module, "_load_model", fail_if_model_loaded)
+    with pytest.raises(ValueError, match="checkpoint input_channels=4.*dataset channels=1"):
+        main(
+            [
+                "--checkpoint", str(checkpoint),
+                "--raw-root", str(mismatch_raw_root),
+                "--case-id", "case001",
+                "--output-root", str(tmp_path / "mismatch-output"),
+                "--allow-pending",
+            ]
+        )
+    assert load_attempts == []
+
+    raw_root = tmp_path / "raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    raw_metadata = {"channel_names": {"0": "DWI", "1": "ADC"}}
+    (raw_root / "dataset.json").write_text(
+        json.dumps(raw_metadata), encoding="utf-8"
+    )
+    assert list(raw_metadata["channel_names"].values()) == ["DWI", "ADC"]
+    assert not (raw_root / "labelsTr").exists()
+
+    source_dwi = NiftiVolume(
+        np.zeros((1, 2, 2), dtype=np.float32),
+        spacing_xyz=(0.7, 0.8, 4.5),
+        origin_xyz=(11.0, -2.0, 3.5),
+    )
+    model_volumes = tuple(
+        NiftiVolume(
+            np.full((1, 2, 2), index + 1, dtype=np.float32),
+            spacing_xyz=(0.5, 0.5, 4.5),
+            origin_xyz=(1.0, 2.0, 3.0),
+        )
+        for index in range(4)
+    )
+    prepared = type(
+        "PreparedDwiAdcBilateralCase",
+        (),
+        {"source_image": source_dwi, "model_volumes": model_volumes},
+    )()
+    model = object()
+    model_prediction = np.zeros((1, 2, 2), dtype=np.uint8)
+    restored_prediction = np.ones_like(model_prediction, dtype=np.uint8)
+    preparation_calls: list[tuple[Path, str]] = []
+    prediction_calls: list[tuple[object, object, torch.device, dict[str, object]]] = []
+    restoration_calls: list[tuple[object, object]] = []
+
+    def fake_load_model(*_args: object, **_kwargs: object) -> tuple[object, dict[str, object]]:
+        return model, checkpoint_metadata
+
+    def fake_prepare(raw_root_arg: Path, case_id_arg: str, **_kwargs: object) -> object:
+        preparation_calls.append((raw_root_arg, case_id_arg))
+        return prepared
+
+    def fake_predict_volume(
+        model_arg: object,
+        volumes: object,
+        device: torch.device,
+        **kwargs: object,
+    ) -> np.ndarray:
+        prediction_calls.append((model_arg, volumes, device, kwargs))
+        return model_prediction
+
+    def fake_restore(prepared_arg: object, prediction_arg: object) -> np.ndarray:
+        restoration_calls.append((prepared_arg, prediction_arg))
+        return restored_prediction
+
+    monkeypatch.setattr(predict_module, "_load_model", fake_load_model)
+    monkeypatch.setattr(
+        predict_module, "prepare_dwi_adc_bilateral_case", fake_prepare, raising=False
+    )
+    monkeypatch.setattr(predict_module, "predict_volume", fake_predict_volume)
+    monkeypatch.setattr(
+        predict_module, "restore_bilateral_asymmetry_prediction", fake_restore
+    )
+    monkeypatch.setattr(
+        predict_module,
+        "save_and_validate_prediction",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
+
+    assert main(
+        [
+            "--checkpoint", str(checkpoint),
+            "--raw-root", str(raw_root),
+            "--case-id", "case001",
+            "--output-root", str(tmp_path / "output"),
+            "--allow-pending",
+        ]
+    ) == 0
+
+    assert preparation_calls == [(raw_root, "case001")]
+    assert len(prediction_calls) == 1
+    predicted_model, predicted_volumes, predicted_device, prediction_kwargs = prediction_calls[0]
+    assert predicted_model is model
+    assert predicted_volumes is model_volumes
+    assert len(predicted_volumes) == 4
+    assert predicted_device == torch.device("cpu")
+    assert prediction_kwargs["normalise_inputs"] is False
+    assert restoration_calls == [(prepared, model_prediction)]
+
+
+def test_prediction_cli_rejects_conflicting_input_mode_and_legacy_flag_before_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checkpoint = tmp_path / "c4-pending.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": {},
+            "metadata": {
+                "run_type": "official_alignment_pending",
+                "run_state": "official_alignment_pending",
+                "input_mode": "dwi_adc_bilateral",
+                "physical_input_channels": 2,
+                "effective_model_input_channels": 4,
+                "input_channels": 4,
+            },
+        },
+        checkpoint,
+    )
+    raw_root = tmp_path / "raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    load_attempts: list[object] = []
+
+    def fail_if_model_loaded(*_args: object, **_kwargs: object) -> object:
+        load_attempts.append(True)
+        raise AssertionError("model must not load after CLI contract rejection")
+
+    monkeypatch.setattr(predict_module, "_load_model", fail_if_model_loaded)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "--checkpoint", str(checkpoint),
+                "--raw-root", str(raw_root),
+                "--case-id", "case001",
+                "--output-root", str(tmp_path / "output"),
+                "--allow-pending",
+                "--input-mode", "dwi_adc_bilateral",
+                "--bilateral-asymmetry-channel",
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "conflicts" in capsys.readouterr().err
+    assert load_attempts == []
+
+
+def test_prediction_cli_rejects_runtime_checkpoint_mode_mismatch_before_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint = tmp_path / "c4-pending.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": {},
+            "metadata": {
+                "run_type": "official_alignment_pending",
+                "run_state": "official_alignment_pending",
+                "input_mode": "dwi_adc_bilateral",
+                "physical_input_channels": 2,
+                "effective_model_input_channels": 4,
+                "input_channels": 4,
+            },
+        },
+        checkpoint,
+    )
+    raw_root = tmp_path / "raw"
+    (raw_root / "imagesTr").mkdir(parents=True)
+    load_attempts: list[object] = []
+
+    def fail_if_model_loaded(*_args: object, **_kwargs: object) -> object:
+        load_attempts.append(True)
+        raise AssertionError("model must not load after mode mismatch")
+
+    monkeypatch.setattr(predict_module, "_load_model", fail_if_model_loaded)
+
+    with pytest.raises(ValueError, match=(
+        "runtime input_mode=dwi_bilateral conflicts with "
+        "checkpoint input_mode=dwi_adc_bilateral"
+    )):
+        main(
+            [
+                "--checkpoint", str(checkpoint),
+                "--raw-root", str(raw_root),
+                "--case-id", "case001",
+                "--output-root", str(tmp_path / "output"),
+                "--allow-pending",
+                "--input-mode", "dwi_bilateral",
+            ]
+        )
+
+    assert load_attempts == []

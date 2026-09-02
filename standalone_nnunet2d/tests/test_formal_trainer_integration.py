@@ -74,6 +74,70 @@ def test_formal_training_rejects_multichannel_alignment_evidence_before_pending_
   formal_train.main(['--raw-root',str(raw_root),'--output-root',str(tmp_path/'output'),'--plans',str(formal_train.Path(__file__).resolve().parents[1]/'reference'/'nnUNetPlans.json'),'--device','cpu'])
 
 
+def test_formal_resume_rejects_checkpoint_input_contract_before_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+ raw_root=tmp_path/'raw'
+ raw_root.mkdir()
+ (raw_root/'dataset.json').write_text(
+  json.dumps({'channel_names': {'0':'DWI'}}), encoding='utf-8'
+ )
+ plans=tmp_path/'plans.json'
+ plans.write_text(
+  json.dumps({'configurations': {'2d': {'patch_size': [32, 32], 'use_mask_for_norm': [False]}}}),
+  encoding='utf-8',
+ )
+ checkpoint=tmp_path/'resume.pth'
+ torch.save(
+  {
+   'format_version': 1,
+   'model_state_dict': {},
+   'optimizer_state_dict': None,
+   'metadata': {
+    'input_channels': 4,
+    'resolved_config': {
+     'input_mode': 'dwi_adc_bilateral',
+     'input_channels': 4,
+     'physical_input_channels': 2,
+     'effective_model_input_channels': 4,
+    },
+   },
+  },
+  checkpoint,
+ )
+ events: list[str] = []
+
+ monkeypatch.setattr(formal_train, 'build_formal_datasets', lambda *args, **kwargs: ([], []))
+ monkeypatch.setattr(formal_train, 'build_formal_loaders', lambda *args, **kwargs: ([], []))
+
+ def model_sentinel(*args: object, **kwargs: object) -> None:
+  events.append('model')
+  raise AssertionError('model construction must not occur before resume validation')
+
+ def load_sentinel(*args: object, **kwargs: object) -> None:
+  events.append('load')
+  raise AssertionError('checkpoint load must not occur before resume validation')
+
+ monkeypatch.setattr(formal_train, 'PlainConvUNet2D', model_sentinel)
+ monkeypatch.setattr(formal_train, 'load_formal_checkpoint', load_sentinel)
+
+ with pytest.raises(
+  ValueError,
+  match='runtime input_mode=dwi_bilateral conflicts with checkpoint input_mode=dwi_adc_bilateral',
+ ):
+  formal_train.main([
+   '--raw-root', str(raw_root),
+   '--output-root', str(tmp_path/'output'),
+   '--plans', str(plans),
+   '--device', 'cpu',
+   '--input-mode', 'dwi_bilateral',
+   '--resume', str(checkpoint),
+   '--confirm-run',
+  ])
+
+ assert events == []
+
+
 def test_formal_trainer_deterministically_continues_after_checkpoint() -> None:
  torch.manual_seed(123)
  model=nn.Sequential(nn.Conv2d(1,2,1),nn.Dropout2d(p=.5))

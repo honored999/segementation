@@ -12,16 +12,26 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from standalone_nnunet2d import alignment_evidence as alignment_evidence_module
-from standalone_nnunet2d.data.dataset import load_fold_cases
+from standalone_nnunet2d.data.dataset import load_fold_cases, resolve_channel_specs
+from standalone_nnunet2d.data.input_mode import InputMode, input_spec
 from standalone_nnunet2d.engine.formal_validation import CASE_METRIC_FIELDS, validate_fold
 from standalone_nnunet2d.metrics.crossval_summary import summarize_oof_cases
 from standalone_nnunet2d.metrics.segmentation_metrics import METRIC_POLICY
 from standalone_nnunet2d.predict import _load_model, _read_checkpoint
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
+from standalone_nnunet2d.training.formal_checkpoint import (
+    checkpoint_input_channels,
+    checkpoint_input_mode,
+)
 
 
 _REPORT_NAME = re.compile(r"fold_(\d+)_report\.(json|csv)$")
 _CONFUSION_FIELDS = {"TP", "FP", "FN", "TN"}
+
+
+def _load_checkpoint_metadata(path: Path) -> Mapping[str, Any]:
+    _, metadata = _read_checkpoint(path)
+    return metadata
 
 
 def _report_paths(root: Path) -> list[Path]:
@@ -181,6 +191,7 @@ def _parser() -> argparse.ArgumentParser:
     fold_parser.add_argument("--output-root", required=True, type=Path)
     fold_parser.add_argument("--device", default="cpu")
     fold_parser.add_argument("--allow-pending", action="store_true")
+    fold_parser.add_argument("--input-mode", type=InputMode, choices=tuple(InputMode))
 
     aggregate_parser = subparsers.add_parser("aggregate", help="aggregate five fold reports")
     aggregate_parser.add_argument("--output-root", required=True, type=Path)
@@ -193,18 +204,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         aggregate_oof(arguments.output_root)
         return 0
 
-    _, metadata = _read_checkpoint(arguments.checkpoint)
+    metadata = _load_checkpoint_metadata(arguments.checkpoint)
+    checkpoint_mode = checkpoint_input_mode(metadata)
+    checkpoint_channels = checkpoint_input_channels(metadata)
+    expected_channels = input_spec(checkpoint_mode).effective_input_channels
+    if checkpoint_channels != expected_channels:
+        raise ValueError(
+            f"checkpoint input_mode={checkpoint_mode.value} requires input_channels="
+            f"{expected_channels}, got {checkpoint_channels}"
+        )
+    if arguments.input_mode is not None and arguments.input_mode != checkpoint_mode:
+        raise ValueError(
+            f"runtime input_mode={arguments.input_mode.value} conflicts with "
+            f"checkpoint input_mode={checkpoint_mode.value}"
+        )
+    resolved_mode = checkpoint_mode if arguments.input_mode is None else arguments.input_mode
     run_state, checkpoint_evidence = (
         alignment_evidence_module.validate_checkpoint_alignment_metadata(metadata)
     )
     if run_state == DEFAULT_RUN_STATE and not arguments.allow_pending:
         raise ValueError("pending checkpoint requires explicit --allow-pending")
 
+    declared_channel_specs = resolve_channel_specs(arguments.raw_root)
+    expected_channel_specs = tuple(enumerate(input_spec(resolved_mode).physical_modalities))
+    if declared_channel_specs != expected_channel_specs:
+        legacy_single_channel = ((0, "legacy_single_channel"),)
+        if not (
+            declared_channel_specs == legacy_single_channel
+            and resolved_mode in (InputMode.DWI, InputMode.DWI_BILATERAL)
+        ):
+            raise ValueError(
+                f"raw dataset physical channel declaration for input_mode={resolved_mode.value} "
+                f"must exactly match {expected_channel_specs}; found {declared_channel_specs}"
+            )
+
     import torch
 
-    from standalone_nnunet2d.training.formal_checkpoint import checkpoint_bilateral_asymmetry_channel
-
-    bilateral_asymmetry_channel = checkpoint_bilateral_asymmetry_channel(metadata)
     model, _ = _load_model(arguments.checkpoint, torch.device(arguments.device))
     validate_fold(
         model,
@@ -214,7 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         device=torch.device(arguments.device),
         run_state=run_state,
         alignment_evidence=checkpoint_evidence,
-        bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+        input_mode=resolved_mode,
     )
     return 0
 

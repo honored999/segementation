@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 import numpy as np
 import torch
@@ -12,16 +13,94 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from standalone_nnunet2d.data.augmentation import AugmentationConfig, augment_slice
+from standalone_nnunet2d.data.input_mode import InputMode, InputSpec, input_spec
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti
 from standalone_nnunet2d.data.preprocessing import resample_inplane, z_score_normalize
 from standalone_nnunet2d.data.sampling import central_slice_index, select_axial_slice, select_slice_index
-from standalone_nnunet2d.data.symmetry_alignment import align_case, build_bilateral_asymmetry_channels
+from standalone_nnunet2d.data.symmetry_alignment import (
+    AlignmentEstimate,
+    align_case,
+    apply_quasi_symmetric_alignment,
+    bilateral_difference,
+    build_bilateral_asymmetry_channels,
+    estimate_quasi_symmetric_alignment,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SPLITS_PATH = PROJECT_ROOT / "reference" / "splits_final.json"
 SplitName = Literal["train", "val"]
 ChannelSpec = tuple[int, str]
+
+
+@dataclass(frozen=True)
+class DwiAdcBilateralImagePreparation:
+    """Shared image-only preparation for the DWI+ADC C=4 input contract."""
+
+    resampled_dwi: NiftiVolume
+    resampled_adc: NiftiVolume
+    aligned_dwi: NiftiVolume
+    aligned_adc: NiftiVolume
+    normalized_dwi: NiftiVolume
+    normalized_adc: NiftiVolume
+    alignment_estimate: AlignmentEstimate
+
+
+def prepare_dwi_adc_bilateral_images(
+    dwi: NiftiVolume,
+    adc: NiftiVolume,
+    *,
+    target_spacing_xy: tuple[float, float],
+) -> DwiAdcBilateralImagePreparation:
+    """Prepare DWI and ADC once for both dataset and inference callers.
+
+    This image-only primitive owns the common XY resample, DWI-derived
+    alignment, shared transform application, and separate modality
+    normalization.  A caller may apply the returned estimate to a label, but
+    labels are never used by this function.
+    """
+    geometry_mismatch = _geometry_mismatch_reason(dwi, adc)
+    if geometry_mismatch is not None:
+        raise ValueError(
+            "DWI and ADC geometry mismatch before resampling: "
+            f"{geometry_mismatch}"
+        )
+    resampled_dwi = resample_inplane(dwi, target_spacing_xy, is_segmentation=False)
+    resampled_adc = resample_inplane(adc, target_spacing_xy, is_segmentation=False)
+    if resampled_adc.array.shape != resampled_dwi.array.shape:
+        raise ValueError(
+            "DWI and ADC resampled shapes must match for bilateral input: "
+            f"DWI {resampled_dwi.array.shape}, ADC {resampled_adc.array.shape}"
+        )
+
+    estimate = estimate_quasi_symmetric_alignment(resampled_dwi)
+    aligned_dwi = apply_quasi_symmetric_alignment(
+        resampled_dwi, estimate, is_segmentation=False
+    )
+    aligned_adc = apply_quasi_symmetric_alignment(
+        resampled_adc, estimate, is_segmentation=False
+    )
+    normalized_dwi = NiftiVolume(
+        z_score_normalize(aligned_dwi.array),
+        aligned_dwi.spacing_xyz,
+        aligned_dwi.origin_xyz,
+        aligned_dwi.direction,
+    )
+    normalized_adc = NiftiVolume(
+        z_score_normalize(aligned_adc.array),
+        aligned_adc.spacing_xyz,
+        aligned_adc.origin_xyz,
+        aligned_adc.direction,
+    )
+    return DwiAdcBilateralImagePreparation(
+        resampled_dwi=resampled_dwi,
+        resampled_adc=resampled_adc,
+        aligned_dwi=aligned_dwi,
+        aligned_adc=aligned_adc,
+        normalized_dwi=normalized_dwi,
+        normalized_adc=normalized_adc,
+        alignment_estimate=estimate,
+    )
 
 
 def resolve_channel_specs(raw_root: Path) -> tuple[ChannelSpec, ...]:
@@ -64,6 +143,66 @@ def resolve_input_channels(raw_root: Path, *, bilateral_asymmetry_channel: bool 
             )
         return 2
     return physical_input_channels
+
+
+def build_input_channels(
+    normalized_modalities: Mapping[str, NiftiVolume],
+    mode: InputMode | str,
+) -> np.ndarray:
+    """Build an ordered model-input stack from already normalized modalities."""
+    spec = input_spec(mode)
+    missing = [name for name in spec.physical_modalities if name not in normalized_modalities]
+    if missing:
+        raise ValueError(f"input mode {mode!r} is missing normalized modalities: {missing}")
+    reference = normalized_modalities[spec.physical_modalities[0]]
+    channels: list[np.ndarray] = []
+    for recipe in spec.channel_recipes:
+        if recipe == "DWI":
+            channels.append(np.asarray(normalized_modalities["DWI"].array, dtype=np.float32))
+        elif recipe == "ADC":
+            channels.append(np.asarray(normalized_modalities["ADC"].array, dtype=np.float32))
+        elif recipe == "DWI_LR_ABS_DIFF":
+            channels.append(bilateral_difference(normalized_modalities["DWI"], mode="absolute"))
+        elif recipe == "DWI_LR_SIGNED_DIFF":
+            channels.append(bilateral_difference(normalized_modalities["DWI"], mode="signed"))
+        elif recipe == "ADC_LR_SIGNED_DIFF":
+            channels.append(bilateral_difference(normalized_modalities["ADC"], mode="signed"))
+        else:
+            raise ValueError(f"unsupported input channel recipe: {recipe!r}")
+    if any(channel.shape != reference.array.shape for channel in channels):
+        raise ValueError("normalized input channel geometry is inconsistent")
+    return np.stack(channels, axis=0).astype(np.float32, copy=False)
+
+
+def _mode_for_dataset(
+    raw_root: Path,
+    *,
+    input_mode: InputMode | str | None,
+    bilateral_asymmetry_channel: bool,
+) -> tuple[InputMode | None, InputSpec | None]:
+    if input_mode is None:
+        if not bilateral_asymmetry_channel:
+            return None, None
+        resolved = InputMode.DWI_BILATERAL
+    else:
+        try:
+            resolved = input_mode if isinstance(input_mode, InputMode) else InputMode(input_mode)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"unsupported input mode: {input_mode!r}") from error
+        if bilateral_asymmetry_channel and resolved is not InputMode.DWI_BILATERAL:
+            raise ValueError(
+                "bilateral_asymmetry_channel conflicts with input_mode; "
+                "use input_mode='dwi_bilateral'"
+            )
+    spec = input_spec(resolved)
+    declared = resolve_channel_specs(raw_root)
+    expected = tuple(enumerate(spec.physical_modalities))
+    if input_mode is not None and declared != expected:
+        raise ValueError(
+            f"input mode {resolved.value} requires exact channel declaration {expected}; "
+            f"found {declared}"
+        )
+    return resolved, spec
 
 
 def _channel_path(raw_root: Path, case_id: str, channel_index: int) -> Path:
@@ -145,16 +284,29 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         foreground_probability: float = 0.0,
         augmentation_config: AugmentationConfig | None = None,
         bilateral_asymmetry_channel: bool = False,
+        input_mode: InputMode | str | None = None,
     ) -> None:
         self.raw_root = validate_raw_root(raw_root)
         self.channel_specs = resolve_channel_specs(self.raw_root)
         self.physical_input_channels = len(self.channel_specs)
         self.bilateral_asymmetry_channel = bilateral_asymmetry_channel
-        self.derived_input_channels = int(bilateral_asymmetry_channel)
-        self.input_channels = resolve_input_channels(
+        self.input_mode, self.input_spec = _mode_for_dataset(
             self.raw_root,
+            input_mode=input_mode,
             bilateral_asymmetry_channel=bilateral_asymmetry_channel,
         )
+        if self.input_mode is None:
+            self.derived_input_channels = 0
+            self.input_channels = self.physical_input_channels
+        else:
+            assert self.input_spec is not None
+            self.derived_input_channels = self.input_spec.effective_input_channels - self.physical_input_channels
+            self.input_channels = self.input_spec.effective_input_channels
+        if input_mode is None and bilateral_asymmetry_channel:
+            self.input_channels = resolve_input_channels(
+                self.raw_root,
+                bilateral_asymmetry_channel=True,
+            )
         allowed_case_ids = load_fold_cases(fold, split)
         self.case_ids = case_ids if case_ids is not None else allowed_case_ids
         if not self.case_ids:
@@ -180,6 +332,37 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
             raise ValueError(f"case {case_id!r} is not available in this dataset instance")
         label = read_nifti(self.raw_root / "labelsTr" / f"{case_id}.nii.gz")
         images = read_case_images(self.raw_root, case_id)
+        if self.input_mode is InputMode.DWI_ADC_BILATERAL:
+            processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
+            for (channel_index, channel_name), modality_name in zip(self.channel_specs, ("DWI", "ADC")):
+                image = images[channel_index]
+                reason = _geometry_mismatch_reason(label, image)
+                if reason is not None:
+                    raise ValueError(
+                        f"case {case_id} channel {channel_index} ({channel_name}) geometry "
+                        f"mismatch against label: {reason}"
+                    )
+            prepared = prepare_dwi_adc_bilateral_images(
+                images[0], images[1], target_spacing_xy=self.target_spacing_xy
+            )
+            for (channel_index, channel_name), processed_image in zip(
+                self.channel_specs,
+                (prepared.resampled_dwi, prepared.resampled_adc),
+            ):
+                if processed_image.array.shape != processed_label.array.shape:
+                    raise ValueError(
+                        f"case {case_id} channel {channel_index} ({channel_name}) "
+                        "resampled shape mismatch against label: "
+                        f"image {processed_image.array.shape}, label {processed_label.array.shape}"
+                    )
+            aligned_label = apply_quasi_symmetric_alignment(
+                processed_label, prepared.alignment_estimate, is_segmentation=True
+            )
+            normalized_modalities = {
+                "DWI": prepared.normalized_dwi,
+                "ADC": prepared.normalized_adc,
+            }
+            return build_input_channels(normalized_modalities, self.input_mode), aligned_label.array
         if self.bilateral_asymmetry_channel:
             channel_index, channel_name = self.channel_specs[0]
             image = images[0]

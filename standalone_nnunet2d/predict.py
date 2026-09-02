@@ -16,8 +16,10 @@ from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.data.dataset import load_fold_cases, read_case_images, resolve_channel_specs
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_case,
+    prepare_dwi_adc_bilateral_case,
     restore_bilateral_asymmetry_prediction,
 )
+from standalone_nnunet2d.data.input_mode import InputMode, input_spec
 from standalone_nnunet2d.alignment_evidence import (
     OFFICIAL_ALIGNED,
     validate_checkpoint_alignment_metadata,
@@ -30,10 +32,11 @@ from standalone_nnunet2d.engine.predictor import (
     save_and_validate_prediction,
 )
 from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
+from standalone_nnunet2d.training.formal_dataset import resolve_input_mode
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 from standalone_nnunet2d.training.formal_checkpoint import (
-    checkpoint_bilateral_asymmetry_channel,
     checkpoint_input_channels,
+    checkpoint_input_mode,
 )
 
 
@@ -65,6 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--slice-batch-size", type=int, default=1)
     parser.add_argument("--allow-pending", action="store_true")
+    parser.add_argument("--input-mode", type=InputMode, choices=tuple(InputMode))
+    parser.add_argument("--bilateral-asymmetry-channel", action="store_true")
     return parser
 
 
@@ -116,7 +121,15 @@ def _source_path(raw_root: Path, case_id: str) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    parser = _parser()
+    arguments = parser.parse_args(argv)
+    try:
+        runtime_input_mode = resolve_input_mode(
+            arguments.input_mode,
+            bilateral_asymmetry_channel=arguments.bilateral_asymmetry_channel,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     _, checkpoint_metadata = _read_checkpoint(arguments.checkpoint)
     run_state, alignment_evidence = validate_checkpoint_alignment_metadata(
         checkpoint_metadata
@@ -124,19 +137,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     if run_state == DEFAULT_RUN_STATE and not arguments.allow_pending:
         raise ValueError("pending checkpoint requires explicit --allow-pending")
 
-    physical_channels = len(resolve_channel_specs(arguments.raw_root))
-    checkpoint_channels = checkpoint_input_channels(checkpoint_metadata)
-    bilateral_asymmetry_channel = checkpoint_bilateral_asymmetry_channel(checkpoint_metadata)
-    expected_physical_channels = 1 if bilateral_asymmetry_channel else checkpoint_channels
-    if physical_channels != expected_physical_channels:
-        if bilateral_asymmetry_channel:
-            raise ValueError(
-                "bilateral checkpoint requires physical dataset channels=1, "
-                f"found {physical_channels}"
-            )
+    resolved_input_mode = checkpoint_input_mode(checkpoint_metadata)
+    if runtime_input_mode is not None and runtime_input_mode is not resolved_input_mode:
+        raise ValueError(
+            f"runtime input_mode={runtime_input_mode.value} conflicts with "
+            f"checkpoint input_mode={resolved_input_mode.value}"
+        )
+    resolved_input_spec = input_spec(resolved_input_mode)
+    channel_specs = resolve_channel_specs(arguments.raw_root)
+    physical_channels = len(channel_specs)
+    checkpoint_channels = resolved_input_spec.effective_input_channels
+    if physical_channels != resolved_input_spec.physical_input_channels:
         raise ValueError(
             "checkpoint input_channels="
             f"{checkpoint_channels} does not match dataset channels={physical_channels}"
+        )
+    declared_modalities = tuple(modality for _, modality in channel_specs)
+    legacy_single_channel = channel_specs == ((0, "legacy_single_channel"),)
+    if (
+        declared_modalities != resolved_input_spec.physical_modalities
+        and not (legacy_single_channel and resolved_input_spec.physical_input_channels == 1)
+    ):
+        raise ValueError(
+            f"checkpoint input_mode={resolved_input_mode.value} requires physical modalities="
+            f"{resolved_input_spec.physical_modalities}, found {declared_modalities}"
         )
 
     device = torch.device(arguments.device)
@@ -148,7 +172,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     prediction_root.mkdir(parents=True, exist_ok=True)
     case_records: list[dict[str, Any]] = []
     for case_id in case_ids:
-        if bilateral_asymmetry_channel:
+        if resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
+            prepared = prepare_dwi_adc_bilateral_case(arguments.raw_root, case_id)
+            source = prepared.source_image
+            prediction = predict_volume(
+                model, prepared.model_volumes, device, mirror_axes=DEFAULT_MIRROR_AXES,
+                patch_size=DEFAULT_PATCH_SIZE, tile_step_size=DEFAULT_TILE_STEP_SIZE,
+                slice_batch_size=arguments.slice_batch_size, normalise_inputs=False,
+            )
+            prediction = restore_bilateral_asymmetry_prediction(prepared, prediction)
+            source_paths = [
+                str(arguments.raw_root.resolve() / "imagesTr" / f"{case_id}_{index:04d}.nii.gz")
+                for index, _ in channel_specs
+            ]
+        elif resolved_input_mode is InputMode.DWI_BILATERAL:
             prepared = prepare_bilateral_asymmetry_case(arguments.raw_root, case_id)
             source = prepared.source_image
             sources = prepared.model_volumes
@@ -198,9 +235,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "slice_batch_size": arguments.slice_batch_size,
             "output_space": "source",
             "output_dtype": "uint8",
+            "input_mode": resolved_input_mode.value,
             "physical_input_channels": physical_channels,
             "effective_model_input_channels": checkpoint_channels,
-            "bilateral_asymmetry_channel": bilateral_asymmetry_channel,
+            "bilateral_asymmetry_channel": resolved_input_mode is InputMode.DWI_BILATERAL,
         },
         "checkpoint": {
             "path": str(arguments.checkpoint.resolve()),

@@ -8,7 +8,10 @@ import pytest
 import torch
 from standalone_nnunet2d.data import dataset as dataset_module
 from standalone_nnunet2d.data.dataset import StrokeSliceDataset, resolve_input_channels
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, write_nifti
+from standalone_nnunet2d.data.preprocessing import z_score_normalize
+from standalone_nnunet2d.data.symmetry_alignment import bilateral_difference
 from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
 from standalone_nnunet2d.training.batch_sampler import PatchRequest
 
@@ -47,6 +50,334 @@ def _case_id(monkeypatch) -> str:
     return case_id
 
 
+def test_dwi_adc_bilateral_dataset_builds_four_ordered_channels(monkeypatch, tmp_path: Path) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _symmetric_dwi()
+    adc = 2.0 * dwi + np.indices(dwi.shape)[2].astype(np.float32) / 20.0
+    label = np.zeros_like(dwi, dtype=np.int16)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", _volume(dwi))
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(adc))
+    write_nifti(tmp_path / "labelsTr" / f"{case_id}.nii.gz", NiftiVolume(label, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION))
+
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+    channels, returned_label = dataset.load_case(case_id)
+
+    assert dataset.input_channels == 4
+    assert channels.shape == (4, 3, 33, 33)
+    assert returned_label.shape == (3, 33, 33)
+
+
+@pytest.mark.parametrize(
+    "declared_channels",
+    [
+        {"0": "ADC", "1": "DWI"},
+        {"0": "DWI", "1": "FLAIR"},
+        {"0": "DWI"},
+        {"0": "DWI", "1": "ADC", "2": "FLAIR"},
+    ],
+)
+def test_dwi_adc_bilateral_requires_exact_dwi_adc_declaration(
+    monkeypatch, tmp_path: Path, declared_channels: dict[str, str]
+) -> None:
+    case_id = _case_id(monkeypatch)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": declared_channels}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="exact channel declaration"):
+        StrokeSliceDataset(
+            tmp_path,
+            fold=0,
+            split="val",
+            case_ids=(case_id,),
+            input_mode=InputMode.DWI_ADC_BILATERAL,
+        )
+
+
+def test_dwi_adc_bilateral_stack_has_separate_normalization_and_signed_lr_diffs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _symmetric_dwi()
+    dwi[:, 16, 22] = 5.0
+    adc = 3.0 * _symmetric_dwi()
+    adc[:, 16, 22] = 11.0
+    label = np.zeros_like(dwi, dtype=np.int16)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    dwi_volume = _volume(dwi)
+    adc_volume = _volume(adc)
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", dwi_volume)
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", adc_volume)
+    write_nifti(tmp_path / "labelsTr" / f"{case_id}.nii.gz", NiftiVolume(label, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION))
+
+    monkeypatch.setattr(dataset_module, "estimate_quasi_symmetric_alignment", lambda volume: None)
+    monkeypatch.setattr(
+        dataset_module,
+        "apply_quasi_symmetric_alignment",
+        lambda volume, estimate, *, is_segmentation: volume,
+    )
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+
+    channels, _ = dataset.load_case(case_id)
+    normalized_dwi = z_score_normalize(dwi)
+    normalized_adc = z_score_normalize(adc)
+
+    np.testing.assert_allclose(channels[0], normalized_dwi, atol=1e-6)
+    np.testing.assert_allclose(channels[1], normalized_adc, atol=1e-6)
+    np.testing.assert_allclose(
+        channels[2], bilateral_difference(NiftiVolume(normalized_dwi, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION), mode="signed"),
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        channels[3], bilateral_difference(NiftiVolume(normalized_adc, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION), mode="signed"),
+        atol=1e-6,
+    )
+    assert channels[2, 1, 16, 22] == pytest.approx(-channels[2, 1, 16, 10])
+    assert channels[3, 1, 16, 22] == pytest.approx(-channels[3, 1, 16, 10])
+    assert channels[2, 1, 16, 22] != 0.0
+    assert channels[3, 1, 16, 22] != 0.0
+
+
+def test_dwi_adc_bilateral_symmetric_modalities_have_zero_signed_diffs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _symmetric_dwi()
+    adc = 7.0 * _symmetric_dwi() + 3.0
+    label = np.zeros_like(dwi, dtype=np.int16)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", _volume(dwi))
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(adc))
+    write_nifti(
+        tmp_path / "labelsTr" / f"{case_id}.nii.gz",
+        NiftiVolume(label, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION),
+    )
+    monkeypatch.setattr(dataset_module, "estimate_quasi_symmetric_alignment", lambda volume: None)
+    monkeypatch.setattr(
+        dataset_module,
+        "apply_quasi_symmetric_alignment",
+        lambda volume, estimate, *, is_segmentation: volume,
+    )
+
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+    channels, _ = dataset.load_case(case_id)
+
+    assert channels.shape == (4, 3, 33, 33)
+    np.testing.assert_allclose(channels[2], 0.0, atol=1e-7)
+    np.testing.assert_allclose(channels[3], 0.0, atol=1e-7)
+
+
+def test_dwi_adc_bilateral_rejects_adc_geometry_mismatch_against_label(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _volume(_symmetric_dwi())
+    adc = NiftiVolume(
+        _symmetric_dwi(),
+        (2.0, 1.0, 4.0),
+        (0.0, 0.0, 0.0),
+        IDENTITY_DIRECTION,
+    )
+    label = NiftiVolume(
+        np.zeros_like(dwi.array, dtype=np.int16),
+        (1.0, 1.0, 4.0),
+        (0.0, 0.0, 0.0),
+        IDENTITY_DIRECTION,
+    )
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", dwi)
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", adc)
+    write_nifti(tmp_path / "labelsTr" / f"{case_id}.nii.gz", label)
+
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+
+    with pytest.raises(ValueError, match=f"case {case_id}.*channel 1.*spacing"):
+        dataset.load_case(case_id)
+
+
+def test_dwi_adc_bilateral_estimates_from_dwi_once_and_shares_estimate(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _symmetric_dwi()
+    adc = 2.0 * _symmetric_dwi() + 1.0
+    label = np.zeros_like(dwi, dtype=np.int16)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", _volume(dwi))
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(adc))
+    write_nifti(
+        tmp_path / "labelsTr" / f"{case_id}.nii.gz",
+        NiftiVolume(label, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION),
+    )
+
+    estimate = object()
+    estimated_inputs: list[NiftiVolume] = []
+    applications: list[tuple[NiftiVolume, object, bool]] = []
+
+    def estimate_from(volume: NiftiVolume) -> object:
+        estimated_inputs.append(volume)
+        return estimate
+
+    def apply_shared(volume: NiftiVolume, applied_estimate: object, *, is_segmentation: bool) -> NiftiVolume:
+        applications.append((volume, applied_estimate, is_segmentation))
+        return volume
+
+    monkeypatch.setattr(dataset_module, "estimate_quasi_symmetric_alignment", estimate_from)
+    monkeypatch.setattr(dataset_module, "apply_quasi_symmetric_alignment", apply_shared)
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+
+    dataset.load_case(case_id)
+
+    assert len(estimated_inputs) == 1
+    np.testing.assert_array_equal(estimated_inputs[0].array, dwi)
+    assert len(applications) == 3
+    np.testing.assert_array_equal(applications[0][0].array, dwi)
+    np.testing.assert_array_equal(applications[1][0].array, adc)
+    np.testing.assert_array_equal(applications[2][0].array, label)
+    assert [item[1] for item in applications] == [estimate, estimate, estimate]
+    assert [item[2] for item in applications] == [False, False, True]
+
+
+def test_dwi_adc_bilateral_input_and_estimate_are_invariant_to_label_content(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    dwi = _symmetric_dwi()
+    dwi[:, 16, 22] = 4.0
+    adc = 2.0 * _symmetric_dwi()
+    adc[:, 16, 22] = 8.0
+    first_label = np.zeros_like(dwi, dtype=np.int16)
+    second_label = first_label.copy()
+    second_label[:, 10, 10] = 1
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}), encoding="utf-8"
+    )
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0000.nii.gz", _volume(dwi))
+    write_nifti(tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz", _volume(adc))
+    label_path = tmp_path / "labelsTr" / f"{case_id}.nii.gz"
+    write_nifti(label_path, NiftiVolume(first_label, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION))
+
+    real_read = dataset_module.read_nifti
+    active_label = [first_label]
+    estimates: list[object] = []
+    real_estimate = dataset_module.estimate_quasi_symmetric_alignment
+
+    def read_with_active_label(path: Path) -> NiftiVolume:
+        if "labelsTr" in str(path):
+            return NiftiVolume(active_label[0], (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION)
+        return real_read(path)
+
+    def estimate_and_record(volume: NiftiVolume) -> object:
+        estimate = real_estimate(volume)
+        estimates.append(estimate)
+        return estimate
+
+    monkeypatch.setattr(dataset_module, "read_nifti", read_with_active_label)
+    monkeypatch.setattr(dataset_module, "estimate_quasi_symmetric_alignment", estimate_and_record)
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_ADC_BILATERAL,
+    )
+
+    first_channels, _ = dataset.load_case(case_id)
+    active_label[0] = second_label
+    second_channels, second_aligned_label = dataset.load_case(case_id)
+
+    np.testing.assert_allclose(first_channels, second_channels, atol=1e-6)
+    assert estimates[0] == estimates[1]
+    assert not np.array_equal(first_label, second_aligned_label)
+    assert label_path.is_file()
+
+
+def test_legacy_dwi_bilateral_dataset_remains_c2_absolute_and_nonnegative(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    image = _symmetric_dwi()
+    image[:, 16, 22] = 5.0
+    label = np.zeros_like(image, dtype=np.int16)
+    _write_single_dwi_case(tmp_path, case_id, image, label)
+
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        bilateral_asymmetry_channel=True,
+    )
+    channels, _ = dataset.load_case(case_id)
+
+    assert dataset.input_channels == 2
+    assert channels.shape == (2, 3, 33, 33)
+    assert np.all(channels[1] >= 0.0)
+    assert channels[1, :, 16, 22].min() > 0.0
+    np.testing.assert_allclose(channels[1, :, 16, 22], channels[1, :, 16, 10])
+
+
 def test_default_opt_in_off_preserves_single_channel_case_loading(monkeypatch, tmp_path: Path) -> None:
     case_id = _case_id(monkeypatch)
     image = _symmetric_dwi()
@@ -70,6 +401,52 @@ def test_default_opt_in_off_preserves_single_channel_case_loading(monkeypatch, t
     assert default_image.shape == (1, 3, 33, 33)
     np.testing.assert_array_equal(default_image, explicit_image)
     np.testing.assert_array_equal(default_label, explicit_label)
+
+
+def test_default_three_physical_channels_keep_reported_and_returned_c3(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    (tmp_path / "imagesTr").mkdir(parents=True)
+    (tmp_path / "labelsTr").mkdir()
+    (tmp_path / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC", "2": "FLAIR"}}),
+        encoding="utf-8",
+    )
+    shape = (3, 33, 33)
+    for channel_index, offset in enumerate((0.0, 10.0, 20.0)):
+        write_nifti(
+            tmp_path / "imagesTr" / f"{case_id}_{channel_index:04d}.nii.gz",
+            _volume(np.full(shape, offset, dtype=np.float32) + np.indices(shape)[2]),
+        )
+    write_nifti(
+        tmp_path / "labelsTr" / f"{case_id}.nii.gz",
+        NiftiVolume(
+            np.zeros(shape, dtype=np.int16),
+            (1.0, 1.0, 4.0),
+            (0.0, 0.0, 0.0),
+            IDENTITY_DIRECTION,
+        ),
+    )
+
+    dataset = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        bilateral_asymmetry_channel=False,
+    )
+    channels, returned_label = dataset.load_case(case_id)
+    image_tensor, label_tensor = dataset[0]
+
+    assert dataset.physical_input_channels == 3
+    assert dataset.derived_input_channels == 0
+    assert dataset.input_channels == 3
+    assert channels.shape == (3, 3, 33, 33)
+    assert returned_label.shape == (3, 33, 33)
+    assert tuple(image_tensor.shape) == (3, 33, 33)
+    assert tuple(label_tensor.shape) == (33, 33)
 
 
 def test_derived_channel_is_built_from_normalized_aligned_dwi_in_required_order(monkeypatch, tmp_path: Path) -> None:

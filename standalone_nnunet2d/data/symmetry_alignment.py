@@ -9,7 +9,7 @@ never used to estimate that transform.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import SimpleITK as sitk
@@ -280,6 +280,32 @@ def _physical_left_right_mirror(slice_yx: np.ndarray, direction: tuple[float, ..
     return np.flip(slice_yx, axis=1 if physical_x_index_axis == 0 else 0)
 
 
+def physical_lr_mirror(volume: "NiftiVolume") -> np.ndarray:
+    """Return the anatomical left/right mirror on every axial slice."""
+    _direction_matrix(volume)
+    image = np.asarray(volume.array, dtype=np.float32)
+    if image.ndim != 3:
+        raise ValueError("volume must have shape (Z, Y, X)")
+    return np.stack(
+        [_physical_left_right_mirror(slice_yx, volume.direction) for slice_yx in image],
+        axis=0,
+    )
+
+
+def bilateral_difference(
+    volume: "NiftiVolume", *, mode: Literal["absolute", "signed"] = "absolute"
+) -> np.ndarray:
+    """Build an anatomical LR difference from an already normalized volume."""
+    image = np.asarray(volume.array, dtype=np.float32)
+    mirrored = physical_lr_mirror(volume)
+    difference = image - mirrored
+    if mode == "signed":
+        return difference
+    if mode == "absolute":
+        return np.abs(difference)
+    raise ValueError(f"unsupported bilateral difference mode: {mode!r}")
+
+
 def build_bilateral_asymmetry_channels(aligned_normalized_image: "NiftiVolume") -> np.ndarray:
     """Stack aligned normalized DWI with its anatomical LR absolute difference.
 
@@ -287,15 +313,13 @@ def build_bilateral_asymmetry_channels(aligned_normalized_image: "NiftiVolume") 
     DWI normalization.  This function intentionally does not normalize the
     derived difference channel a second time.
     """
-    _direction_matrix(aligned_normalized_image)
     dwi = np.asarray(aligned_normalized_image.array, dtype=np.float32)
     if dwi.ndim != 3:
         raise ValueError("aligned normalized DWI must have shape (Z, Y, X)")
-    mirrored = np.stack(
-        [_physical_left_right_mirror(slice_yx, aligned_normalized_image.direction) for slice_yx in dwi],
+    return np.stack(
+        (dwi, bilateral_difference(aligned_normalized_image, mode="absolute")),
         axis=0,
     )
-    return np.stack((dwi, np.abs(dwi - mirrored)), axis=0)
 
 
 def build_alignment_qc(

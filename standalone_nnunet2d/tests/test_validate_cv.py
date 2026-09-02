@@ -305,3 +305,147 @@ def test_aggregate_oof_treats_csv_fold_report_as_pending(tmp_path: Path) -> None
 
     assert summary["run_state"] == "official_alignment_pending"
     assert "alignment_evidence" not in summary
+
+
+def test_validate_cv_rejects_wrong_raw_physical_channels_before_model_load(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import standalone_nnunet2d.validate_cv as validate_cv
+
+    checkpoint = tmp_path / "tiny_c4_checkpoint.pt"
+    checkpoint.touch()
+    metadata = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "input_channels": 4,
+        "resolved_config": {
+            "input_mode": "dwi_adc_bilateral",
+            "physical_input_channels": 2,
+            "effective_model_input_channels": 4,
+        },
+    }
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    (raw_root / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "ADC", "1": "DWI", "2": "FLAIR"}}),
+        encoding="utf-8",
+    )
+    load_model_called = False
+
+    monkeypatch.setattr(validate_cv, "_load_checkpoint_metadata", lambda path: metadata)
+
+    def fail_load_model(*args, **kwargs):
+        nonlocal load_model_called
+        load_model_called = True
+        raise AssertionError("_load_model must not run for invalid raw channel metadata")
+
+    monkeypatch.setattr(validate_cv, "_load_model", fail_load_model)
+
+    with pytest.raises(ValueError, match=r"channel declaration.*must exactly match"):
+        validate_cv.main(
+            [
+                "fold",
+                "--checkpoint",
+                str(checkpoint),
+                "--raw-root",
+                str(raw_root),
+                "--fold",
+                "0",
+                "--output-root",
+                str(tmp_path / "output"),
+                "--allow-pending",
+                "--input-mode",
+                "dwi_adc_bilateral",
+            ]
+        )
+
+    assert not load_model_called
+
+
+def test_validate_cv_forwards_dwi_adc_bilateral_and_rejects_runtime_mismatch(
+    monkeypatch, tmp_path
+):
+    import standalone_nnunet2d.validate_cv as validate_cv
+
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.touch()
+    metadata = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "input_channels": 4,
+        "resolved_config": {
+            "input_mode": "dwi_adc_bilateral",
+            "physical_input_channels": 2,
+            "effective_model_input_channels": 4,
+        },
+    }
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    (raw_root / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}),
+        encoding="utf-8",
+    )
+    forwarded = {}
+    load_model_called = []
+
+    monkeypatch.setattr(validate_cv, "_load_checkpoint_metadata", lambda *args, **kwargs: metadata)
+
+    def fake_validate_fold(*args, **kwargs):
+        forwarded.update(kwargs)
+        return None
+
+    def fake_load_model(*args, **kwargs):
+        load_model_called.append(True)
+        return object(), metadata
+
+    monkeypatch.setattr(validate_cv, "validate_fold", fake_validate_fold)
+    monkeypatch.setattr(
+        validate_cv,
+        "_load_model",
+        fake_load_model,
+    )
+
+    validate_cv.main(
+        [
+            "fold",
+                "--checkpoint",
+                str(checkpoint),
+                "--raw-root",
+                str(raw_root),
+                "--fold",
+                "0",
+                "--output-root",
+                str(tmp_path / "output"),
+                "--allow-pending",
+                "--input-mode",
+                "dwi_adc_bilateral",
+        ]
+    )
+    assert metadata["input_channels"] == 4
+    assert metadata["resolved_config"] == {
+        "input_mode": "dwi_adc_bilateral",
+        "physical_input_channels": 2,
+        "effective_model_input_channels": 4,
+    }
+    assert forwarded["input_mode"] == validate_cv.InputMode.DWI_ADC_BILATERAL
+    assert "bilateral_asymmetry_channel" not in forwarded
+    load_model_called.clear()
+
+    with pytest.raises(ValueError):
+        validate_cv.main(
+            [
+                "fold",
+                "--checkpoint",
+                str(checkpoint),
+                "--raw-root",
+                str(raw_root),
+                "--fold",
+                "0",
+                "--output-root",
+                str(tmp_path / "output"),
+                "--allow-pending",
+                "--input-mode",
+                "dwi_bilateral",
+            ]
+        )
+    assert not load_model_called

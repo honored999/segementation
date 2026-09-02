@@ -10,9 +10,30 @@ import torch
 from torch import Tensor
 
 from standalone_nnunet2d.data.dataset import SplitName, StrokeSliceDataset
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.training.batch_sampler import PatchRequest
 from standalone_nnunet2d.training.official_augmentation import apply_official_2d_batchgeneratorsv2
 from standalone_nnunet2d.training.patch_sampler import crop_or_pad, sample_patch_center
+
+
+def resolve_input_mode(
+    input_mode: InputMode | str | None,
+    *,
+    bilateral_asymmetry_channel: bool = False,
+) -> InputMode | None:
+    """Resolve the explicit mode and retain the legacy flag as a compatibility alias."""
+    if input_mode is None:
+        return InputMode.DWI_BILATERAL if bilateral_asymmetry_channel else None
+    try:
+        resolved = input_mode if isinstance(input_mode, InputMode) else InputMode(input_mode)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"unsupported input mode: {input_mode!r}") from error
+    if bilateral_asymmetry_channel and resolved is not InputMode.DWI_BILATERAL:
+        raise ValueError(
+            "bilateral_asymmetry_channel conflicts with input_mode; "
+            "use input_mode='dwi_bilateral'"
+        )
+    return resolved
 
 
 class FormalPatchDataset(StrokeSliceDataset):
@@ -31,6 +52,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         rng: np.random.Generator | None = None,
         augment: bool = True,
         patch_request: PatchRequest | None = None,
+        input_mode: InputMode | str | None = None,
         bilateral_asymmetry_channel: bool = False,
     ) -> None:
         if len(patch_size) != 2 or any(size <= 0 for size in patch_size):
@@ -44,6 +66,12 @@ class FormalPatchDataset(StrokeSliceDataset):
         if patch_request is not None and case_ids is None:
             case_ids = (patch_request.case_id,)
         self.patch_request = patch_request
+        resolved_input_mode = resolve_input_mode(
+            input_mode,
+            bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+        )
+        legacy_bilateral = resolved_input_mode is InputMode.DWI_BILATERAL
+        has_dataset_metadata = (Path(raw_root).resolve() / "dataset.json").is_file()
         super().__init__(
             raw_root,
             fold=fold,
@@ -51,7 +79,12 @@ class FormalPatchDataset(StrokeSliceDataset):
             case_ids=case_ids,
             rng=self.patch_rng,
             foreground_probability=0.0,
-            bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+            bilateral_asymmetry_channel=legacy_bilateral,
+            input_mode=(
+                None
+                if legacy_bilateral and not has_dataset_metadata
+                else resolved_input_mode
+            ),
         )
         self.use_mask_for_norm = tuple(use_mask_for_norm)
         if len(self.use_mask_for_norm) == 1:

@@ -17,8 +17,10 @@ from standalone_nnunet2d.data.dataset import (
     read_case_images,
     validate_raw_root,
 )
+from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_case,
+    prepare_dwi_adc_bilateral_case,
     restore_bilateral_asymmetry_prediction,
 )
 from standalone_nnunet2d.data.nifti_io import read_nifti
@@ -28,6 +30,7 @@ from standalone_nnunet2d.metrics.segmentation_metrics import (
     case_metric_record,
 )
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
+from standalone_nnunet2d.training.formal_dataset import resolve_input_mode
 
 
 CASE_METRIC_FIELDS = ("case_id", "TP", "FP", "FN", "TN", "Dice", "IoU")
@@ -94,6 +97,7 @@ def validate_fold(
     device: torch.device,
     run_state: str = DEFAULT_RUN_STATE,
     alignment_evidence: dict[str, Any] | None = None,
+    input_mode: InputMode | str | None = None,
     bilateral_asymmetry_channel: bool = False,
 ) -> dict[str, Any]:
     """Validate every held-out case with source-space full-volume inference.
@@ -110,6 +114,10 @@ def validate_fold(
             }
         )
     )
+    resolved_input_mode = resolve_input_mode(
+        input_mode,
+        bilateral_asymmetry_channel=bilateral_asymmetry_channel,
+    )
     root = validate_raw_root(raw_root)
     case_ids = load_fold_cases(fold, "val")
     destination = output_root.resolve()
@@ -122,7 +130,17 @@ def validate_fold(
         try:
             _, label_path = _case_paths(root, case_id)
             label = read_nifti(label_path)
-            if bilateral_asymmetry_channel:
+            if resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
+                prepared = prepare_dwi_adc_bilateral_case(root, case_id)
+                image = prepared.source_image
+                reason = _geometry_mismatch_reason(label, image)
+                if reason is not None:
+                    raise ValueError(f"case {case_id} channel 0 geometry mismatch against label: {reason}")
+                prediction = predict_volume(
+                    model, prepared.model_volumes, device, normalise_inputs=False
+                )
+                prediction = restore_bilateral_asymmetry_prediction(prepared, prediction)
+            elif resolved_input_mode is InputMode.DWI_BILATERAL:
                 prepared = prepare_bilateral_asymmetry_case(root, case_id)
                 image = prepared.source_image
                 reason = _geometry_mismatch_reason(label, image)

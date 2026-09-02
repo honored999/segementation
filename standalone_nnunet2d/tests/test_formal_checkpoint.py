@@ -13,9 +13,12 @@ from standalone_nnunet2d.engine.checkpoint import PROJECT_OUTPUTS_DIRECTORY
 from standalone_nnunet2d.alignment_evidence import build_alignment_evidence
 from standalone_nnunet2d.training.formal_checkpoint import (
     FormalTrainerState,
+    checkpoint_input_channels,
+    checkpoint_input_mode,
     load_formal_checkpoint,
     save_formal_checkpoint,
 )
+from standalone_nnunet2d.data.input_mode import InputMode, input_spec
 from standalone_nnunet2d.training.official_config import PolyLRScheduler
 
 
@@ -161,6 +164,76 @@ def test_formal_checkpoint_records_input_channels_in_metadata() -> None:
 
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert payload["metadata"]["input_channels"] == 3
+
+
+def test_checkpoint_metadata_resolves_dwi_adc_bilateral_and_legacy_bilateral_modes() -> None:
+    c4_formal_config = {
+        "input_mode": "dwi_adc_bilateral",
+        "input_channels": 4,
+        "physical_input_channels": 2,
+        "effective_model_input_channels": 4,
+        "run_state": "official_alignment_pending",
+    }
+    c4_metadata = {
+        "input_channels": 4,
+        "resolved_config": c4_formal_config,
+    }
+
+    resolved_mode = checkpoint_input_mode(c4_metadata)
+    assert resolved_mode is InputMode.DWI_ADC_BILATERAL
+    resolved_spec = input_spec(resolved_mode)
+    assert resolved_spec.physical_input_channels == 2
+    assert resolved_spec.effective_input_channels == 4
+
+    legacy_metadata = {
+        "input_channels": 2,
+        "resolved_config": {
+            "bilateral_asymmetry_channel": True,
+            "physical_input_channels": 1,
+            "effective_model_input_channels": 2,
+        },
+    }
+    assert checkpoint_input_mode(legacy_metadata) is InputMode.DWI_BILATERAL
+
+
+@pytest.mark.parametrize(
+    "legacy_metadata",
+    [
+        {"bilateral_asymmetry_channel": True},
+        {"resolved_config": {"bilateral_asymmetry_channel": True}},
+    ],
+)
+def test_legacy_bilateral_metadata_without_counts_resolves_to_effective_two_channels(
+    legacy_metadata: dict[str, object],
+) -> None:
+    assert checkpoint_input_mode(legacy_metadata) is InputMode.DWI_BILATERAL
+    assert checkpoint_input_channels(legacy_metadata) == 2
+
+
+@pytest.mark.parametrize(
+    ("conflicting_field", "conflicting_value"),
+    [
+        ("input_channels", 1),
+        ("physical_input_channels", 2),
+        ("effective_model_input_channels", 1),
+    ],
+)
+def test_legacy_bilateral_metadata_rejects_explicit_contract_conflicts(
+    conflicting_field: str,
+    conflicting_value: int,
+) -> None:
+    metadata = {
+        "bilateral_asymmetry_channel": True,
+        conflicting_field: conflicting_value,
+    }
+
+    with pytest.raises(ValueError):
+        checkpoint_input_mode(metadata)
+
+
+def test_modern_bilateral_metadata_without_counts_remains_strict() -> None:
+    with pytest.raises(ValueError, match="input_channels=2"):
+        checkpoint_input_mode({"input_mode": "dwi_bilateral"})
 
 
 def test_formal_checkpoint_rejects_official_aligned_local_state() -> None:

@@ -258,6 +258,73 @@ def test_capture_standalone_inference_writes_source_derived_artifact(
     assert manifest["run_state"] == "official_alignment_pending"
 
 
+def test_capture_standalone_inference_uses_legacy_checkpoint_bilateral_input(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _write_fixture(tmp_path, oracle_mode="inference")
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint handled by mocked project loader")
+    model_input = object()
+    calls: dict[str, object] = {}
+    expected_mask = np.zeros((2, 4, 4), dtype=np.uint8)
+
+    def fake_load_model(path: Path, device: torch.device) -> tuple[object, dict[str, object]]:
+        return object(), {
+            "run_state": "official_alignment_pending",
+            "fold": 0,
+            "source_sha256": "a" * 64,
+            "bilateral_asymmetry_channel": True,
+        }
+
+    def fake_prepare(image: NiftiVolume) -> SimpleNamespace:
+        calls["prepared_source"] = image
+        return SimpleNamespace(model_volumes=model_input)
+
+    def fake_predict_volume(
+        model: object,
+        image: object,
+        device: torch.device,
+        *,
+        slice_batch_size: int,
+        normalise_inputs: bool = True,
+    ) -> np.ndarray:
+        calls["model_input"] = image
+        calls["normalise_inputs"] = normalise_inputs
+        return expected_mask
+
+    def fake_restore(prepared: SimpleNamespace, prediction: np.ndarray) -> np.ndarray:
+        calls["restored_from"] = prepared
+        return prediction
+
+    monkeypatch.setattr(standalone_capture, "_load_model", fake_load_model, raising=False)
+    monkeypatch.setattr(
+        standalone_capture,
+        "prepare_bilateral_asymmetry_volume",
+        fake_prepare,
+        raising=False,
+    )
+    monkeypatch.setattr(standalone_capture, "predict_volume", fake_predict_volume, raising=False)
+    monkeypatch.setattr(
+        standalone_capture,
+        "restore_bilateral_asymmetry_prediction",
+        fake_restore,
+        raising=False,
+    )
+
+    standalone_capture.capture_standalone_inference(
+        oracle_root=fixture["oracle_root"],
+        raw_root=fixture["raw_root"],
+        checkpoint=checkpoint,
+        output_root=fixture["output_root"],
+        plans_path=fixture["plans_path"],
+        device="cpu",
+    )
+
+    assert calls["model_input"] is model_input
+    assert calls["normalise_inputs"] is False
+    assert "restored_from" in calls
+
+
 @pytest.mark.parametrize(
     "checkpoint_metadata",
     [
