@@ -127,9 +127,11 @@ def checkpoint_input_channels(metadata: Mapping[str, Any]) -> int:
             "checkpoint bilateral_asymmetry_channel must be a boolean, "
             f"got {legacy_flag!r}"
         )
+    consistent_value("physical_input_channels")
+    effective_channels = consistent_value("effective_model_input_channels")
     value = consistent_value("input_channels")
     if value is None:
-        value = consistent_value("effective_model_input_channels")
+        value = effective_channels
     if value is None and legacy_flag is True and input_mode is None:
         value = 2
     if value is None:

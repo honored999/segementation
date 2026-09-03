@@ -269,6 +269,87 @@ def test_checkpoint_input_mode_rejects_non_integer_channel_metadata(
         checkpoint_input_mode(metadata)
 
 
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("physical_input_channels", 2.0),
+        ("physical_input_channels", True),
+        ("effective_model_input_channels", 4.0),
+        ("effective_model_input_channels", True),
+    ],
+)
+def test_checkpoint_input_channels_rejects_non_integer_contract_metadata(
+    field: str, bad_value: object
+) -> None:
+    metadata = {
+        "input_mode": "dwi_adc_bilateral",
+        "input_channels": 4,
+        "physical_input_channels": 2,
+        "effective_model_input_channels": 4,
+        field: bad_value,
+    }
+
+    with pytest.raises(ValueError, match=field):
+        checkpoint_input_channels(metadata)
+
+
+@pytest.mark.parametrize(
+    ("field", "metadata_value", "resolved_value"),
+    [
+        ("physical_input_channels", 2, 1),
+        ("effective_model_input_channels", 4, 2),
+    ],
+)
+def test_checkpoint_input_channels_rejects_cross_source_contract_conflicts(
+    field: str, metadata_value: int, resolved_value: int
+) -> None:
+    metadata = {
+        "input_mode": "dwi_adc_bilateral",
+        "input_channels": 4,
+        "physical_input_channels": metadata_value if field == "physical_input_channels" else 2,
+        "effective_model_input_channels": metadata_value if field == "effective_model_input_channels" else 4,
+        "resolved_config": {
+            "input_mode": "dwi_adc_bilateral",
+            "input_channels": 4,
+            "physical_input_channels": resolved_value if field == "physical_input_channels" else 2,
+            "effective_model_input_channels": resolved_value if field == "effective_model_input_channels" else 4,
+        },
+    }
+
+    with pytest.raises(ValueError, match=f"{field} declarations conflict"):
+        checkpoint_input_channels(metadata)
+
+
+@pytest.mark.parametrize(
+    ("input_mode", "input_channels", "physical_channels", "effective_channels"),
+    [
+        ("dwi", 1, 1, 1),
+        ("dwi_adc", 2, 2, 2),
+        ("dwi_bilateral", 2, 1, 2),
+        ("dwi_adc_bilateral", 4, 2, 4),
+    ],
+)
+def test_checkpoint_input_channels_accepts_consistent_integer_contract_metadata(
+    input_mode: str,
+    input_channels: int,
+    physical_channels: int,
+    effective_channels: int,
+) -> None:
+    declaration = {
+        "input_mode": input_mode,
+        "input_channels": input_channels,
+        "physical_input_channels": physical_channels,
+        "effective_model_input_channels": effective_channels,
+    }
+    metadata = {
+        **declaration,
+        "resolved_config": dict(declaration),
+        "config": dict(declaration),
+    }
+
+    assert checkpoint_input_channels(metadata) == input_channels
+
+
 def test_formal_checkpoint_rejects_official_aligned_local_state() -> None:
     model = nn.Conv2d(1, 2, 1)
     optimizer = torch.optim.SGD(model.parameters(), .01)

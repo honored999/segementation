@@ -493,3 +493,30 @@ def test_prediction_cli_rejects_runtime_checkpoint_mode_mismatch_before_model_lo
         )
 
     assert load_attempts == []
+
+
+def test_load_model_rejects_malformed_effective_channels_before_model_construction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint = tmp_path / "malformed-effective-channels.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": {},
+            "metadata": {
+                "input_mode": "dwi_adc_bilateral",
+                "input_channels": 4,
+                "physical_input_channels": 2,
+                "effective_model_input_channels": 4.0,
+            },
+        },
+        checkpoint,
+    )
+
+    def fail_if_constructed(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("PlainConvUNet2D must not be constructed for malformed metadata")
+
+    monkeypatch.setattr(predict_module, "PlainConvUNet2D", fail_if_constructed)
+
+    with pytest.raises(ValueError, match="effective_model_input_channels"):
+        predict_module._load_model(checkpoint, torch.device("cpu"))
