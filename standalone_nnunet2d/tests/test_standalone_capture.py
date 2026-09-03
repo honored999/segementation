@@ -325,6 +325,150 @@ def test_capture_standalone_inference_uses_legacy_checkpoint_bilateral_input(
     assert "restored_from" in calls
 
 
+def test_capture_standalone_inference_routes_dwi_adc_bilateral_through_c4_restore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from standalone_nnunet2d.data import inference_preprocessing
+
+    fixture = _write_fixture(tmp_path, oracle_mode="inference")
+    case_id = str(fixture["case_id"])
+    shape = (3, 33, 33)
+    _, y, x = np.indices(shape)
+    dwi = (((x - 16) / 10.0) ** 2 + ((y - 16) / 5.0) ** 2 <= 1.0).astype(np.float32)
+    dwi[:, 16, 22] = 5.0
+    adc = (2.0 * dwi + x.astype(np.float32) / 20.0).astype(np.float32)
+    label = np.zeros(shape, dtype=np.int16)
+    label[:, 3, 4] = 1
+    source_volume = NiftiVolume(
+        dwi,
+        spacing_xyz=(0.5, 0.75, 3.0),
+        origin_xyz=(1.0, 2.0, 3.0),
+    )
+    adc_volume = NiftiVolume(
+        adc,
+        spacing_xyz=source_volume.spacing_xyz,
+        origin_xyz=source_volume.origin_xyz,
+        direction=source_volume.direction,
+    )
+    write_nifti(
+        fixture["raw_root"] / "imagesTr" / f"{case_id}_0000.nii.gz", source_volume
+    )
+    write_nifti(
+        fixture["raw_root"] / "imagesTr" / f"{case_id}_0001.nii.gz", adc_volume
+    )
+    write_nifti(
+        fixture["raw_root"] / "labelsTr" / f"{case_id}.nii.gz",
+        NiftiVolume(
+            label,
+            spacing_xyz=source_volume.spacing_xyz,
+            origin_xyz=source_volume.origin_xyz,
+            direction=source_volume.direction,
+        ),
+    )
+    (fixture["raw_root"] / "dataset.json").write_text(
+        json.dumps({"channel_names": {"0": "DWI", "1": "ADC"}}),
+        encoding="utf-8",
+    )
+
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint handled by mocked project loader")
+    metadata = {
+        "run_state": "official_alignment_pending",
+        "fold": 0,
+        "source_sha256": "a" * 64,
+        "input_channels": 4,
+        "resolved_config": {
+            "input_mode": "dwi_adc_bilateral",
+            "input_channels": 4,
+            "physical_input_channels": 2,
+            "effective_model_input_channels": 4,
+        },
+    }
+    calls: dict[str, object] = {}
+    real_prepare = inference_preprocessing.prepare_dwi_adc_bilateral_case
+    real_restore = inference_preprocessing.restore_bilateral_asymmetry_prediction
+
+    def fake_load_model(path: Path, device: torch.device) -> tuple[object, dict[str, object]]:
+        return object(), metadata
+
+    def tracked_prepare(raw_root: Path, requested_case_id: str, **kwargs: object) -> object:
+        calls["prepare_args"] = (raw_root, requested_case_id)
+        prepared = real_prepare(raw_root, requested_case_id, **kwargs)
+        calls["prepared"] = prepared
+        return prepared
+
+    def fake_predict_volume(
+        _model: object,
+        inputs: object,
+        _device: torch.device,
+        **kwargs: object,
+    ) -> np.ndarray:
+        calls["inputs"] = inputs
+        calls["normalise_inputs"] = kwargs.get("normalise_inputs")
+        if isinstance(inputs, tuple):
+            calls["input_arrays"] = np.stack([volume.array for volume in inputs], axis=0)
+            return np.zeros(inputs[0].array.shape, dtype=np.uint8)
+        assert isinstance(inputs, NiftiVolume)
+        return np.zeros(inputs.array.shape, dtype=np.uint8)
+
+    def tracked_restore(prepared: object, prediction: np.ndarray) -> np.ndarray:
+        calls["restore_input"] = prediction.copy()
+        restored = real_restore(prepared, prediction)
+        calls["restored"] = restored
+        return restored
+
+    monkeypatch.setattr(standalone_capture, "_load_model", fake_load_model)
+    monkeypatch.setattr(
+        standalone_capture,
+        "prepare_dwi_adc_bilateral_case",
+        tracked_prepare,
+        raising=False,
+    )
+    monkeypatch.setattr(standalone_capture, "predict_volume", fake_predict_volume)
+    monkeypatch.setattr(
+        standalone_capture,
+        "restore_bilateral_asymmetry_prediction",
+        tracked_restore,
+    )
+
+    destination = standalone_capture.capture_standalone_inference(
+        oracle_root=fixture["oracle_root"],
+        raw_root=fixture["raw_root"],
+        checkpoint=checkpoint,
+        output_root=fixture["output_root"],
+        plans_path=fixture["plans_path"],
+        device="cpu",
+        case_id=case_id,
+    )
+
+    assert calls["prepare_args"] == (fixture["raw_root"].resolve(), case_id)
+    model_inputs = calls["inputs"]
+    assert isinstance(model_inputs, tuple)
+    assert len(model_inputs) == 4
+    assert calls["normalise_inputs"] is False
+    input_arrays = np.asarray(calls["input_arrays"])
+    prepared = calls["prepared"]
+    assert input_arrays.shape[0] == 4
+    np.testing.assert_allclose(input_arrays[2], input_arrays[0] - input_arrays[0][:, :, ::-1], atol=1e-6)
+    np.testing.assert_allclose(input_arrays[3], input_arrays[1] - input_arrays[1][:, :, ::-1], atol=1e-6)
+    np.testing.assert_allclose(input_arrays[0], prepared.model_input[0], atol=1e-6)
+    np.testing.assert_allclose(input_arrays[1], prepared.model_input[1], atol=1e-6)
+    np.testing.assert_allclose(input_arrays[2], prepared.model_input[2], atol=1e-6)
+    np.testing.assert_allclose(input_arrays[3], prepared.model_input[3], atol=1e-6)
+
+    restored = np.asarray(calls["restored"])
+    assert restored.shape == source_volume.array.shape
+    np.testing.assert_array_equal(np.load(destination / "mask.npy"), restored)
+    np.testing.assert_allclose(prepared.source_image.spacing_xyz, source_volume.spacing_xyz, atol=1e-6)
+    np.testing.assert_allclose(prepared.source_image.origin_xyz, source_volume.origin_xyz, atol=1e-6)
+    np.testing.assert_allclose(prepared.source_image.direction, source_volume.direction, atol=1e-6)
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["nifti_metadata"]["space"] == "raw"
+    assert manifest["nifti_metadata"]["spacing_xyz"] == list(source_volume.spacing_xyz)
+    assert manifest["nifti_metadata"]["origin_xyz"] == list(source_volume.origin_xyz)
+    assert manifest["nifti_metadata"]["direction"] == list(source_volume.direction)
+
+
 @pytest.mark.parametrize(
     "checkpoint_metadata",
     [

@@ -236,6 +236,39 @@ def test_modern_bilateral_metadata_without_counts_remains_strict() -> None:
         checkpoint_input_mode({"input_mode": "dwi_bilateral"})
 
 
+@pytest.mark.parametrize(
+    ("input_mode", "input_channels", "physical_channels", "effective_channels", "field", "bad_value"),
+    [
+        ("dwi_bilateral", 2, 1, 2, "physical_input_channels", 1.0),
+        ("dwi_bilateral", 2, 1, 2, "effective_model_input_channels", 2.0),
+        ("dwi_bilateral", 2, 1, 2, "physical_input_channels", True),
+        ("dwi", 1, 1, 1, "effective_model_input_channels", True),
+    ],
+)
+def test_checkpoint_input_mode_rejects_non_integer_channel_metadata(
+    input_mode: str,
+    input_channels: int,
+    physical_channels: int,
+    effective_channels: int,
+    field: str,
+    bad_value: object,
+) -> None:
+    resolved_config = {
+        "input_mode": input_mode,
+        "input_channels": input_channels,
+        "physical_input_channels": physical_channels,
+        "effective_model_input_channels": effective_channels,
+    }
+    metadata = {
+        "input_channels": input_channels,
+        field: bad_value,
+        "resolved_config": resolved_config,
+    }
+
+    with pytest.raises(ValueError, match=field):
+        checkpoint_input_mode(metadata)
+
+
 def test_formal_checkpoint_rejects_official_aligned_local_state() -> None:
     model = nn.Conv2d(1, 2, 1)
     optimizer = torch.optim.SGD(model.parameters(), .01)

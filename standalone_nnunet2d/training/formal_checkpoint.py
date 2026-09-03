@@ -108,6 +108,12 @@ def checkpoint_input_channels(metadata: Mapping[str, Any]) -> int:
         declared = [(name, source[key]) for name, source in sources if key in source]
         if not declared:
             return None
+        if key in ("physical_input_channels", "effective_model_input_channels"):
+            for name, value in declared:
+                if type(value) is not int:
+                    raise ValueError(
+                        f"checkpoint {key} must be an integer, got {value!r} in {name}"
+                    )
         first_name, first_value = declared[0]
         if any(value != first_value for _, value in declared[1:]):
             details = ", ".join(f"{name}={value!r}" for name, value in declared)
@@ -151,6 +157,12 @@ def checkpoint_input_mode(metadata: Mapping[str, Any]) -> InputMode:
         declared = [(name, source[key]) for name, source in sources if key in source]
         if not declared:
             return None
+        if key in ("physical_input_channels", "effective_model_input_channels"):
+            for name, value in declared:
+                if type(value) is not int:
+                    raise ValueError(
+                        f"checkpoint {key} must be an integer, got {value!r} in {name}"
+                    )
         first_name, first_value = declared[0]
         if any(value != first_value for _, value in declared[1:]):
             details = ", ".join(f"{name}={value!r}" for name, value in declared)

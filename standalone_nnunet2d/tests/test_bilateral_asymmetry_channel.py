@@ -378,6 +378,46 @@ def test_legacy_dwi_bilateral_dataset_remains_c2_absolute_and_nonnegative(
     np.testing.assert_allclose(channels[1, :, 16, 22], channels[1, :, 16, 10])
 
 
+def test_explicit_dwi_bilateral_mode_uses_legacy_c2_math_without_legacy_flag(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_id = _case_id(monkeypatch)
+    image = _symmetric_dwi()
+    image[:, 16, 22] = 5.0
+    label = np.zeros_like(image, dtype=np.int16)
+    _write_single_dwi_case(tmp_path, case_id, image, label)
+
+    explicit = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        input_mode=InputMode.DWI_BILATERAL,
+        bilateral_asymmetry_channel=False,
+    )
+    assert explicit.input_channels == 2
+    assert explicit.derived_input_channels == 1
+    explicit_channels, _ = explicit.load_case(case_id)
+
+    assert explicit_channels.shape == (2, 3, 33, 33)
+    expected_difference = np.abs(explicit_channels[0] - explicit_channels[0][:, :, ::-1])
+    np.testing.assert_allclose(explicit_channels[1], expected_difference, atol=1e-6)
+    assert np.all(explicit_channels[1] >= 0.0)
+    assert not (tmp_path / "imagesTr" / f"{case_id}_0001.nii.gz").exists()
+
+    legacy = StrokeSliceDataset(
+        tmp_path,
+        fold=0,
+        split="val",
+        case_ids=(case_id,),
+        target_spacing_xy=(1.0, 1.0),
+        bilateral_asymmetry_channel=True,
+    )
+    legacy_channels, _ = legacy.load_case(case_id)
+    np.testing.assert_allclose(explicit_channels, legacy_channels, atol=1e-6)
+
+
 def test_default_opt_in_off_preserves_single_channel_case_loading(monkeypatch, tmp_path: Path) -> None:
     case_id = _case_id(monkeypatch)
     image = _symmetric_dwi()

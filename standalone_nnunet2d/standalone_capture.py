@@ -16,6 +16,7 @@ from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_volume,
+    prepare_dwi_adc_bilateral_case,
     restore_bilateral_asymmetry_prediction,
 )
 from standalone_nnunet2d.engine.predictor import predict_volume
@@ -373,7 +374,21 @@ def capture_standalone_inference(
     inference_context = _inference_context_from_metadata(checkpoint_metadata, torch_device)
     input_mode = checkpoint_input_mode(checkpoint_metadata)
     bilateral_asymmetry_channel = input_mode is InputMode.DWI_BILATERAL
-    if bilateral_asymmetry_channel:
+    if input_mode is InputMode.DWI_ADC_BILATERAL:
+        prepared = prepare_dwi_adc_bilateral_case(raw_root, case_id)
+        prediction = restore_bilateral_asymmetry_prediction(
+            prepared,
+            np.asarray(
+                predict_volume(
+                    model,
+                    prepared.model_volumes,
+                    torch_device,
+                    slice_batch_size=slice_batch_size,
+                    normalise_inputs=False,
+                )
+            ),
+        )
+    elif bilateral_asymmetry_channel:
         prepared = prepare_bilateral_asymmetry_volume(raw_image)
         prediction = restore_bilateral_asymmetry_prediction(
             prepared,

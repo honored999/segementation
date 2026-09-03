@@ -363,7 +363,7 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
                 "ADC": prepared.normalized_adc,
             }
             return build_input_channels(normalized_modalities, self.input_mode), aligned_label.array
-        if self.bilateral_asymmetry_channel:
+        if self.input_mode is InputMode.DWI_BILATERAL:
             channel_index, channel_name = self.channel_specs[0]
             image = images[0]
             reason = _geometry_mismatch_reason(label, image)
