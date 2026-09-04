@@ -1,0 +1,6 @@
+# Do not install or upgrade dependencies as part of this phase.
+torch
+numpy
+batchgeneratorsv2==0.3.4
+SimpleITK
+pytest

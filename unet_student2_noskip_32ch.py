@@ -1,5 +1,9 @@
 """Optical-Electronic Hybrid Student Network 2 WITHOUT skip connections (32 channels).
 
+中文说明：
+这是一个没有跳跃连接的光学-电子混合学生分割网络，前端用 32 个可训练光学卷积核编码图像，
+后端用电子解码器输出二值分割 mask。
+
 Architecture:
 - Input: 384×216 RGB images
 - Optical encoder: 32 kernels

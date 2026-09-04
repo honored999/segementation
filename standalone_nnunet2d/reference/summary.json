@@ -1,0 +1,1546 @@
+{
+    "foreground_mean": {
+        "Dice": 0.731103738314918,
+        "FN": 10726.4,
+        "FP": 5942.031578947369,
+        "IoU": 0.5923877518050135,
+        "TN": 4123950.147368421,
+        "TP": 34369.54736842105,
+        "n_pred": 40311.57894736842,
+        "n_ref": 45095.94736842105
+    },
+    "mean": {
+        "1": {
+            "Dice": 0.731103738314918,
+            "FN": 10726.4,
+            "FP": 5942.031578947369,
+            "IoU": 0.5923877518050135,
+            "TN": 4123950.147368421,
+            "TP": 34369.54736842105,
+            "n_pred": 40311.57894736842,
+            "n_ref": 45095.94736842105
+        }
+    },
+    "metric_per_case": [
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7436201349749644,
+                    "FN": 6386,
+                    "FP": 4213,
+                    "IoU": 0.5918752406623027,
+                    "TN": 4168334,
+                    "TP": 15371,
+                    "n_pred": 19584,
+                    "n_ref": 21757
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case001.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case001.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6830050237969328,
+                    "FN": 16367,
+                    "FP": 2815,
+                    "IoU": 0.5186086781940924,
+                    "TN": 4154457,
+                    "TP": 20665,
+                    "n_pred": 23480,
+                    "n_ref": 37032
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case002.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case002.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8049719717280039,
+                    "FN": 7071,
+                    "FP": 4932,
+                    "IoU": 0.6736009136890194,
+                    "TN": 4157530,
+                    "TP": 24771,
+                    "n_pred": 29703,
+                    "n_ref": 31842
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case003.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case003.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8019751731705644,
+                    "FN": 12559,
+                    "FP": 1878,
+                    "IoU": 0.6694144855854,
+                    "TN": 4150633,
+                    "TP": 29234,
+                    "n_pred": 31112,
+                    "n_ref": 41793
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case004.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case004.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6920090585571013,
+                    "FN": 2031,
+                    "FP": 1777,
+                    "IoU": 0.5290625772940886,
+                    "TN": 4186218,
+                    "TP": 4278,
+                    "n_pred": 6055,
+                    "n_ref": 6309
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case005.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case005.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6770534712700985,
+                    "FN": 4294,
+                    "FP": 888,
+                    "IoU": 0.5117768984360279,
+                    "TN": 4183690,
+                    "TP": 5432,
+                    "n_pred": 6320,
+                    "n_ref": 9726
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case006.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case006.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8062793949408923,
+                    "FN": 1702,
+                    "FP": 1346,
+                    "IoU": 0.675433926099457,
+                    "TN": 4184913,
+                    "TP": 6343,
+                    "n_pred": 7689,
+                    "n_ref": 8045
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case007.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case007.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8499429087336361,
+                    "FN": 1842,
+                    "FP": 3809,
+                    "IoU": 0.7390441006695914,
+                    "TN": 4172649,
+                    "TP": 16004,
+                    "n_pred": 19813,
+                    "n_ref": 17846
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case008.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case008.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.688331825817289,
+                    "FN": 3084,
+                    "FP": 6564,
+                    "IoU": 0.5247758841493448,
+                    "TN": 4174002,
+                    "TP": 10654,
+                    "n_pred": 17218,
+                    "n_ref": 13738
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case009.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case009.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8243298186647874,
+                    "FN": 4131,
+                    "FP": 2350,
+                    "IoU": 0.7011573753861761,
+                    "TN": 4172617,
+                    "TP": 15206,
+                    "n_pred": 17556,
+                    "n_ref": 19337
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case010.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case010.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7658393549062729,
+                    "FN": 1948,
+                    "FP": 6996,
+                    "IoU": 0.6205345778532032,
+                    "TN": 4170734,
+                    "TP": 14626,
+                    "n_pred": 21622,
+                    "n_ref": 16574
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case011.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case011.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7408659411900903,
+                    "FN": 2305,
+                    "FP": 8887,
+                    "IoU": 0.5883932183443051,
+                    "TN": 4167113,
+                    "TP": 15999,
+                    "n_pred": 24886,
+                    "n_ref": 18304
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case012.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case012.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7804377203512031,
+                    "FN": 18919,
+                    "FP": 10164,
+                    "IoU": 0.6399326490943532,
+                    "TN": 4113533,
+                    "TP": 51688,
+                    "n_pred": 61852,
+                    "n_ref": 70607
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case013.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case013.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7948365833562209,
+                    "FN": 22855,
+                    "FP": 11507,
+                    "IoU": 0.6595259799453054,
+                    "TN": 4093380,
+                    "TP": 66562,
+                    "n_pred": 78069,
+                    "n_ref": 89417
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case014.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case014.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8037690800987471,
+                    "FN": 18069,
+                    "FP": 15793,
+                    "IoU": 0.6719179940317017,
+                    "TN": 4091092,
+                    "TP": 69350,
+                    "n_pred": 85143,
+                    "n_ref": 87419
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case015.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case015.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5813320625525138,
+                    "FN": 25379,
+                    "FP": 8006,
+                    "IoU": 0.40977317327581636,
+                    "TN": 4137741,
+                    "TP": 23178,
+                    "n_pred": 31184,
+                    "n_ref": 48557
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case016.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case016.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.583885031487163,
+                    "FN": 2079,
+                    "FP": 498,
+                    "IoU": 0.4123147092360319,
+                    "TN": 4189919,
+                    "TP": 1808,
+                    "n_pred": 2306,
+                    "n_ref": 3887
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case017.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case017.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.028225806451612902,
+                    "FN": 482,
+                    "FP": 0,
+                    "IoU": 0.014314928425357873,
+                    "TN": 3407383,
+                    "TP": 7,
+                    "n_pred": 7,
+                    "n_ref": 489
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case018.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case018.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7660064486411792,
+                    "FN": 1693,
+                    "FP": 339,
+                    "IoU": 0.6207540126913027,
+                    "TN": 4188946,
+                    "TP": 3326,
+                    "n_pred": 3665,
+                    "n_ref": 5019
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case019.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case019.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7473616591722493,
+                    "FN": 1902,
+                    "FP": 851,
+                    "IoU": 0.5966300366300367,
+                    "TN": 4187479,
+                    "TP": 4072,
+                    "n_pred": 4923,
+                    "n_ref": 5974
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case020.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case020.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7552581261950286,
+                    "FN": 801,
+                    "FP": 479,
+                    "IoU": 0.6067588325652842,
+                    "TN": 4191049,
+                    "TP": 1975,
+                    "n_pred": 2454,
+                    "n_ref": 2776
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case021.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case021.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8021850359641101,
+                    "FN": 4597,
+                    "FP": 3406,
+                    "IoU": 0.6697069748245976,
+                    "TN": 4170074,
+                    "TP": 16227,
+                    "n_pred": 19633,
+                    "n_ref": 20824
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case022.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case022.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8354070525926358,
+                    "FN": 5003,
+                    "FP": 3450,
+                    "IoU": 0.7173382377528841,
+                    "TN": 4164399,
+                    "TP": 21452,
+                    "n_pred": 24902,
+                    "n_ref": 26455
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case023.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case023.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7936458676804313,
+                    "FN": 4797,
+                    "FP": 5842,
+                    "IoU": 0.6578879670718374,
+                    "TN": 4163206,
+                    "TP": 20459,
+                    "n_pred": 26301,
+                    "n_ref": 25256
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case024.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case024.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7139851622190234,
+                    "FN": 5260,
+                    "FP": 10238,
+                    "IoU": 0.5551920096435337,
+                    "TN": 4159462,
+                    "TP": 19344,
+                    "n_pred": 29582,
+                    "n_ref": 24604
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case025.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case025.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6612296967902135,
+                    "FN": 6883,
+                    "FP": 7988,
+                    "IoU": 0.4939082493874217,
+                    "TN": 4164920,
+                    "TP": 14513,
+                    "n_pred": 22501,
+                    "n_ref": 21396
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case026.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case026.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.775476442199714,
+                    "FN": 23234,
+                    "FP": 17753,
+                    "IoU": 0.633288299975843,
+                    "TN": 4082535,
+                    "TP": 70782,
+                    "n_pred": 88535,
+                    "n_ref": 94016
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case027.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case027.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8069406310143912,
+                    "FN": 26501,
+                    "FP": 24758,
+                    "IoU": 0.6763625113647843,
+                    "TN": 4035920,
+                    "TP": 107125,
+                    "n_pred": 131883,
+                    "n_ref": 133626
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case028.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case028.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8018093623007734,
+                    "FN": 41762,
+                    "FP": 15153,
+                    "IoU": 0.6691834646950781,
+                    "TN": 4022260,
+                    "TP": 115129,
+                    "n_pred": 130282,
+                    "n_ref": 156891
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case029.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case029.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8589447224902933,
+                    "FN": 3598,
+                    "FP": 2687,
+                    "IoU": 0.7527634632783918,
+                    "TN": 4168883,
+                    "TP": 19136,
+                    "n_pred": 21823,
+                    "n_ref": 22734
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case030.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case030.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7906020003774297,
+                    "FN": 7964,
+                    "FP": 3132,
+                    "IoU": 0.653715320038698,
+                    "TN": 4686549,
+                    "TP": 20947,
+                    "n_pred": 24079,
+                    "n_ref": 28911
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case031.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case031.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7821063057114559,
+                    "FN": 3273,
+                    "FP": 3327,
+                    "IoU": 0.6421794524261317,
+                    "TN": 4175859,
+                    "TP": 11845,
+                    "n_pred": 15172,
+                    "n_ref": 15118
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case032.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case032.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8319389328412911,
+                    "FN": 1740,
+                    "FP": 4909,
+                    "IoU": 0.7122392452176923,
+                    "TN": 4171198,
+                    "TP": 16457,
+                    "n_pred": 21366,
+                    "n_ref": 18197
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case033.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case033.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8471463780022229,
+                    "FN": 3255,
+                    "FP": 3071,
+                    "IoU": 0.7348256203890007,
+                    "TN": 4170448,
+                    "TP": 17530,
+                    "n_pred": 20601,
+                    "n_ref": 20785
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case034.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case034.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7863970411643211,
+                    "FN": 3768,
+                    "FP": 5126,
+                    "IoU": 0.647985434971899,
+                    "TN": 4169038,
+                    "TP": 16372,
+                    "n_pred": 21498,
+                    "n_ref": 20140
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case035.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case035.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8271507800955689,
+                    "FN": 5354,
+                    "FP": 3653,
+                    "IoU": 0.7052490346226847,
+                    "TN": 4163746,
+                    "TP": 21551,
+                    "n_pred": 25204,
+                    "n_ref": 26905
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case036.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case036.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8162194276661056,
+                    "FN": 3107,
+                    "FP": 4317,
+                    "IoU": 0.6895023002927645,
+                    "TN": 3383962,
+                    "TP": 16486,
+                    "n_pred": 20803,
+                    "n_ref": 19593
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case037.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case037.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7886580663823423,
+                    "FN": 52311,
+                    "FP": 7600,
+                    "IoU": 0.6510614752904861,
+                    "TN": 4022609,
+                    "TP": 111784,
+                    "n_pred": 119384,
+                    "n_ref": 164095
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case038.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case038.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8350728290411411,
+                    "FN": 14666,
+                    "FP": 31271,
+                    "IoU": 0.7168455246466502,
+                    "TN": 4032071,
+                    "TP": 116296,
+                    "n_pred": 147567,
+                    "n_ref": 130962
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case039.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case039.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.835562514951828,
+                    "FN": 33942,
+                    "FP": 11424,
+                    "IoU": 0.7175675170893878,
+                    "TN": 4033678,
+                    "TP": 115260,
+                    "n_pred": 126684,
+                    "n_ref": 149202
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case040.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case040.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7090425432966869,
+                    "FN": 10253,
+                    "FP": 5388,
+                    "IoU": 0.5492377301939537,
+                    "TN": 4159605,
+                    "TP": 19058,
+                    "n_pred": 24446,
+                    "n_ref": 29311
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case041.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case041.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.733320918894212,
+                    "FN": 9643,
+                    "FP": 6110,
+                    "IoU": 0.5789318935101037,
+                    "TN": 4156892,
+                    "TP": 21659,
+                    "n_pred": 27769,
+                    "n_ref": 31302
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case042.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case042.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7670302953759689,
+                    "FN": 8336,
+                    "FP": 6421,
+                    "IoU": 0.6220998719590269,
+                    "TN": 4155254,
+                    "TP": 24293,
+                    "n_pred": 30714,
+                    "n_ref": 32629
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case043.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case043.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6850576729090829,
+                    "FN": 9312,
+                    "FP": 5050,
+                    "IoU": 0.5209792542191982,
+                    "TN": 4164322,
+                    "TP": 15620,
+                    "n_pred": 20670,
+                    "n_ref": 24932
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case044.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case044.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7140311804008909,
+                    "FN": 2315,
+                    "FP": 4105,
+                    "IoU": 0.5552476619328022,
+                    "TN": 4179869,
+                    "TP": 8015,
+                    "n_pred": 12120,
+                    "n_ref": 10330
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case045.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case045.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8010528103243335,
+                    "FN": 6101,
+                    "FP": 5615,
+                    "IoU": 0.6681301872362122,
+                    "TN": 4159001,
+                    "TP": 23587,
+                    "n_pred": 29202,
+                    "n_ref": 29688
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case046.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case046.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8168214420536052,
+                    "FN": 8015,
+                    "FP": 4116,
+                    "IoU": 0.6903619378222472,
+                    "TN": 4155126,
+                    "TP": 27047,
+                    "n_pred": 31163,
+                    "n_ref": 35062
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case047.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case047.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7692503241223276,
+                    "FN": 6682,
+                    "FP": 2395,
+                    "IoU": 0.6250258189779816,
+                    "TN": 4170097,
+                    "TP": 15130,
+                    "n_pred": 17525,
+                    "n_ref": 21812
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case048.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case048.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8135946300439781,
+                    "FN": 6222,
+                    "FP": 3442,
+                    "IoU": 0.6857644534044351,
+                    "TN": 4163550,
+                    "TP": 21090,
+                    "n_pred": 24532,
+                    "n_ref": 27312
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case049.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case049.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8397968074438179,
+                    "FN": 7043,
+                    "FP": 2702,
+                    "IoU": 0.7238359735880069,
+                    "TN": 4159017,
+                    "TP": 25542,
+                    "n_pred": 28244,
+                    "n_ref": 32585
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case050.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case050.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6286739004893468,
+                    "FN": 10836,
+                    "FP": 1381,
+                    "IoU": 0.4584423068398422,
+                    "TN": 4171745,
+                    "TP": 10342,
+                    "n_pred": 11723,
+                    "n_ref": 21178
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case051.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case051.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8540275747639553,
+                    "FN": 5092,
+                    "FP": 2298,
+                    "IoU": 0.7452426916712631,
+                    "TN": 4165296,
+                    "TP": 21618,
+                    "n_pred": 23916,
+                    "n_ref": 26710
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case052.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case052.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.86314403432018,
+                    "FN": 3206,
+                    "FP": 3238,
+                    "IoU": 0.7592378105735101,
+                    "TN": 4167539,
+                    "TP": 20321,
+                    "n_pred": 23559,
+                    "n_ref": 23527
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case053.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case053.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6902000764623423,
+                    "FN": 4337,
+                    "FP": 525,
+                    "IoU": 0.5269507686320296,
+                    "TN": 4184026,
+                    "TP": 5416,
+                    "n_pred": 5941,
+                    "n_ref": 9753
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case054.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case054.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8015717092337917,
+                    "FN": 1531,
+                    "FP": 1600,
+                    "IoU": 0.6688524590163935,
+                    "TN": 4184849,
+                    "TP": 6324,
+                    "n_pred": 7924,
+                    "n_ref": 7855
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case055.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case055.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6599275447002454,
+                    "FN": 5427,
+                    "FP": 393,
+                    "IoU": 0.49245661463329554,
+                    "TN": 4182837,
+                    "TP": 5647,
+                    "n_pred": 6040,
+                    "n_ref": 11074
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case056.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case056.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7460646716711153,
+                    "FN": 15919,
+                    "FP": 16522,
+                    "IoU": 0.5949785884614904,
+                    "TN": 4114207,
+                    "TP": 47656,
+                    "n_pred": 64178,
+                    "n_ref": 63575
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case057.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case057.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7938997821350763,
+                    "FN": 13229,
+                    "FP": 13732,
+                    "IoU": 0.6582369942196532,
+                    "TN": 4115416,
+                    "TP": 51927,
+                    "n_pred": 65659,
+                    "n_ref": 65156
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case058.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case058.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7610842158766133,
+                    "FN": 19151,
+                    "FP": 9522,
+                    "IoU": 0.6143147303713867,
+                    "TN": 4119961,
+                    "TP": 45670,
+                    "n_pred": 55192,
+                    "n_ref": 64821
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case059.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case059.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.4823497709512261,
+                    "FN": 1477,
+                    "FP": 444,
+                    "IoU": 0.31782670454545453,
+                    "TN": 4191488,
+                    "TP": 895,
+                    "n_pred": 1339,
+                    "n_ref": 2372
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case060.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case060.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6093676076328655,
+                    "FN": 1975,
+                    "FP": 502,
+                    "IoU": 0.4381946019505557,
+                    "TN": 4189895,
+                    "TP": 1932,
+                    "n_pred": 2434,
+                    "n_ref": 3907
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case061.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case061.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6529741863075197,
+                    "FN": 1945,
+                    "FP": 1147,
+                    "IoU": 0.48475254124312617,
+                    "TN": 4188303,
+                    "TP": 2909,
+                    "n_pred": 4056,
+                    "n_ref": 4854
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case062.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case062.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6751290877796902,
+                    "FN": 956,
+                    "FP": 554,
+                    "IoU": 0.509581032802858,
+                    "TN": 4191225,
+                    "TP": 1569,
+                    "n_pred": 2123,
+                    "n_ref": 2525
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case063.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case063.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7525398568092904,
+                    "FN": 13559,
+                    "FP": 2444,
+                    "IoU": 0.6032576358587862,
+                    "TN": 4153968,
+                    "TP": 24333,
+                    "n_pred": 26777,
+                    "n_ref": 37892
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case064.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case064.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7864415895561613,
+                    "FN": 10156,
+                    "FP": 7315,
+                    "IoU": 0.6480459307010475,
+                    "TN": 4144664,
+                    "TP": 32169,
+                    "n_pred": 39484,
+                    "n_ref": 42325
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case065.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case065.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7700253334639663,
+                    "FN": 6681,
+                    "FP": 9750,
+                    "IoU": 0.6260497507908691,
+                    "TN": 4150365,
+                    "TP": 27508,
+                    "n_pred": 37258,
+                    "n_ref": 34189
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case066.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case066.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.506705118961788,
+                    "FN": 3069,
+                    "FP": 352,
+                    "IoU": 0.33932020084974895,
+                    "TN": 4189126,
+                    "TP": 1757,
+                    "n_pred": 2109,
+                    "n_ref": 4826
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case067.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case067.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.43631856213201115,
+                    "FN": 2282,
+                    "FP": 1356,
+                    "IoU": 0.2790328973444312,
+                    "TN": 3402826,
+                    "TP": 1408,
+                    "n_pred": 2764,
+                    "n_ref": 3690
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case068.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case068.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.4401151956632221,
+                    "FN": 2216,
+                    "FP": 1089,
+                    "IoU": 0.2821459600347524,
+                    "TN": 4189700,
+                    "TP": 1299,
+                    "n_pred": 2388,
+                    "n_ref": 3515
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case069.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case069.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5504232882815981,
+                    "FN": 887,
+                    "FP": 2140,
+                    "IoU": 0.37971311475409836,
+                    "TN": 4189424,
+                    "TP": 1853,
+                    "n_pred": 3993,
+                    "n_ref": 2740
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case070.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case070.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8019078122824119,
+                    "FN": 8196,
+                    "FP": 8874,
+                    "IoU": 0.6693206253269018,
+                    "TN": 4142683,
+                    "TP": 34551,
+                    "n_pred": 43425,
+                    "n_ref": 42747
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case071.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case071.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8305824353358539,
+                    "FN": 16766,
+                    "FP": 3578,
+                    "IoU": 0.7102530870351644,
+                    "TN": 4124091,
+                    "TP": 49869,
+                    "n_pred": 53447,
+                    "n_ref": 66635
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case072.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case072.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7958489562801955,
+                    "FN": 12974,
+                    "FP": 9295,
+                    "IoU": 0.6609212028930339,
+                    "TN": 4128629,
+                    "TP": 43406,
+                    "n_pred": 52701,
+                    "n_ref": 56380
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case073.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case073.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8339180769740622,
+                    "FN": 6501,
+                    "FP": 12292,
+                    "IoU": 0.7151453602934489,
+                    "TN": 4128330,
+                    "TP": 47181,
+                    "n_pred": 59473,
+                    "n_ref": 53682
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case074.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case074.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.29662688116242864,
+                    "FN": 1820,
+                    "FP": 4957,
+                    "IoU": 0.17414087253229343,
+                    "TN": 4186098,
+                    "TP": 1429,
+                    "n_pred": 6386,
+                    "n_ref": 3249
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case075.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case075.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5338035746308805,
+                    "FN": 13790,
+                    "FP": 1808,
+                    "IoU": 0.3640737116764514,
+                    "TN": 4169776,
+                    "TP": 8930,
+                    "n_pred": 10738,
+                    "n_ref": 22720
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case076.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case076.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.7337672774027644,
+                    "FN": 8535,
+                    "FP": 4717,
+                    "IoU": 0.579488481309894,
+                    "TN": 4162790,
+                    "TP": 18262,
+                    "n_pred": 22979,
+                    "n_ref": 26797
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case077.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case077.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.518210197710718,
+                    "FN": 435,
+                    "FP": 28,
+                    "IoU": 0.3497191011235955,
+                    "TN": 4193592,
+                    "TP": 249,
+                    "n_pred": 277,
+                    "n_ref": 684
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case078.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case078.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5023547880690737,
+                    "FN": 439,
+                    "FP": 195,
+                    "IoU": 0.33542976939203356,
+                    "TN": 4193350,
+                    "TP": 320,
+                    "n_pred": 515,
+                    "n_ref": 759
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case079.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case079.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5670588235294117,
+                    "FN": 612,
+                    "FP": 124,
+                    "IoU": 0.3957307060755337,
+                    "TN": 4193086,
+                    "TP": 482,
+                    "n_pred": 606,
+                    "n_ref": 1094
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case080.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case080.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.4204809930178433,
+                    "FN": 122,
+                    "FP": 625,
+                    "IoU": 0.26620825147347743,
+                    "TN": 4193286,
+                    "TP": 271,
+                    "n_pred": 896,
+                    "n_ref": 393
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case081.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case081.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8694964985302638,
+                    "FN": 31188,
+                    "FP": 17693,
+                    "IoU": 0.7691232246515428,
+                    "TN": 3982585,
+                    "TP": 162838,
+                    "n_pred": 180531,
+                    "n_ref": 194026
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case082.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case082.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.5711372615659119,
+                    "FN": 43144,
+                    "FP": 7331,
+                    "IoU": 0.39971457453767023,
+                    "TN": 4110219,
+                    "TP": 33610,
+                    "n_pred": 40941,
+                    "n_ref": 76754
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case083.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case083.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8425391732914166,
+                    "FN": 57926,
+                    "FP": 15301,
+                    "IoU": 0.7279202490915441,
+                    "TN": 3925166,
+                    "TP": 195911,
+                    "n_pred": 211212,
+                    "n_ref": 253837
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case084.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case084.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8845823739879581,
+                    "FN": 37330,
+                    "FP": 16057,
+                    "IoU": 0.7930503816320439,
+                    "TN": 3936333,
+                    "TP": 204584,
+                    "n_pred": 220641,
+                    "n_ref": 241914
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case085.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case085.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8265492508056252,
+                    "FN": 54964,
+                    "FP": 15116,
+                    "IoU": 0.7043748971766284,
+                    "TN": 3957247,
+                    "TP": 166977,
+                    "n_pred": 182093,
+                    "n_ref": 221941
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case086.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case086.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8259887005649718,
+                    "FN": 3664,
+                    "FP": 956,
+                    "IoU": 0.7035611164581328,
+                    "TN": 4178719,
+                    "TP": 10965,
+                    "n_pred": 11921,
+                    "n_ref": 14629
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case087.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case087.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8187152928202907,
+                    "FN": 2876,
+                    "FP": 1727,
+                    "IoU": 0.693071947722878,
+                    "TN": 4179307,
+                    "TP": 10394,
+                    "n_pred": 12121,
+                    "n_ref": 13270
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case088.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case088.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8179249412982051,
+                    "FN": 1000,
+                    "FP": 3575,
+                    "IoU": 0.691939936704599,
+                    "TN": 4179453,
+                    "TP": 10276,
+                    "n_pred": 13851,
+                    "n_ref": 11276
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case089.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case089.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.738084200766994,
+                    "FN": 5218,
+                    "FP": 997,
+                    "IoU": 0.5848917980229762,
+                    "TN": 4179332,
+                    "TP": 8757,
+                    "n_pred": 9754,
+                    "n_ref": 13975
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case090.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case090.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8654814341023293,
+                    "FN": 18726,
+                    "FP": 9035,
+                    "IoU": 0.7628622925333356,
+                    "TN": 4077237,
+                    "TP": 89306,
+                    "n_pred": 98341,
+                    "n_ref": 108032
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case091.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case091.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.6741362729848521,
+                    "FN": 42354,
+                    "FP": 8135,
+                    "IoU": 0.5084506493759371,
+                    "TN": 4091590,
+                    "TP": 52225,
+                    "n_pred": 60360,
+                    "n_ref": 94579
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case092.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case092.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8909051910788071,
+                    "FN": 16574,
+                    "FP": 10383,
+                    "IoU": 0.803272347785473,
+                    "TN": 4057277,
+                    "TP": 110070,
+                    "n_pred": 120453,
+                    "n_ref": 126644
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case093.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case093.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.8928379793098014,
+                    "FN": 16753,
+                    "FP": 11806,
+                    "IoU": 0.8064203455544936,
+                    "TN": 4046773,
+                    "TP": 118972,
+                    "n_pred": 130778,
+                    "n_ref": 135725
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case094.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case094.nii.gz"
+        },
+        {
+            "metrics": {
+                "1": {
+                    "Dice": 0.882120174815389,
+                    "FN": 12334,
+                    "FP": 15043,
+                    "IoU": 0.7891010777206863,
+                    "TN": 4064493,
+                    "TP": 102434,
+                    "n_pred": 117477,
+                    "n_ref": 114768
+                }
+            },
+            "prediction_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\Dataset501_StrokeLesion\\nnUNetTrainer__nnUNetPlans__2d\\crossval_results_folds_0_1_2_3_4\\case095.nii.gz",
+            "reference_file": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_raw\\Dataset501_StrokeLesion\\labelsTr\\case095.nii.gz"
+        }
+    ]
+}

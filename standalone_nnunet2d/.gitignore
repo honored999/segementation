@@ -1,0 +1,11 @@
+outputs/
+*.pth
+*.pt
+*.ckpt
+*.npz
+*.nii
+*.nii.gz
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
