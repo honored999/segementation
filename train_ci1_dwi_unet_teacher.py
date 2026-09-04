@@ -1,5 +1,9 @@
 """Train a UNet teacher model on CI-1 DWI slices.
 
+中文说明：
+这个脚本在同一套 CI-1 DWI 单通道数据上训练常规 UNet 教师网络，
+用于和光学/无跳跃连接学生网络对比，判断问题来自数据难度还是学生网络瓶颈。
+
 The teacher is a conventional segmentation baseline for the same single-channel
 DWI data used by train_ci1_dwi_student_noskip_32ch.py. Its main purpose is to
 separate data difficulty from the optical/no-skip student bottleneck.
@@ -71,7 +75,12 @@ class ConvBlock(nn.Module):
 class UpBlock(nn.Module):
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int) -> None:
         super().__init__()
-        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.up = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
         self.conv = ConvBlock(out_channels + skip_channels, out_channels)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
