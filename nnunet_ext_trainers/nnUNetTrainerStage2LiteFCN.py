@@ -12,6 +12,9 @@ from lite_fcn_2d import LiteFCN2D
 
 
 class nnUNetTrainerStage2LiteFCN(nnUNetTrainerNoDeepSupervision):
+    def set_deep_supervision_enabled(self, enabled: bool) -> None:
+        pass
+
     @staticmethod
     def build_network_architecture(
         plans_manager: Any,

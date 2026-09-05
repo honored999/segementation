@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -17,11 +17,37 @@ from lite_fcn_2d import LiteFCN2D
 
 
 def _load_trainer_types():
-    pytest.importorskip("nnunetv2")
+    try:
+        from nnunetv2.training.nnUNetTrainer.variants.network_architecture.nnUNetTrainerNoDeepSupervision import (
+            nnUNetTrainerNoDeepSupervision,
+        )
+    except ModuleNotFoundError as error:
+        if error.name != "nnunetv2":
+            raise
 
-    from nnunetv2.training.nnUNetTrainer.variants.network_architecture.nnUNetTrainerNoDeepSupervision import (
-        nnUNetTrainerNoDeepSupervision,
-    )
+        package_names = (
+            "nnunetv2",
+            "nnunetv2.training",
+            "nnunetv2.training.nnUNetTrainer",
+            "nnunetv2.training.nnUNetTrainer.variants",
+            "nnunetv2.training.nnUNetTrainer.variants.network_architecture",
+        )
+        for package_name in package_names:
+            package = ModuleType(package_name)
+            package.__path__ = []
+            sys.modules[package_name] = package
+
+        class nnUNetTrainerNoDeepSupervision:
+            def set_deep_supervision_enabled(self, enabled: bool) -> None:
+                self.network.decoder.deep_supervision = enabled
+
+        base_module_name = (
+            "nnunetv2.training.nnUNetTrainer.variants.network_architecture."
+            "nnUNetTrainerNoDeepSupervision"
+        )
+        base_module = ModuleType(base_module_name)
+        base_module.nnUNetTrainerNoDeepSupervision = nnUNetTrainerNoDeepSupervision
+        sys.modules[base_module_name] = base_module
 
     from nnunet_ext_trainers.nnUNetTrainerStage2LiteFCN import (
         nnUNetTrainerStage2LiteFCN,
@@ -109,6 +135,17 @@ def test_trainer_inherits_no_deep_supervision() -> None:
     no_deep_supervision, trainer = _load_trainer_types()
 
     assert issubclass(trainer, no_deep_supervision)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_trainer_deep_supervision_toggle_is_noop_for_lite_fcn(enabled: bool) -> None:
+    _, trainer_type = _load_trainer_types()
+
+    trainer = object.__new__(trainer_type)
+    trainer.network = LiteFCN2D(in_channels=1, num_classes=2)
+
+    assert not hasattr(trainer.network, "decoder")
+    trainer.set_deep_supervision_enabled(enabled)
 
 
 def test_trainer_build_hook_uses_channels_for_2d_configuration() -> None:
