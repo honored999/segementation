@@ -12,6 +12,9 @@ from small_unet_2d import SmallUNet2D
 
 
 class nnUNetTrainerStage2SmallUNet(nnUNetTrainerNoDeepSupervision):
+    def set_deep_supervision_enabled(self, enabled: bool) -> None:
+        pass
+
     @staticmethod
     def build_network_architecture(
         plans_manager: Any,
