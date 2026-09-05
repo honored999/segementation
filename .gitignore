@@ -3,3 +3,5 @@ CI-1/
 results/
 __pycache__/
 .worktrees/
+.vscode/
+docs/

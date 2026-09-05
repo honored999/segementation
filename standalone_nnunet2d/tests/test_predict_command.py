@@ -89,6 +89,21 @@ def _pending_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     )
 
 
+def _minimal_checkpoint_with_metadata(
+    tmp_path: Path, metadata: dict[str, object], *, name: str
+) -> Path:
+    checkpoint = tmp_path / f"{name}.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": {},
+            "metadata": metadata,
+        },
+        checkpoint,
+    )
+    return checkpoint
+
+
 def test_prediction_command_requires_allow_pending_and_preserves_source_space_metadata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -209,7 +224,11 @@ def test_prediction_command_rejects_invalid_checkpoint_alignment_metadata(
         }
     else:
         metadata = {"run_type": "experimental", "run_state": "experimental"}
-    checkpoint = _checkpoint_with_metadata(monkeypatch, tmp_path, metadata, name=case)
+    checkpoint = _minimal_checkpoint_with_metadata(tmp_path, metadata, name=case)
+    def fail_if_model_load_is_attempted(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid checkpoint metadata must fail before model loading")
+
+    monkeypatch.setattr(predict_module, "_load_model", fail_if_model_load_is_attempted)
     raw_root = tmp_path / "raw"
     (raw_root / "imagesTr").mkdir(parents=True)
     write_nifti(
