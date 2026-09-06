@@ -38,6 +38,9 @@ Global reusable skills:
   automatic independent Worktree Chat/task creation, LunaMax long-task workers,
   automatic result collection when supported, manual top-level-thread fallback,
   monitoring, fixer flow, and evidence-based acceptance.
+- `project-memory`: concise repository-level state for cross-session and
+  cross-terminal continuity under `.project-memory/`, including startup reading,
+  verified completion sync, and worktree-safe ownership.
 - `level3-review`: correctness-sensitive independent review for medical/scientific
   preprocessing, geometry, leakage, metrics, checkpoint/runtime contracts,
   cross-module interfaces, destructive behavior, or other high-risk changes.
@@ -56,6 +59,41 @@ Project-local skills:
   project-specific scientific reporting.
 
 Load only the skill(s) needed for the current task.
+
+## Project memory
+
+Use the global `project-memory` skill for repository-level continuity. Keep one
+root memory set only:
+
+`.project-memory/{STATUS.md,GOALS.md,NEXT.md,LOG.md}`
+
+When it exists, read `STATUS.md`, `GOALS.md`, and `NEXT.md` at task startup; use
+recent `LOG.md` entries only when helpful. If it does not yet exist, initialize
+it during the first repository-modifying task after inspecting enough verified
+repository state to avoid guessing.
+
+Project-specific content rules:
+
+- `STATUS.md`: verified pipeline/model/data-interface state, accepted baselines,
+  materially relevant active workstreams, and key scientific invariants.
+- `GOALS.md`: stable segmentation/research goal and current milestone.
+- `NEXT.md`: only immediate engineering/experimental actions and concrete
+  blockers.
+- `LOG.md`: short accepted-task entries with affected component, material change,
+  and validation/preflight/formal-run status.
+
+Never store patient data, patient identifiers, raw medical-image contents,
+secrets, training logs, full tracebacks, or large metric tables in project
+memory. Numerical results may be summarized only when provenance and experiment
+status are clear. Preserve the distinction between synthetic, smoke, preflight,
+baseline, tuning, and formal evaluation; a preflight result is never a formal
+result merely because it appears in memory.
+
+Independent worker worktrees must not edit root `.project-memory/` unless their
+task brief explicitly grants ownership. The parent/main agent synchronizes only
+accepted, validated state, re-reading current memory first to preserve concurrent
+edits. Track the memory files in Git unless an explicit later policy says
+otherwise.
 
 ## Global scientific invariants
 
@@ -198,10 +236,11 @@ Before completion verify, as applicable:
 - raw data unchanged;
 - intended files only committed;
 - unrelated pre-existing user changes untouched;
-- documentation reflects verified behavior.
+- documentation reflects verified behavior;
+- project memory is synchronized when the task changed accepted repository state.
 
 ## Final report
 
 Keep the report concise and evidence-dense: what changed, files, validation and
-results, reviewer result when required, unresolved issues, commit hash, and final
-Git status.
+results, reviewer result when required, unresolved issues, commit hash, final Git
+status, and whether project memory was synchronized when applicable.
