@@ -12,7 +12,10 @@ Updated: 2026-09-07
 - Orientation requires finite orthogonal directions, a unique in-plane LR assignment with margin at least `0.20`, positive LPS X/Z signs for W/D, and a right-handed physical `[W,H,D]`; AP/SI obliquity is provenance only.
 - Accepted inputs use only transpose and flips, retain exact reversible provenance, and never modify or fabricate NIfTI geometry.
 - Training reads only Fold 0 train `_0000.nii.gz` images and uses the existing ADN alignment losses without lesion labels.
-- Fresh synthetic validation: `341 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`; independent Level 3 review found one exact-zero D/Z blocker, and re-review returned PASS after the regression and minimal fix.
+- Diagnostic model inputs are per-volume z-score normalized, then D-only constant-zero padded to minimum depth 16; odd padding is placed after (`13 -> 16` uses `1/2`), while D>=16 and all H/W sizes remain unchanged.
+- Training checkpoints and QC record and validate the shared model-input padding contract; QC removes model-only padding before canonical-depth display or inverse mapping.
+- Fresh synthetic validation: `358 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`; independent Level 3 re-review returned PASS after deterministic unpadding and checkpoint-contract blockers were fixed.
 
 ## Evidence boundary
-- No real Dataset501 scan, training, QC run, lesion-label access, clinical evaluation, or formal experimental result was performed locally.
+- Server-reported Fold 0 orientation preflight covered 76 training images and exposed only the short-depth model-input blocker; the new padding implementation has not yet been rerun on the server.
+- No real Dataset501 scan, training, QC run, or lesion-label access was performed locally; server preflight remains engineering evidence, not a formal experimental result.

@@ -1,5 +1,11 @@
 # Log
 
+## 2026-09-07 — Diagnostic short-depth model input padding
+- Changed: after z-score normalization, diagnostic training/QC now pad only D<16 with deterministic symmetric constant zeros, validate the padding contract in checkpoints, and unpad QC outputs before canonical display.
+- Validation: scoped worker RED/GREEN; fresh `358 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`.
+- Review: independent Level 3 found malformed-unpadding and checkpoint-contract blockers; focused regressions/minimal fixes were added and re-review returned PASS.
+- Result: `adn_transform.py`, canonicalization, NIfTI geometry, Dataset501, labels, and split were unchanged; no real data or training was accessed locally, and a server rerun remains pending.
+
 ## 2026-09-07 — Acquisition-preserving ADN LR canonicalization
 - Changed: fixed D to source voxel z, assigned W only from a clear in-plane LR axis, made H right-handed, removed AP/SI dominance rejection, and updated reversible provenance/checkpoint/QC semantics.
 - Validation: RED/GREEN synthetic coverage; fresh `341 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`; all-repository collection remains blocked by unrelated missing `nnunetv2` and a directory-dependent audit import.

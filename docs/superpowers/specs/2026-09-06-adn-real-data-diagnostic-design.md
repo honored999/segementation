@@ -35,16 +35,25 @@ operation.
 The training CLI reads only `imagesTr/<case>_0000.nii.gz` for the cases in the
 supplied fold-0 train list (defaulting to the repository reference split).
 Each volume is canonicalized independently and normalized with its own finite
-mean and standard deviation. It uses only the existing `alignment_losses()`
-for flip, inverse reconstruction, and total loss. Batch size is fixed at the
-default of one because volume shapes are not padded or resampled. Latest and
-best checkpoints contain the ADN state, optimizer state, run/model contract,
-normalization/split metadata, and machine-readable epoch history.
+mean and standard deviation. After normalization, only model-input tensors with
+canonical D below 16 receive deterministic constant-zero padding along D:
+13 becomes 16 with widths `(1, 2)`, 15 becomes 16 with widths `(0, 1)`, and
+D at least 16 is unchanged. H/W are never padded or cropped. This model-only
+adaptation does not modify canonical arrays, provenance, or NIfTI geometry and
+does not resample voxels. The shared padding metadata records the minimum
+model depth, policy, and every padded training case with before/after depth and
+pad widths. It uses only the existing `alignment_losses()` for flip, inverse
+reconstruction, and total loss. Batch size remains fixed at the default of one
+because volumes are processed independently. Latest and best checkpoints
+contain the ADN state, optimizer state, run/model contract,
+normalization/split/padding metadata, and machine-readable epoch history.
 
 The QC CLI loads one explicit image and checkpoint, applies the same
-canonicalization/normalization, and writes exactly three four-panel PNGs for
-deterministic 25/50/75% depth slices plus `summary.json`. It is diagnostic
-only, has isolated output-path checks, and never writes an input path.
+canonicalization/normalization and the same model-input depth padding contract,
+and writes exactly three four-panel PNGs for deterministic 25/50/75% slices of
+the unpadded canonical depth plus `summary.json`. Model outputs are unpadded
+before display or any canonical inverse mapping. It is diagnostic only, has
+isolated output-path checks, and never writes an input path.
 Within ADN, `W` is anatomical LR, `tx` is model-space LR translation, and `rz`
 is acquisition/model in-plane rotation. These are not physical-space 3D rigid
 registration claims.

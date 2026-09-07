@@ -19,6 +19,8 @@ from standalone_nnunet2d.brain_alignment.diagnostic import (
     ensure_diagnostic_output_dir,
     load_diagnostic_checkpoint,
     normalize_volume,
+    pad_model_input_depth,
+    unpad_model_input_depth,
 )
 from standalone_nnunet2d.brain_alignment.nifti_adapter import canonicalize_nifti
 from standalone_nnunet2d.data.nifti_io import read_nifti
@@ -73,18 +75,19 @@ def main(argv: list[str] | None = None) -> int:
     device = torch.device(arguments.device)
     canonical = canonicalize_nifti(read_nifti(image_path))
     original = torch.from_numpy(normalize_volume(canonical.array))[None, None].to(device)
+    model_input, model_input_padding = pad_model_input_depth(original)
     loaded = load_diagnostic_checkpoint(checkpoint_path, device=device)
     loaded.model.eval()
     with torch.no_grad():
-        result = loaded.model(original)
+        result = loaded.model(model_input)
         mirrored = left_right_flip(result.aligned)
         difference = torch.abs(result.aligned - mirrored)
-        flip_before = F.l1_loss(original, left_right_flip(original))
+        flip_before = F.l1_loss(model_input, left_right_flip(model_input))
         flip_after = F.l1_loss(result.aligned, mirrored)
-    original_np = original[0, 0].cpu().numpy()
-    aligned_np = result.aligned[0, 0].cpu().numpy()
-    mirrored_np = mirrored[0, 0].cpu().numpy()
-    difference_np = difference[0, 0].cpu().numpy()
+    original_np = unpad_model_input_depth(model_input, model_input_padding)[0, 0].cpu().numpy()
+    aligned_np = unpad_model_input_depth(result.aligned, model_input_padding)[0, 0].cpu().numpy()
+    mirrored_np = unpad_model_input_depth(mirrored, model_input_padding)[0, 0].cpu().numpy()
+    difference_np = unpad_model_input_depth(difference, model_input_padding)[0, 0].cpu().numpy()
     slices = _slice_indices(original_np.shape[0])
     for item in slices:
         index = item["index"]
@@ -112,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             "array_order": canonical.original_array_order,
         },
         "orientation_canonicalization": canonical.provenance,
+        "model_input_depth_padding": model_input_padding,
         "transform_semantics": {
             "tx": "model_space_lr_translation",
             "rz": "acquisition_model_in_plane_rotation",
