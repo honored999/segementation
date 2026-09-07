@@ -112,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
             "array_order": canonical.original_array_order,
         },
         "orientation_canonicalization": canonical.provenance,
+        "transform_semantics": {
+            "tx": "model_space_lr_translation",
+            "rz": "acquisition_model_in_plane_rotation",
+            "physical_3d_rigid_registration": False,
+        },
         "slice_indices": slices,
         "display_space": "canonical_per_volume_zscore",
         "diagnostic_only": True,

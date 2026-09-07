@@ -124,8 +124,17 @@ def save_diagnostic_checkpoint(
             "class_name": "ADNTransformAligner",
             "in_channels": int(getattr(model, "in_channels", 1)),
             "transform_ranges": _ranges_dict(model),
-            "canonical_model_space": ["SI", "AP", "LR"],
-            "canonical_positive_lps": ["+Z", "+Y", "+X"],
+            "canonical_contract": "acquisition_preserving_lr",
+            "model_axis_semantics": {
+                "D": "acquisition_through_plane",
+                "H": "acquisition_in_plane_non_lr",
+                "W": "anatomical_lr",
+            },
+            "transform_semantics": {
+                "tx": "model_space_lr_translation",
+                "rz": "acquisition_model_in_plane_rotation",
+                "physical_3d_rigid_registration": False,
+            },
         },
         "metadata": dict(metadata),
     }
@@ -160,8 +169,17 @@ def validate_checkpoint_payload(payload: object) -> dict[str, Any]:
         contract.get("class_name") != "ADNTransformAligner"
         or contract.get("in_channels") != 1
         or contract.get("transform_ranges") != expected_ranges
-        or contract.get("canonical_model_space") != ["SI", "AP", "LR"]
-        or contract.get("canonical_positive_lps") != ["+Z", "+Y", "+X"]
+        or contract.get("canonical_contract") != "acquisition_preserving_lr"
+        or contract.get("model_axis_semantics") != {
+            "D": "acquisition_through_plane",
+            "H": "acquisition_in_plane_non_lr",
+            "W": "anatomical_lr",
+        }
+        or contract.get("transform_semantics") != {
+            "tx": "model_space_lr_translation",
+            "rz": "acquisition_model_in_plane_rotation",
+            "physical_3d_rigid_registration": False,
+        }
     ):
         raise ValueError("checkpoint ADN model/orientation contract does not match this workflow")
     if not isinstance(payload["model_state_dict"], dict) or not isinstance(payload["history"], list):

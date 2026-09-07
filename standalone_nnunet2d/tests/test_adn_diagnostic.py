@@ -105,6 +105,14 @@ def test_training_uses_only_fold0_train_images_and_writes_latest_best_history(
     assert latest["metadata"]["batch_size"] == 1
     assert latest["metadata"]["labels_accessed"] is False
     assert latest["history"]
+    assert latest["model_contract"]["canonical_contract"] == "acquisition_preserving_lr"
+    assert latest["model_contract"]["model_axis_semantics"] == {
+        "D": "acquisition_through_plane",
+        "H": "acquisition_in_plane_non_lr",
+        "W": "anatomical_lr",
+    }
+    assert latest["model_contract"]["transform_semantics"]["tx"] == "model_space_lr_translation"
+    assert latest["model_contract"]["transform_semantics"]["rz"] == "acquisition_model_in_plane_rotation"
     assert best["metadata"]["checkpoint_role"] == "best"
 
 
@@ -218,7 +226,13 @@ def test_qc_cli_writes_three_four_panel_pngs_and_json_without_mutating_input(
     assert "rz_degree" in summary and "tx" in summary
     assert "flip_loss_before" in summary and "flip_loss_after" in summary
     assert summary["raw_geometry"]["spacing_xyz"] == [0.7, 0.8, 4.5]
-    assert summary["orientation_canonicalization"]["permutation"] == [0, 1, 2]
+    assert summary["orientation_canonicalization"]["applied_permutation"] == [0, 1, 2]
+    assert summary["orientation_canonicalization"]["canonical_contract"] == "acquisition_preserving_lr"
+    assert summary["transform_semantics"] == {
+        "tx": "model_space_lr_translation",
+        "rz": "acquisition_model_in_plane_rotation",
+        "physical_3d_rigid_registration": False,
+    }
     assert [item["percent"] for item in summary["slice_indices"]] == [25, 50, 75]
     assert summary["checkpoint"] == str(checkpoint.resolve())
 
