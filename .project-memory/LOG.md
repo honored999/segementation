@@ -1,5 +1,10 @@
 # Log
 
+## 2026-09-07 — ADN transform loss landscape diagnostic
+- Changed: added an image-only CLI that applies the formal NIfTI preprocessing/padding chain, scans the fixed 7x5 `(rz, tx)` grid with existing transform/warp/loss functions, and writes per-case CSV, summary, and heatmap outputs.
+- Validation: valid RED for the missing CLI; focused `3 passed`; affected ADN group `59 passed`; independent Level 3 review returned PASS.
+- Result: no encoder, checkpoint, labels, split, real Dataset501 data, or training was accessed; real case conclusions remain pending a server-side diagnostic run.
+
 ## 2026-09-07 — Diagnostic short-depth model input padding
 - Changed: after z-score normalization, diagnostic training/QC now pad only D<16 with deterministic symmetric constant zeros, validate the padding contract in checkpoints, and unpad QC outputs before canonical display.
 - Validation: scoped worker RED/GREEN; fresh `358 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`.
