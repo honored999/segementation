@@ -1,5 +1,11 @@
 # Log
 
+## 2026-09-08 — ADN geometry-vs-loss diagnostic
+- Changed: added an image-only CLI that estimates three-slice centroid/principal-axis geometry, applies an explicit voxel forward-content correction through inverse normalized sampling, and compares identity, optional ADN prediction, and geometry alignment with CSV/JSON/QC outputs.
+- Validation: RED/GREEN synthetic coverage; fresh `370 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`.
+- Review: independent Level 3 found a modulo-180 principal-axis median blocker; a focused `+89/-89` regression and deterministic axial-aware median fixed it, and re-review returned PASS.
+- Result: ADN architecture/ranges/loss/training, Dataset501, labels, and split were unchanged; no real data or training was accessed.
+
 ## 2026-09-07 — ADN transform loss landscape diagnostic
 - Changed: added an image-only CLI that applies the formal NIfTI preprocessing/padding chain, scans the fixed 7x5 `(rz, tx)` grid with existing transform/warp/loss functions, and writes per-case CSV, summary, and heatmap outputs.
 - Validation: valid RED for the missing CLI; focused `3 passed`; affected ADN group `59 passed`; independent Level 3 review returned PASS.
