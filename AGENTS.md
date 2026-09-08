@@ -4,6 +4,7 @@
 
 Project: `Stroke Lesion Segmentation`
 Repository root: `.`
+Integration branch: `master`
 
 Primary source:
 - `standalone_nnunet2d/`
@@ -35,9 +36,10 @@ weaken repository-level safety rules.
 Global reusable skills:
 
 - `subagent-orchestration`: execution-mode selection, scoped normal subagents,
-  automatic independent Worktree Chat/task creation, LunaMax long-task workers,
-  automatic result collection when supported, manual top-level-thread fallback,
-  monitoring, fixer flow, and evidence-based acceptance.
+  automatic independent Worktree Chat/task creation, LunaMax independent workers,
+  result collection, monitoring, escalation, fixer flow, and acceptance.
+- `project-memory`: concise repository-level state for cross-session,
+  cross-terminal, branch, and worktree continuity under `.project-memory/`.
 - `level3-review`: correctness-sensitive independent review for medical/scientific
   preprocessing, geometry, leakage, metrics, checkpoint/runtime contracts,
   cross-module interfaces, destructive behavior, or other high-risk changes.
@@ -57,6 +59,48 @@ Project-local skills:
 
 Load only the skill(s) needed for the current task.
 
+## Project memory
+
+Use the global `project-memory` skill for repository-level continuity.
+
+Canonical integration branch:
+
+`master`
+
+Memory layout:
+
+`.project-memory/{STATUS.md,GOALS.md,NEXT.md,LOG.md}`
+
+On `master`, local `.project-memory/` is the canonical repository-level memory.
+In another branch or independent worktree, treat checked-out local
+`.project-memory/` as a branch-local snapshot and prefer canonical `master`
+memory according to the `project-memory` skill, for example:
+
+- `git show master:.project-memory/STATUS.md`
+- `git show master:.project-memory/GOALS.md`
+- `git show master:.project-memory/NEXT.md`
+
+Project-specific content rules:
+
+- `STATUS.md`: verified pipeline/model/data-interface state, accepted baselines,
+  materially relevant active workstreams, and key scientific invariants.
+- `GOALS.md`: stable segmentation/research goal and current milestone.
+- `NEXT.md`: only immediate engineering/experimental actions and concrete
+  blockers.
+- `LOG.md`: short accepted-task entries with affected component, material change,
+  and validation/preflight/formal-run status.
+
+Never store patient data, patient identifiers, raw medical-image contents,
+secrets, training logs, full tracebacks, or large metric tables in project
+memory. Numerical results may be summarized only when provenance and experiment
+status are clear. Preserve the distinction between synthetic, smoke, preflight,
+baseline, tuning, and formal evaluation; a preflight result is never a formal
+result merely because it appears in memory.
+
+Independent worker worktrees must not edit canonical project memory unless their
+task brief explicitly grants memory ownership. They return HANDOFF evidence; the
+parent/main agent synchronizes only accepted, validated/integrated state.
+
 ## Global scientific invariants
 
 - Dataset501 is the established DWI-only baseline.
@@ -75,7 +119,7 @@ Load only the skill(s) needed for the current task.
 ## Agent roles
 
 The main agent is coordinator, architect, integration manager, acceptance
-decision maker, Git coordinator, and final reporter.
+decision maker, reviewer/fixer coordinator, Git coordinator, and final reporter.
 
 Preserve main-agent context for architecture, protocol, integration, and
 acceptance.
@@ -89,6 +133,11 @@ Before delegation, use `subagent-orchestration`:
   or result retrieval is unavailable;
 - persistent external process for multi-hour training or similar execution.
 
+Normal subagents are leaf workers: they must not create other subagents,
+reviewers, validators, fixers, or independent tasks. Independent review, fixer
+creation, validation-worker creation, and execution-mode escalation remain main
+agent responsibilities.
+
 When the main agent creates an independent task, preserve its task/thread/worktree
 IDs and retrieve the final HANDOFF automatically when supported.
 
@@ -96,7 +145,8 @@ Do not require manual HANDOFF copy/paste when the result can be fetched reliably
 
 An independent worker must not recursively hand the same core task to another
 independent worker. It may use only small scoped normal subagents for focused
-investigation, tests, review, or fixer work.
+investigation, tests, review, or fixer work; those normal subagents remain leaf
+workers.
 
 Do not duplicate the same implementation concurrently between parent, normal
 subagents, and independent workers.
@@ -198,10 +248,12 @@ Before completion verify, as applicable:
 - raw data unchanged;
 - intended files only committed;
 - unrelated pre-existing user changes untouched;
-- documentation reflects verified behavior.
+- documentation reflects verified behavior;
+- canonical project memory is synchronized when the task changed accepted
+  repository state.
 
 ## Final report
 
 Keep the report concise and evidence-dense: what changed, files, validation and
-results, reviewer result when required, unresolved issues, commit hash, and final
-Git status.
+results, reviewer result when required, unresolved issues, commit hash, final Git
+status, and whether canonical project memory was synchronized when applicable.
