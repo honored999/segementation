@@ -260,16 +260,26 @@ def main() -> None:
     if not gt_files:
         raise RuntimeError(f"No NIfTI files found in GT directory: {args.gt_dir}")
 
+    
     pred_ids = set(pred_files)
     gt_ids = set(gt_files)
-    missing_gt = sorted(pred_ids - gt_ids)
-    missing_pred = sorted(gt_ids - pred_ids)
 
-    if missing_gt or missing_pred:
+    # Every prediction must have a corresponding GT.
+    # Extra GT cases are allowed and ignored. This supports fold-level evaluation
+    # against a full labelsTr directory.
+    missing_gt = sorted(pred_ids - gt_ids)
+
+    if missing_gt:
         raise RuntimeError(
-            "Prediction/GT case IDs do not match.\n"
-            f"Missing GT for: {missing_gt[:20]}\n"
-            f"Missing prediction for: {missing_pred[:20]}"
+            "Some predictions do not have matching GT.\n"
+            f"Missing GT for: {missing_gt[:20]}"
+        )
+
+    extra_gt = sorted(gt_ids - pred_ids)
+    if extra_gt:
+        print(
+            f"GT directory contains {len(extra_gt)} additional cases; "
+            "they will be ignored."
         )
 
     rows = [
