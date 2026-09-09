@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 import numpy as np
+from scipy import ndimage
 import torch
 from torch import Tensor
 
@@ -174,28 +175,62 @@ def _largest_connected_component(mask: np.ndarray) -> np.ndarray:
 
 
 def deterministic_foreground_component(slice_array: np.ndarray) -> tuple[np.ndarray, float]:
-    """Extract a simple deterministic foreground and retain its largest component.
+    """Extract a binary whole-head outer shape for diagnostic geometry.
 
-    The threshold is derived from the slice itself, so no cohort statistic,
-    lesion label, or learned segmentation model is involved.  A quarter of the
-    robust upper-tail interval above the median is enough to separate the
-    positive head signal from a zero/low-valued background in the normalized
-    diagnostic inputs while remaining deliberately simple.
+    The image border is treated as a background reference only through its
+    robust median and MAD; background is not assumed to be zero.  For nonzero
+    border MAD, a low threshold is clipped to half of the robust p90 contrast.
+    For zero or near-zero border MAD, the threshold uses half of the 10th
+    percentile of values above an interior background noise floor. The negative
+    tail relative to the border median estimates Gaussian background sigma
+    (half-normal median / 0.67448975); three sigma excludes background from
+    foreground candidates and bounds the threshold below. This assumes a
+    brighter head and approximately symmetric background noise, and requires
+    dim head signal above that noise floor. Bright high-tail structures do not
+    set the noise estimate. The largest 8-connected component removes
+    separate bright structures, then hole filling and one 3x3 closing produce
+    the binary outer shape used by centroid/PCA.
+    This is an image-only diagnostic heuristic, not a lesion or brain mask.
     """
     values = np.asarray(slice_array, dtype=np.float32)
     if values.ndim != 2:
         raise ValueError(f"slice must be 2-D, got {values.shape}")
     if not np.isfinite(values).all():
         raise ValueError("slice contains non-finite values")
-    median = float(np.percentile(values, 50.0))
-    upper = float(np.percentile(values, 90.0))
-    threshold = median + 0.25 * (upper - median)
+    border = np.concatenate(
+        (values[0, :], values[-1, :], values[1:-1, 0], values[1:-1, -1])
+    )
+    background = float(np.median(border))
+    mad = float(np.median(np.abs(border - background)))
+    robust_scale = 1.4826 * mad
+    epsilon = float(np.finfo(np.float32).eps)
+    if robust_scale <= epsilon:
+        negative_tail = background - values[values < background - epsilon]
+        interior_sigma = (
+            float(np.median(negative_tail)) / 0.67448975
+            if negative_tail.size else 0.0
+        )
+        noise_floor = background + 3.0 * interior_sigma
+        positive_foreground = values[values > noise_floor + epsilon]
+        if positive_foreground.size:
+            low_foreground = float(np.percentile(positive_foreground, 10.0))
+            threshold = max(noise_floor, background + 0.5 * (low_foreground - background))
+        else:
+            threshold = noise_floor
+    else:
+        upper = float(np.percentile(values, 90.0))
+        contrast = max(upper - background, 0.0)
+        threshold = background + min(2.5 * robust_scale, 0.5 * contrast)
     if not math.isfinite(threshold):
         raise ValueError("foreground threshold is non-finite")
     mask = values > threshold
     component = _largest_connected_component(mask)
+    component = ndimage.binary_fill_holes(component)
+    component = ndimage.binary_closing(
+        component, structure=np.ones((3, 3), dtype=bool), iterations=1
+    )
     if int(component.sum()) < 3:
-        raise ValueError("deterministic foreground component is too small")
+        raise ValueError("whole-head foreground component is too small")
     return component, threshold
 
 
@@ -283,6 +318,15 @@ def estimate_case_geometry(volume: np.ndarray) -> GeometryEstimate:
         estimated_centroid_x=float(np.median([item.centroid_x for item in selected])),
         estimated_centroid_y=float(np.median([item.centroid_y for item in selected])),
     )
+
+
+def geometry_pose_plausibility(estimate: GeometryEstimate) -> dict[str, float | bool]:
+    """Report a diagnostic warning for large estimated in-plane poses."""
+    estimated_abs_rotation_degree = abs(float(estimate.estimated_content_rotation_degree))
+    return {
+        "estimated_abs_rotation_degree": estimated_abs_rotation_degree,
+        "large_rotation_warning": estimated_abs_rotation_degree > 30.0,
+    }
 
 
 def _validate_spatial_shape(spatial_shape: tuple[int, int, int]) -> None:
@@ -566,11 +610,14 @@ def _draw_image(
     *,
     title: str,
     geometry: SliceGeometry | None,
+    contour_mask: np.ndarray | None = None,
     cmap: str = "gray",
 ) -> None:
     axis.imshow(image, cmap=cmap, interpolation="nearest")
     axis.set_title(title, fontsize=7)
     axis.axis("off")
+    if contour_mask is not None:
+        axis.contour(contour_mask.astype(np.float32), levels=(0.5,), colors="cyan", linewidths=0.7)
     if geometry is not None:
         axis.scatter([geometry.centroid_x], [geometry.centroid_y], s=10, c="red")
         angle = math.radians(geometry.principal_axis_angle_degree)
@@ -617,8 +664,8 @@ def _save_geometry_qc(
     selected = slice_indices(int(original.shape[0]))
     figure, axes = plt.subplots(
         len(selected),
-        10,
-        figsize=(25, 4.0 * len(selected)),
+        11,
+        figsize=(27.5, 4.0 * len(selected)),
         squeeze=False,
         constrained_layout=True,
     )
@@ -633,31 +680,35 @@ def _save_geometry_qc(
         original_geometry = _slice_geometry(before, index)
         adn_slice_geometry = _slice_geometry(adn_geometry, index)
         geometry_slice_geometry = _slice_geometry(geometry_geometry, index)
+        whole_head_mask, _ = deterministic_foreground_component(original_slice)
         panels = (
-            (original_slice, f"original {selected_slice.percent}%", original_geometry, "gray"),
-            (original_mirror, "original LR mirror", None, "gray"),
-            (np.abs(original_slice - original_mirror), "original abs diff", None, "magma"),
+            (original_slice, f"original {selected_slice.percent}%", original_geometry, None, "gray"),
+            (whole_head_mask, "whole-head mask/contour", original_geometry, whole_head_mask, "gray"),
+            (original_mirror, "original LR mirror", None, None, "gray"),
+            (np.abs(original_slice - original_mirror), "original abs diff", None, None, "magma"),
             (
                 adn_slice,
                 "ADN aligned" if adn_geometry is not None else "ADN aligned (not requested)",
                 adn_slice_geometry,
+                None,
                 "gray",
             ),
-            (adn_mirror, "ADN LR mirror", None, "gray"),
-            (np.abs(adn_slice - adn_mirror), "ADN abs diff", None, "magma"),
-            (geometry_slice, "geometry aligned", geometry_slice_geometry, "gray"),
-            (geometry_mirror, "geometry LR mirror", None, "gray"),
-            (np.abs(geometry_slice - geometry_mirror), "geometry abs diff", None, "magma"),
+            (adn_mirror, "ADN LR mirror", None, None, "gray"),
+            (np.abs(adn_slice - adn_mirror), "ADN abs diff", None, None, "magma"),
+            (geometry_slice, "geometry aligned", geometry_slice_geometry, None, "gray"),
+            (geometry_mirror, "geometry LR mirror", None, None, "gray"),
+            (np.abs(geometry_slice - geometry_mirror), "geometry abs diff", None, None, "magma"),
         )
-        for column_index, (image, title, slice_geometry, cmap) in enumerate(panels):
+        for column_index, (image, title, slice_geometry, contour_mask, cmap) in enumerate(panels):
             _draw_image(
                 axes[row_index, column_index],
                 image,
                 title=title,
                 geometry=slice_geometry,
+                contour_mask=contour_mask,
                 cmap=cmap,
             )
-        text_axis = axes[row_index, 9]
+        text_axis = axes[row_index, 10]
         text_axis.axis("off")
         text_axis.text(
             0.0,
@@ -847,6 +898,7 @@ def _run_case(
         "estimated_content_lr_translation_pixels": before_geometry.estimated_content_lr_translation_pixels,
         "geometry_angle_degree": before_geometry.estimated_content_rotation_degree,
         "geometry_translation_pixels": before_geometry.estimated_content_lr_translation_pixels,
+        "geometry_pose_plausibility": geometry_pose_plausibility(before_geometry),
         "geometry_applied_content_rotation_degree": records[2]["applied_content_rotation_degree"],
         "geometry_applied_content_lr_translation_pixels": records[2]["applied_content_lr_translation_pixels"],
         "identity_total_loss": identity.total_loss,
@@ -869,9 +921,15 @@ def _run_case(
         "model_input_depth_padding": padding,
         "orientation_canonicalization": getattr(canonical, "provenance", {}),
         "display_space": "canonical_per_volume_zscore",
+        "geometry_mask_assumptions": {
+            "background_reference": "image-border median and MAD; background is not assumed to be zero",
+            "threshold": "if 1.4826 * border_MAD <= float32_epsilon: sigma = median(border_median - values[values < border_median - float32_epsilon]) / 0.67448975 (zero if empty); noise_floor = border_median + 3 * sigma; use max(noise_floor, border_median + 0.5 * (p10(values > noise_floor + float32_epsilon) - border_median)), or noise_floor when empty; otherwise use border_median + min(2.5 * 1.4826 * border_MAD, 0.5 * max(p90 - border_median, 0)); strict greater-than",
+            "postprocessing": "largest 8-connected component, binary hole fill, one 3x3 binary closing",
+            "purpose": "diagnostic whole-head outer shape for centroid/PCA; not a lesion or brain segmentation",
+        },
         "transform_semantics": {
             "content_coordinates": "voxel_(x=W,y=H,z=D)",
-            "geometry_estimate": "observed_content_pose_from_ellipse_centroid_and_PCA_angle",
+            "geometry_estimate": "observed_content_pose_from_binary_whole_head_centroid_and_PCA_angle",
             "geometry_forward_transform": "inverse_of_observed_pose; maps input content to corrected output content",
             "sampling_matrix": "align_corners_false_output_to_input_normalized_inverse(F)",
             "adn_sampling_matrix": "existing_checkpoint_output_to_input_normalized_sampling_matrix",

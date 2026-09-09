@@ -69,6 +69,78 @@ def _centroid_x(array: np.ndarray) -> float:
     return float(coordinates[:, 1].mean())
 
 
+def _head_slice_with_internal_structures(
+    *,
+    height: int = 88,
+    width: int = 112,
+    center_x: float | None = None,
+    center_y: float | None = None,
+    angle_degree: float = 8.0,
+) -> np.ndarray:
+    """Build a non-square head shape with noise, holes, and bright structures."""
+    rng = np.random.default_rng(1401)
+    center_x = (width - 1) / 2 if center_x is None else center_x
+    center_y = (height - 1) / 2 if center_y is None else center_y
+    yy, xx = np.mgrid[:height, :width]
+    angle = np.deg2rad(angle_degree)
+    cosine, sine = np.cos(angle), np.sin(angle)
+    x = xx - center_x
+    y = yy - center_y
+    major = cosine * x + sine * y
+    minor = -sine * x + cosine * y
+    head = (major / 36.0) ** 2 + (minor / 24.0) ** 2 <= 1.0
+    values = 12.0 + rng.normal(0.0, 0.8, size=(height, width))
+    values[head] = 24.0 + 3.0 * (xx[head] > center_x)
+    values[(x + 12.0) ** 2 + (y + 5.0) ** 2 < 5.0**2] = 100.0
+    values[(x - 13.0) ** 2 + (y - 6.0) ** 2 < 4.0**2] = 130.0
+    values[(x - 1.0) ** 2 + (y + 1.0) ** 2 < 3.0**2] = 13.0
+    values[2:5, 4:8] = 150.0
+    return values.astype(np.float32)
+
+
+def _head_volume_with_internal_structures(*, depth: int = 9) -> np.ndarray:
+    return np.stack(
+        [
+            _head_slice_with_internal_structures(
+                center_x=(112 - 1) / 2 + (index - depth // 2) * 0.2,
+                angle_degree=8.0,
+            )
+            for index in range(depth)
+        ],
+        axis=0,
+    )
+
+
+def _clean_constant_background_head(*, bright_variant: str) -> np.ndarray:
+    """Make a clean-background head where bright structures can dominate p90."""
+    height, width = 88, 112
+    yy, xx = np.mgrid[:height, :width]
+    center_x, center_y = (width - 1) / 2, (height - 1) / 2
+    angle = np.deg2rad(8.0)
+    x, y = xx - center_x, yy - center_y
+    major = np.cos(angle) * x + np.sin(angle) * y
+    minor = -np.sin(angle) * x + np.cos(angle) * y
+    head = (major / 36.0) ** 2 + (minor / 24.0) ** 2 <= 1.0
+    values = np.zeros((height, width), dtype=np.float32)
+    values[head] = 1.0
+    if bright_variant == "blob":
+        bright = (major + 10.0) ** 2 + (minor - 3.0) ** 2 <= 7.0**2
+        values[bright & head] = 10.0
+    elif bright_variant == "unilateral":
+        values[head & (xx > center_x)] = 100.0
+    elif bright_variant == "multiple":
+        for offset_major, offset_minor, radius, intensity in (
+            (-14.0, -5.0, 13.0, 25.0),
+            (0.0, 7.0, 13.0, 100.0),
+            (14.0, -5.0, 13.0, 250.0),
+        ):
+            bright = (major - offset_major) ** 2 + (minor - offset_minor) ** 2 <= radius**2
+            values[bright & head] = intensity
+    elif bright_variant != "none":
+        raise ValueError(f"unknown bright variant: {bright_variant}")
+    return values
+
+
 def test_known_translated_ellipse_recovers_centroid_and_lr_offset() -> None:
     expected_center_x = (96 - 1) / 2 + 7.5
     estimate = comparison.estimate_slice_geometry(
@@ -85,6 +157,153 @@ def test_known_rotated_ellipse_recovers_principal_axis_angle() -> None:
     )
 
     assert estimate.principal_axis_angle_degree == pytest.approx(27.0, abs=1.5)
+
+
+def test_whole_head_mask_uses_binary_outer_shape_under_internal_bright_structures() -> None:
+    values = _head_slice_with_internal_structures()
+
+    mask, threshold = comparison.deterministic_foreground_component(values)
+    estimate = comparison.estimate_slice_geometry(values, slice_index=4, percent=50)
+
+    assert threshold > 12.0
+    assert mask[44, 55]  # the dark internal structure is filled as an outer-shape hole
+    assert not mask[3, 5]  # a separate bright background component is discarded
+    assert estimate.centroid_x == pytest.approx((112 - 1) / 2, abs=0.8)
+    assert estimate.centroid_y == pytest.approx((88 - 1) / 2, abs=0.8)
+    assert estimate.principal_axis_angle_degree == pytest.approx(8.0, abs=1.5)
+
+
+@pytest.mark.parametrize("bright_variant", ["blob", "unilateral", "multiple"])
+def test_clean_background_brightness_magnitude_and_count_do_not_change_outer_geometry(
+    bright_variant: str,
+) -> None:
+    baseline = _clean_constant_background_head(bright_variant="none")
+    bright = _clean_constant_background_head(bright_variant=bright_variant)
+
+    baseline_mask, baseline_threshold = comparison.deterministic_foreground_component(baseline)
+    bright_mask, bright_threshold = comparison.deterministic_foreground_component(bright)
+    baseline_geometry = comparison.estimate_slice_geometry(baseline, slice_index=0, percent=50)
+    bright_geometry = comparison.estimate_slice_geometry(bright, slice_index=0, percent=50)
+
+    assert np.array_equal(bright_mask, baseline_mask)
+    assert bright_threshold == pytest.approx(baseline_threshold, abs=1e-6)
+    assert bright_geometry.centroid_x == pytest.approx(baseline_geometry.centroid_x, abs=1e-6)
+    assert bright_geometry.centroid_y == pytest.approx(baseline_geometry.centroid_y, abs=1e-6)
+    assert bright_geometry.principal_axis_angle_degree == pytest.approx(
+        baseline_geometry.principal_axis_angle_degree, abs=1e-6
+    )
+
+
+@pytest.mark.parametrize("sigma", [0.0, 0.05, 0.10])
+def test_zero_border_with_interior_background_noise_preserves_head(sigma: float) -> None:
+    expected = _ellipse_slice(
+        height=88, width=112, center_x=61.5, center_y=40.5,
+        radius_x=36.0, radius_y=24.0, angle_degree=8.0,
+    ).astype(bool)
+    _, xx = np.mgrid[:88, :112]
+    rng = np.random.default_rng(1401)
+    frames = []
+    for _ in range(9):
+        frame = rng.normal(0.0, sigma, size=(88, 112)).astype(np.float32)
+        frame[expected] = 1.0
+        frame[expected & (xx > 61.5)] = 100.0
+        frame[2:5, 4:8] = 150.0
+        frame[[0, -1], :] = 0.0
+        frame[:, [0, -1]] = 0.0
+        frames.append(frame)
+    normalized = comparison.normalize_volume(np.stack(frames))
+    for selected in comparison.slice_indices(9):
+        mask, _ = comparison.deterministic_foreground_component(normalized[selected.index])
+        iou = np.count_nonzero(mask & expected) / np.count_nonzero(mask | expected)
+        assert iou > 0.99
+        assert not mask[3, 5]
+    estimate = comparison.estimate_case_geometry(normalized)
+    assert estimate.estimated_centroid_x == pytest.approx(61.5, abs=0.2)
+    assert estimate.estimated_centroid_y == pytest.approx(40.5, abs=0.2)
+    assert estimate.estimated_content_lr_translation_pixels == pytest.approx(6.0, abs=0.2)
+    assert estimate.estimated_content_rotation_degree == pytest.approx(8.0, abs=0.5)
+
+
+def test_geometry_qc_reserves_a_text_column_after_ten_image_panels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    real_subplots = comparison.plt.subplots
+
+    def subplots(*args: object, **kwargs: object):
+        captured["ncols"] = args[1] if len(args) > 1 else kwargs.get("ncols")
+        figure, axes = real_subplots(*args, **kwargs)
+        captured["axes_shape"] = tuple(axes.shape)
+        return figure, axes
+
+    monkeypatch.setattr(comparison.plt, "subplots", subplots)
+    volume = np.stack([_clean_constant_background_head(bright_variant="unilateral")] * 9)
+    estimate = comparison.estimate_case_geometry(volume)
+    comparison._save_geometry_qc(
+        tmp_path / "geometry_qc.png",
+        original=volume,
+        adn=volume,
+        geometry_aligned=volume,
+        before=estimate,
+        adn_geometry=None,
+        geometry_geometry=estimate,
+    )
+
+    assert captured["ncols"] == 11
+    assert captured["axes_shape"] == (3, 11)
+
+
+def test_geometry_is_stable_after_positive_affine_intensity_shift_and_scale() -> None:
+    raw = _head_volume_with_internal_structures()
+    shifted_scaled = raw * 3.75 + 41.0
+
+    raw_estimate = comparison.estimate_case_geometry(comparison.normalize_volume(raw))
+    shifted_scaled_estimate = comparison.estimate_case_geometry(
+        comparison.normalize_volume(shifted_scaled)
+    )
+
+    assert shifted_scaled_estimate.estimated_centroid_x == pytest.approx(
+        raw_estimate.estimated_centroid_x, abs=0.05
+    )
+    assert shifted_scaled_estimate.estimated_centroid_y == pytest.approx(
+        raw_estimate.estimated_centroid_y, abs=0.05
+    )
+    assert shifted_scaled_estimate.estimated_content_rotation_degree == pytest.approx(
+        raw_estimate.estimated_content_rotation_degree, abs=0.1
+    )
+
+
+def test_rotated_translated_whole_head_recovers_pose_and_geometry_correction() -> None:
+    volume = np.stack(
+        [
+            _head_slice_with_internal_structures(
+                center_x=(112 - 1) / 2 + 6.0,
+                center_y=(88 - 1) / 2 - 3.0,
+                angle_degree=8.0,
+            )
+            for _ in range(16)
+        ],
+        axis=0,
+    )
+    before = comparison.estimate_case_geometry(comparison.normalize_volume(volume))
+    correction = comparison.build_geometry_correction_transform(
+        before, spatial_shape=(16, 88, 112)
+    )
+    sampling, _ = comparison.content_transform_to_sampling_matrices(
+        correction, spatial_shape=(16, 88, 112)
+    )
+    aligned = warp_volume(
+        torch.from_numpy(comparison.normalize_volume(volume))[None, None],
+        sampling,
+        mode="bilinear",
+    )
+    after = comparison.estimate_case_geometry(aligned[0, 0].numpy())
+
+    assert before.estimated_content_lr_translation_pixels == pytest.approx(6.0, abs=0.8)
+    assert before.estimated_centroid_y == pytest.approx((88 - 1) / 2 - 3.0, abs=0.8)
+    assert before.estimated_content_rotation_degree == pytest.approx(8.0, abs=1.5)
+    assert abs(after.estimated_content_lr_translation_pixels) < 1.0
+    assert abs(after.estimated_content_rotation_degree) < 2.0
 
 
 def test_case_geometry_uses_the_three_slice_median() -> None:
@@ -122,6 +341,17 @@ def test_case_geometry_angle_median_is_axial_aware_across_vertical_boundary() ->
 
     assert -90.0 <= estimate.estimated_content_rotation_degree < 90.0
     assert abs(abs(estimate.estimated_content_rotation_degree) - 90.0) < 3.0
+
+
+def test_geometry_pose_plausibility_warns_above_30_without_clamping() -> None:
+    volume = _ellipse_volume(depth=9, angles=[45.0] * 9)
+    estimate = comparison.estimate_case_geometry(volume)
+
+    plausibility = comparison.geometry_pose_plausibility(estimate)
+
+    assert estimate.estimated_content_rotation_degree == pytest.approx(45.0, abs=1.5)
+    assert plausibility["estimated_abs_rotation_degree"] == pytest.approx(45.0, abs=1.5)
+    assert plausibility["large_rotation_warning"] is True
 
 
 def test_forward_content_transform_is_converted_to_inverse_sampling_and_roundtrips() -> None:
@@ -262,6 +492,16 @@ def test_cli_writes_required_outputs_without_labels_or_training_when_checkpoint_
     assert summary["adn_available"] is False
     assert summary["labels_accessed"] is False
     assert summary["training_called"] is False
+    assert summary["geometry_pose_plausibility"] == {
+        "estimated_abs_rotation_degree": pytest.approx(0.0),
+        "large_rotation_warning": False,
+    }
+    assert summary["geometry_mask_assumptions"]["background_reference"].startswith(
+        "image-border median"
+    )
+    assert "p10(values > noise_floor + float32_epsilon)" in summary["geometry_mask_assumptions"]["threshold"]
+    assert "max(p90 - border_median, 0)" in summary["geometry_mask_assumptions"]["threshold"]
+    assert "largest 8-connected component" in summary["geometry_mask_assumptions"]["postprocessing"]
     with (case_output / "comparison.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert [row["state"] for row in rows] == ["identity", "adn_prediction", "geometry_estimate"]

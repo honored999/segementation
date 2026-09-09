@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-09-08
+Updated: 2026-09-09
 
 ## Current state
 - Dataset501 remains the established read-only DWI-only baseline with fixed patient-level folds.
@@ -16,7 +16,9 @@ Updated: 2026-09-08
 - Training checkpoints and QC record and validate the shared model-input padding contract; QC removes model-only padding before canonical-depth display or inverse mapping.
 - The loss-landscape CLI scans 35 fixed `(rz, tx)` candidates per requested image without constructing the ADN encoder or loading checkpoints, and records per-case CSV, summary, and heatmap outputs.
 - The geometry-vs-loss CLI estimates deterministic ellipse centroid/principal-axis pose on 25/50/75% acquisition slices, converts an explicit voxel-space forward content correction through `inverse(F)` to an `align_corners=False` sampler, and compares identity, optional ADN checkpoint prediction, and geometry alignment without labels or training.
-- Fresh synthetic validation: `370 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`; independent Level 3 re-review returned PASS after the principal-axis median was made modulo-180 aware.
+- Whole-head geometry now uses a robust low threshold, largest component, hole filling and closing before binary PCA; QC displays its mask/contour, and summary flags rotations above 30 degrees without clamping. Transform and loss-comparison semantics are unchanged.
+- Fresh synthetic validation: focused `20 passed`, all five ADN files `79 passed`, combined full `standalone_nnunet2d/tests tests` `402 passed`; independent Level 3 re-review PASS after fixing zero-border interior background noise.
+- The fallback assumes approximately symmetric background noise with dim head signal above its noise floor. One-sided positive noise remains a known limitation; real-image pose reliability requires contour QC.
 
 ## Evidence boundary
 - Server-reported Fold 0 orientation preflight covered 76 training images and exposed only the short-depth model-input blocker; the new padding implementation has not yet been rerun on the server.

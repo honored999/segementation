@@ -1,5 +1,11 @@
 # Log
 
+## 2026-09-09 — Whole-head geometry reference
+- Changed: robust low-threshold whole-head component, hole filling/closing and binary PCA; visible mask/contour and diagnostic-only rotation warning without clamping.
+- Validation: RED/GREEN bright-structure and zero-border noise regressions; fresh focused 20, affected ADN 79, full standalone plus root tests 402 passed; compilation and diff checks passed.
+- Review: independent Level 3 BLOCKING on zero-border interior noise was minimally fixed by the original owner; re-review PASS. One-sided positive noise remains a documented limitation.
+- Result: only the diagnostic/test and branch-local project memory changed; transforms/loss comparison and training unchanged, no real data or labels accessed. Server contour QC remains pending; canonical master memory is unavailable and was not changed.
+
 ## 2026-09-08 — ADN geometry-vs-loss diagnostic
 - Changed: added an image-only CLI that estimates three-slice centroid/principal-axis geometry, applies an explicit voxel forward-content correction through inverse normalized sampling, and compares identity, optional ADN prediction, and geometry alignment with CSV/JSON/QC outputs.
 - Validation: RED/GREEN synthetic coverage; fresh `370 passed` in `standalone_nnunet2d/tests` and `21 passed` in root `tests`.
