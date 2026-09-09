@@ -46,6 +46,91 @@ class DwiAdcBilateralImagePreparation:
     alignment_estimate: AlignmentEstimate
 
 
+@dataclass(frozen=True)
+class DwiAdcFusionImagePreparation:
+    """Shared image-only preparation for the DWI+ADC C=3 fusion contract."""
+
+    resampled_dwi: NiftiVolume
+    resampled_adc: NiftiVolume
+    normalized_dwi: NiftiVolume
+    normalized_adc: NiftiVolume
+    fusion: np.ndarray
+    model_input: np.ndarray
+
+
+def _masked_minmax(array: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    normalized = np.zeros(array.shape, dtype=np.float32)
+    values = np.asarray(array, dtype=np.float32)[mask]
+    if values.size == 0:
+        return normalized
+    minimum = float(values.min())
+    span = float(values.max()) - minimum
+    if span > 0.0:
+        normalized[mask] = (values - minimum) / span
+    return normalized
+
+
+def prepare_dwi_adc_fusion_images(
+    dwi: NiftiVolume,
+    adc: NiftiVolume,
+    *,
+    target_spacing_xy: tuple[float, float],
+) -> DwiAdcFusionImagePreparation:
+    """Build C=[z-score DWI, z-score ADC, DWI_01 + (1 - ADC_01)]."""
+    geometry_mismatch = _geometry_mismatch_reason(dwi, adc)
+    if geometry_mismatch is not None:
+        raise ValueError(
+            "DWI and ADC geometry mismatch before resampling: "
+            f"{geometry_mismatch}"
+        )
+    resampled_dwi = resample_inplane(dwi, target_spacing_xy, is_segmentation=False)
+    resampled_adc = resample_inplane(adc, target_spacing_xy, is_segmentation=False)
+    if resampled_adc.array.shape != resampled_dwi.array.shape:
+        raise ValueError(
+            "DWI and ADC resampled shapes must match for fusion input: "
+            f"DWI {resampled_dwi.array.shape}, ADC {resampled_adc.array.shape}"
+        )
+
+    dwi_array = np.asarray(resampled_dwi.array, dtype=np.float32)
+    adc_array = np.asarray(resampled_adc.array, dtype=np.float32)
+    valid_mask = (
+        np.isfinite(dwi_array)
+        & np.isfinite(adc_array)
+        & (dwi_array != 0.0)
+        & (adc_array != 0.0)
+    )
+    dwi_01 = _masked_minmax(dwi_array, valid_mask)
+    adc_01 = _masked_minmax(adc_array, valid_mask)
+    fusion = np.zeros(dwi_array.shape, dtype=np.float32)
+    fusion[valid_mask] = dwi_01[valid_mask] + (1.0 - adc_01[valid_mask])
+
+    normalized_dwi = NiftiVolume(
+        z_score_normalize(dwi_array),
+        resampled_dwi.spacing_xyz,
+        resampled_dwi.origin_xyz,
+        resampled_dwi.direction,
+    )
+    normalized_adc = NiftiVolume(
+        z_score_normalize(adc_array),
+        resampled_adc.spacing_xyz,
+        resampled_adc.origin_xyz,
+        resampled_adc.direction,
+    )
+    model_input = build_input_channels(
+        {"DWI": normalized_dwi, "ADC": normalized_adc},
+        InputMode.DWI_ADC_FUSION,
+        derived_channels={"DWI_ADC_COMPLEMENT_SUM": fusion},
+    )
+    return DwiAdcFusionImagePreparation(
+        resampled_dwi=resampled_dwi,
+        resampled_adc=resampled_adc,
+        normalized_dwi=normalized_dwi,
+        normalized_adc=normalized_adc,
+        fusion=fusion,
+        model_input=model_input,
+    )
+
+
 def prepare_dwi_adc_bilateral_images(
     dwi: NiftiVolume,
     adc: NiftiVolume,
@@ -148,6 +233,8 @@ def resolve_input_channels(raw_root: Path, *, bilateral_asymmetry_channel: bool 
 def build_input_channels(
     normalized_modalities: Mapping[str, NiftiVolume],
     mode: InputMode | str,
+    *,
+    derived_channels: Mapping[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Build an ordered model-input stack from already normalized modalities."""
     spec = input_spec(mode)
@@ -167,6 +254,8 @@ def build_input_channels(
             channels.append(bilateral_difference(normalized_modalities["DWI"], mode="signed"))
         elif recipe == "ADC_LR_SIGNED_DIFF":
             channels.append(bilateral_difference(normalized_modalities["ADC"], mode="signed"))
+        elif recipe == "DWI_ADC_COMPLEMENT_SUM" and derived_channels is not None:
+            channels.append(np.asarray(derived_channels[recipe], dtype=np.float32))
         else:
             raise ValueError(f"unsupported input channel recipe: {recipe!r}")
     if any(channel.shape != reference.array.shape for channel in channels):
@@ -332,6 +421,24 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
             raise ValueError(f"case {case_id!r} is not available in this dataset instance")
         label = read_nifti(self.raw_root / "labelsTr" / f"{case_id}.nii.gz")
         images = read_case_images(self.raw_root, case_id)
+        if self.input_mode is InputMode.DWI_ADC_FUSION:
+            processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
+            for (channel_index, channel_name), image in zip(self.channel_specs, images):
+                reason = _geometry_mismatch_reason(label, image)
+                if reason is not None:
+                    raise ValueError(
+                        f"case {case_id} channel {channel_index} ({channel_name}) geometry "
+                        f"mismatch against label: {reason}"
+                    )
+            prepared = prepare_dwi_adc_fusion_images(
+                images[0], images[1], target_spacing_xy=self.target_spacing_xy
+            )
+            if prepared.resampled_dwi.array.shape != processed_label.array.shape:
+                raise ValueError(
+                    f"case {case_id} fusion input shape mismatch against label: "
+                    f"image {prepared.resampled_dwi.array.shape}, label {processed_label.array.shape}"
+                )
+            return prepared.model_input, processed_label.array
         if self.input_mode is InputMode.DWI_ADC_BILATERAL:
             processed_label = resample_inplane(label, self.target_spacing_xy, is_segmentation=True)
             for (channel_index, channel_name), modality_name in zip(self.channel_specs, ("DWI", "ADC")):

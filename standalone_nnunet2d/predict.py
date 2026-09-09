@@ -16,7 +16,9 @@ from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.data.dataset import load_fold_cases, read_case_images, resolve_channel_specs
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_case,
+    prepare_dwi_adc_fusion_case,
     prepare_dwi_adc_bilateral_case,
+    restore_dwi_adc_fusion_prediction,
     restore_bilateral_asymmetry_prediction,
 )
 from standalone_nnunet2d.data.input_mode import InputMode, input_spec
@@ -172,7 +174,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     prediction_root.mkdir(parents=True, exist_ok=True)
     case_records: list[dict[str, Any]] = []
     for case_id in case_ids:
-        if resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
+        if resolved_input_mode is InputMode.DWI_ADC_FUSION:
+            prepared = prepare_dwi_adc_fusion_case(arguments.raw_root, case_id)
+            source = prepared.source_image
+            prediction = predict_volume(
+                model, prepared.model_volumes, device, mirror_axes=DEFAULT_MIRROR_AXES,
+                patch_size=DEFAULT_PATCH_SIZE, tile_step_size=DEFAULT_TILE_STEP_SIZE,
+                slice_batch_size=arguments.slice_batch_size, normalise_inputs=False,
+            )
+            prediction = restore_dwi_adc_fusion_prediction(prepared, prediction)
+            source_paths = [
+                str(arguments.raw_root.resolve() / "imagesTr" / f"{case_id}_{index:04d}.nii.gz")
+                for index, _ in channel_specs
+            ]
+        elif resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
             prepared = prepare_dwi_adc_bilateral_case(arguments.raw_root, case_id)
             source = prepared.source_image
             prediction = predict_volume(

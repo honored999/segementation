@@ -223,6 +223,7 @@ def checkpoint_input_mode(metadata: Mapping[str, Any]) -> InputMode:
             inferred = {
                 (1, 1): InputMode.DWI,
                 (2, 2): InputMode.DWI_ADC,
+                (2, 3): InputMode.DWI_ADC_FUSION,
                 (1, 2): InputMode.DWI_BILATERAL,
                 (2, 4): InputMode.DWI_ADC_BILATERAL,
             }.get((physical_channels, effective_channels))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from standalone_nnunet2d.data.dataset import prepare_dwi_adc_fusion_images
 from standalone_nnunet2d.data.input_mode import INPUT_SPECS, InputMode, input_spec
 from standalone_nnunet2d.data.nifti_io import NiftiVolume
 from standalone_nnunet2d.data.symmetry_alignment import bilateral_difference
@@ -16,6 +17,7 @@ IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
     [
         (InputMode.DWI, ("DWI",), 1),
         (InputMode.DWI_ADC, ("DWI", "ADC"), 2),
+        (InputMode.DWI_ADC_FUSION, ("DWI", "ADC"), 3),
         (InputMode.DWI_BILATERAL, ("DWI",), 2),
         (InputMode.DWI_ADC_BILATERAL, ("DWI", "ADC"), 4),
     ],
@@ -51,6 +53,38 @@ def test_dwi_adc_bilateral_spec_declares_ordered_signed_recipes_and_dwi_alignmen
     )
     assert spec.requires_alignment is True
     assert spec.alignment_reference_modality == "DWI"
+
+
+def test_dwi_adc_fusion_spec_requires_no_alignment() -> None:
+    spec = input_spec(InputMode.DWI_ADC_FUSION)
+
+    assert spec.physical_modalities == ("DWI", "ADC")
+    assert spec.channel_recipes == ("DWI", "ADC", "DWI_ADC_COMPLEMENT_SUM")
+    assert spec.effective_input_channels == 3
+    assert spec.requires_alignment is False
+    assert spec.alignment_reference_modality is None
+
+
+def test_dwi_adc_fusion_uses_masked_minmax_inputs_and_keeps_background_zero() -> None:
+    dwi = np.zeros((1, 5, 5), dtype=np.float32)
+    adc = np.zeros((1, 5, 5), dtype=np.float32)
+    dwi[0, 1:4, 1:4] = np.array(
+        [[1.0, 2.0, 3.0], [2.0, 9.0, 4.0], [3.0, 4.0, 5.0]], dtype=np.float32
+    )
+    adc[0, 1:4, 1:4] = np.array(
+        [[9.0, 8.0, 7.0], [8.0, 1.0, 6.0], [7.0, 6.0, 5.0]], dtype=np.float32
+    )
+    dwi_volume = NiftiVolume(dwi, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION)
+    adc_volume = NiftiVolume(adc, (1.0, 1.0, 4.0), (0.0, 0.0, 0.0), IDENTITY_DIRECTION)
+
+    prepared = prepare_dwi_adc_fusion_images(
+        dwi_volume, adc_volume, target_spacing_xy=(1.0, 1.0)
+    )
+
+    assert prepared.model_input.shape == (3, 1, 5, 5)
+    assert np.all(prepared.model_input[2, 0, 0, :] == 0.0)
+    assert np.all(prepared.model_input[2, 0, :, 0] == 0.0)
+    assert prepared.model_input[2, 0, 2, 2] > prepared.model_input[2, 0, 1, 1]
 
 
 def test_signed_difference_uses_anatomical_lr_axis_from_direction() -> None:

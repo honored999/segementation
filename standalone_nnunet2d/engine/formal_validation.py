@@ -20,7 +20,9 @@ from standalone_nnunet2d.data.dataset import (
 from standalone_nnunet2d.data.input_mode import InputMode
 from standalone_nnunet2d.data.inference_preprocessing import (
     prepare_bilateral_asymmetry_case,
+    prepare_dwi_adc_fusion_case,
     prepare_dwi_adc_bilateral_case,
+    restore_dwi_adc_fusion_prediction,
     restore_bilateral_asymmetry_prediction,
 )
 from standalone_nnunet2d.data.nifti_io import read_nifti
@@ -130,7 +132,17 @@ def validate_fold(
         try:
             _, label_path = _case_paths(root, case_id)
             label = read_nifti(label_path)
-            if resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
+            if resolved_input_mode is InputMode.DWI_ADC_FUSION:
+                prepared = prepare_dwi_adc_fusion_case(root, case_id)
+                image = prepared.source_image
+                reason = _geometry_mismatch_reason(label, image)
+                if reason is not None:
+                    raise ValueError(f"case {case_id} channel 0 geometry mismatch against label: {reason}")
+                prediction = predict_volume(
+                    model, prepared.model_volumes, device, normalise_inputs=False
+                )
+                prediction = restore_dwi_adc_fusion_prediction(prepared, prediction)
+            elif resolved_input_mode is InputMode.DWI_ADC_BILATERAL:
                 prepared = prepare_dwi_adc_bilateral_case(root, case_id)
                 image = prepared.source_image
                 reason = _geometry_mismatch_reason(label, image)

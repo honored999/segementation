@@ -10,6 +10,7 @@ import SimpleITK as sitk
 
 from standalone_nnunet2d.data.dataset import (
     build_input_channels,
+    prepare_dwi_adc_fusion_images,
     prepare_dwi_adc_bilateral_images,
     read_case_images,
     resolve_channel_specs,
@@ -53,6 +54,18 @@ class DwiAdcBilateralInferenceCase:
     model_volumes: tuple[NiftiVolume, ...]
     physical_input_channels: int = 2
     effective_input_channels: int = 4
+
+
+@dataclass(frozen=True)
+class DwiAdcFusionInferenceCase:
+    """Prepared C=3 DWI+ADC fusion input and DWI restoration geometry."""
+
+    source_image: NiftiVolume
+    resampled_source_image: NiftiVolume
+    model_input: np.ndarray
+    model_volumes: tuple[NiftiVolume, ...]
+    physical_input_channels: int = 2
+    effective_input_channels: int = 3
 
 
 def prepare_bilateral_asymmetry_volume(
@@ -155,6 +168,41 @@ def prepare_dwi_adc_bilateral_case(
     )
 
 
+def prepare_dwi_adc_fusion_case(
+    raw_root: Path,
+    case_id: str,
+    *,
+    target_spacing_xy: tuple[float, float] = DEFAULT_TARGET_SPACING_XY,
+) -> DwiAdcFusionInferenceCase:
+    """Prepare the training-equivalent, non-aligned C=3 fusion input."""
+    channel_specs = resolve_channel_specs(raw_root)
+    expected_specs = ((0, "DWI"), (1, "ADC"))
+    if channel_specs != expected_specs:
+        raise ValueError(
+            "dwi_adc_fusion input requires exactly declared channels "
+            f"{expected_specs}; found {channel_specs}"
+        )
+    dwi, adc = read_case_images(raw_root, case_id)
+    prepared = prepare_dwi_adc_fusion_images(
+        dwi, adc, target_spacing_xy=target_spacing_xy
+    )
+    model_volumes = tuple(
+        NiftiVolume(
+            prepared.model_input[index],
+            prepared.resampled_dwi.spacing_xyz,
+            prepared.resampled_dwi.origin_xyz,
+            prepared.resampled_dwi.direction,
+        )
+        for index in range(prepared.model_input.shape[0])
+    )
+    return DwiAdcFusionInferenceCase(
+        source_image=dwi,
+        resampled_source_image=prepared.resampled_dwi,
+        model_input=prepared.model_input,
+        model_volumes=model_volumes,
+    )
+
+
 def _alignment_inverse(estimate: AlignmentEstimate) -> sitk.Transform:
     transform = sitk.AffineTransform(3)
     transform.SetMatrix(estimate.output_to_input_matrix)
@@ -195,6 +243,31 @@ def restore_bilateral_asymmetry_prediction(
         aligned_prediction,
         prepared.resampled_source_image,
         _alignment_inverse(prepared.alignment_estimate),
+    )
+    source_prediction = _resample_to_reference(
+        resampled_prediction,
+        prepared.source_image,
+        sitk.Transform(3, sitk.sitkIdentity),
+    )
+    return source_prediction.array.astype(np.uint8, copy=False)
+
+
+def restore_dwi_adc_fusion_prediction(
+    prepared: DwiAdcFusionInferenceCase,
+    prediction: np.ndarray,
+) -> np.ndarray:
+    """Map a resampled fusion prediction back to the source DWI grid."""
+    prediction_array = np.asarray(prediction)
+    if prediction_array.shape != prepared.resampled_source_image.array.shape:
+        raise ValueError(
+            "fusion prediction shape must match resampled model input: "
+            f"expected {prepared.resampled_source_image.array.shape}, got {prediction_array.shape}"
+        )
+    resampled_prediction = NiftiVolume(
+        prediction_array.astype(np.uint8, copy=False),
+        prepared.resampled_source_image.spacing_xyz,
+        prepared.resampled_source_image.origin_xyz,
+        prepared.resampled_source_image.direction,
     )
     source_prediction = _resample_to_reference(
         resampled_prediction,

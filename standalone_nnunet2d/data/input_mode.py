@@ -13,6 +13,7 @@ class InputMode(str, Enum):
 
     DWI = "dwi"
     DWI_ADC = "dwi_adc"
+    DWI_ADC_FUSION = "dwi_adc_fusion"
     DWI_BILATERAL = "dwi_bilateral"
     DWI_ADC_BILATERAL = "dwi_adc_bilateral"
 
@@ -48,6 +49,13 @@ INPUT_SPECS: Mapping[InputMode, InputSpec] = MappingProxyType(
             requires_alignment=False,
             alignment_reference_modality=None,
             effective_input_channels=2,
+        ),
+        InputMode.DWI_ADC_FUSION: InputSpec(
+            physical_modalities=("DWI", "ADC"),
+            channel_recipes=("DWI", "ADC", "DWI_ADC_COMPLEMENT_SUM"),
+            requires_alignment=False,
+            alignment_reference_modality=None,
+            effective_input_channels=3,
         ),
         InputMode.DWI_BILATERAL: InputSpec(
             physical_modalities=("DWI",),
