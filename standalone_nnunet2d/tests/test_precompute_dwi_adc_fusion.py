@@ -10,7 +10,10 @@ import standalone_nnunet2d.data.dataset as dataset_module
 import standalone_nnunet2d.tools.precompute_dwi_adc_fusion as precompute_module
 from standalone_nnunet2d.data.fusion import build_dwi_adc_fusion_channel
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti, write_nifti
-from standalone_nnunet2d.tools.precompute_dwi_adc_fusion import build_dataset
+from standalone_nnunet2d.tools.precompute_dwi_adc_fusion import (
+    _geometry_mismatch,
+    build_dataset,
+)
 
 
 IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
@@ -20,9 +23,10 @@ def _volume(
     array: np.ndarray,
     *,
     spacing: tuple[float, float, float] = (1.0, 1.0, 4.0),
+    direction: tuple[float, ...] = IDENTITY_DIRECTION,
 ) -> NiftiVolume:
     return NiftiVolume(
-        np.asarray(array), spacing, (2.0, 3.0, 4.0), IDENTITY_DIRECTION
+        np.asarray(array), spacing, (2.0, 3.0, 4.0), direction
     )
 
 
@@ -59,6 +63,26 @@ def test_build_dwi_adc_fusion_channel_matches_masked_formula() -> None:
 
     np.testing.assert_array_equal(fusion, np.array([[[0.0, 0.0, 2.0]]], dtype=np.float32))
     assert fusion.dtype == np.float32
+
+
+def test_geometry_check_accepts_direction_roundoff_within_tolerance() -> None:
+    array = np.ones((1, 2, 2), dtype=np.float32)
+    rounded_direction = list(IDENTITY_DIRECTION)
+    rounded_direction[0] += 7.5e-9
+
+    assert _geometry_mismatch(
+        _volume(array), _volume(array, direction=tuple(rounded_direction))
+    ) is None
+
+
+def test_geometry_check_rejects_direction_mismatch_above_tolerance() -> None:
+    array = np.ones((1, 2, 2), dtype=np.float32)
+    mismatched_direction = list(IDENTITY_DIRECTION)
+    mismatched_direction[0] += 1e-4
+
+    assert _geometry_mismatch(
+        _volume(array), _volume(array, direction=tuple(mismatched_direction))
+    ) == "direction differs"
 
 
 def test_online_fusion_preparation_uses_shared_pure_builder(monkeypatch) -> None:

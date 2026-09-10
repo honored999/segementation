@@ -79,11 +79,11 @@ def _source_cases(source_root: Path, num_training: int) -> tuple[str, ...]:
 def _geometry_mismatch(dwi: NiftiVolume, adc: NiftiVolume) -> str | None:
     if dwi.array.shape != adc.array.shape:
         return f"shape {dwi.array.shape} != {adc.array.shape}"
-    if dwi.spacing_xyz != adc.spacing_xyz:
+    if not np.allclose(dwi.spacing_xyz, adc.spacing_xyz, rtol=0.0, atol=1e-6):
         return f"spacing {dwi.spacing_xyz} != {adc.spacing_xyz}"
-    if dwi.origin_xyz != adc.origin_xyz:
+    if not np.allclose(dwi.origin_xyz, adc.origin_xyz, rtol=0.0, atol=1e-6):
         return f"origin {dwi.origin_xyz} != {adc.origin_xyz}"
-    if dwi.direction != adc.direction:
+    if not np.allclose(dwi.direction, adc.direction, rtol=0.0, atol=1e-6):
         return "direction differs"
     return None
 
