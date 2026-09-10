@@ -13,6 +13,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from standalone_nnunet2d.data.augmentation import AugmentationConfig, augment_slice
+from standalone_nnunet2d.data.fusion import build_dwi_adc_fusion_channel
 from standalone_nnunet2d.data.input_mode import InputMode, InputSpec, input_spec
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti
 from standalone_nnunet2d.data.preprocessing import resample_inplane, z_score_normalize
@@ -58,18 +59,6 @@ class DwiAdcFusionImagePreparation:
     model_input: np.ndarray
 
 
-def _masked_minmax(array: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    normalized = np.zeros(array.shape, dtype=np.float32)
-    values = np.asarray(array, dtype=np.float32)[mask]
-    if values.size == 0:
-        return normalized
-    minimum = float(values.min())
-    span = float(values.max()) - minimum
-    if span > 0.0:
-        normalized[mask] = (values - minimum) / span
-    return normalized
-
-
 def prepare_dwi_adc_fusion_images(
     dwi: NiftiVolume,
     adc: NiftiVolume,
@@ -93,16 +82,7 @@ def prepare_dwi_adc_fusion_images(
 
     dwi_array = np.asarray(resampled_dwi.array, dtype=np.float32)
     adc_array = np.asarray(resampled_adc.array, dtype=np.float32)
-    valid_mask = (
-        np.isfinite(dwi_array)
-        & np.isfinite(adc_array)
-        & (dwi_array != 0.0)
-        & (adc_array != 0.0)
-    )
-    dwi_01 = _masked_minmax(dwi_array, valid_mask)
-    adc_01 = _masked_minmax(adc_array, valid_mask)
-    fusion = np.zeros(dwi_array.shape, dtype=np.float32)
-    fusion[valid_mask] = dwi_01[valid_mask] + (1.0 - adc_01[valid_mask])
+    fusion = build_dwi_adc_fusion_channel(dwi_array, adc_array)
 
     normalized_dwi = NiftiVolume(
         z_score_normalize(dwi_array),
