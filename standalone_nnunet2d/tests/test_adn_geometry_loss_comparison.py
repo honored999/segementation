@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -67,6 +68,15 @@ def _ellipse_volume(
 def _centroid_x(array: np.ndarray) -> float:
     coordinates = np.argwhere(array > 0.5)
     return float(coordinates[:, 1].mean())
+
+
+def _axis_distance_to_vertical(angle_degree: float) -> float:
+    return abs(comparison._normalize_axis_angle(angle_degree - 90.0))
+
+
+def _rotation_degree(transform: torch.Tensor) -> float:
+    matrix = transform[0].detach().cpu()
+    return math.degrees(math.atan2(float(matrix[1, 0]), float(matrix[0, 0])))
 
 
 def _head_slice_with_internal_structures(
@@ -229,6 +239,7 @@ def test_geometry_qc_reserves_a_text_column_after_ten_image_panels(
 ) -> None:
     captured: dict[str, object] = {}
     real_subplots = comparison.plt.subplots
+    real_suptitle = comparison.plt.Figure.suptitle
 
     def subplots(*args: object, **kwargs: object):
         captured["ncols"] = args[1] if len(args) > 1 else kwargs.get("ncols")
@@ -236,7 +247,12 @@ def test_geometry_qc_reserves_a_text_column_after_ten_image_panels(
         captured["axes_shape"] = tuple(axes.shape)
         return figure, axes
 
+    def suptitle(figure: object, text: str, **kwargs: object):
+        captured["suptitle"] = text
+        return real_suptitle(figure, text, **kwargs)
+
     monkeypatch.setattr(comparison.plt, "subplots", subplots)
+    monkeypatch.setattr(comparison.plt.Figure, "suptitle", suptitle)
     volume = np.stack([_clean_constant_background_head(bright_variant="unilateral")] * 9)
     estimate = comparison.estimate_case_geometry(volume)
     comparison._save_geometry_qc(
@@ -251,6 +267,7 @@ def test_geometry_qc_reserves_a_text_column_after_ten_image_panels(
 
     assert captured["ncols"] == 11
     assert captured["axes_shape"] == (3, 11)
+    assert "geometry target axis = canonical H/y vertical (±90°)" in captured["suptitle"]
 
 
 def test_geometry_is_stable_after_positive_affine_intensity_shift_and_scale() -> None:
@@ -273,13 +290,13 @@ def test_geometry_is_stable_after_positive_affine_intensity_shift_and_scale() ->
     )
 
 
-def test_rotated_translated_whole_head_recovers_pose_and_geometry_correction() -> None:
+def test_translated_vertical_whole_head_preserves_centroid_correction() -> None:
     volume = np.stack(
         [
             _head_slice_with_internal_structures(
                 center_x=(112 - 1) / 2 + 6.0,
                 center_y=(88 - 1) / 2 - 3.0,
-                angle_degree=8.0,
+                angle_degree=90.0,
             )
             for _ in range(16)
         ],
@@ -301,9 +318,9 @@ def test_rotated_translated_whole_head_recovers_pose_and_geometry_correction() -
 
     assert before.estimated_content_lr_translation_pixels == pytest.approx(6.0, abs=0.8)
     assert before.estimated_centroid_y == pytest.approx((88 - 1) / 2 - 3.0, abs=0.8)
-    assert before.estimated_content_rotation_degree == pytest.approx(8.0, abs=1.5)
+    assert _axis_distance_to_vertical(before.estimated_content_rotation_degree) < 2.0
     assert abs(after.estimated_content_lr_translation_pixels) < 1.0
-    assert abs(after.estimated_content_rotation_degree) < 2.0
+    assert _axis_distance_to_vertical(after.estimated_content_rotation_degree) < 2.0
 
 
 def test_case_geometry_uses_the_three_slice_median() -> None:
@@ -343,15 +360,29 @@ def test_case_geometry_angle_median_is_axial_aware_across_vertical_boundary() ->
     assert abs(abs(estimate.estimated_content_rotation_degree) - 90.0) < 3.0
 
 
-def test_geometry_pose_plausibility_warns_above_30_without_clamping() -> None:
-    volume = _ellipse_volume(depth=9, angles=[45.0] * 9)
+@pytest.mark.parametrize(
+    ("angle_degree", "expected_distance", "expected_warning"),
+    [
+        (0.0, 90.0, True),
+        (45.0, 45.0, True),
+        (90.0, 0.0, False),
+        (-90.0, 0.0, False),
+        (89.0, 1.0, False),
+        (-89.0, 1.0, False),
+    ],
+)
+def test_geometry_pose_plausibility_uses_vertical_reference(
+    angle_degree: float, expected_distance: float, expected_warning: bool
+) -> None:
+    volume = _ellipse_volume(depth=9, angles=[angle_degree] * 9)
     estimate = comparison.estimate_case_geometry(volume)
 
     plausibility = comparison.geometry_pose_plausibility(estimate)
 
-    assert estimate.estimated_content_rotation_degree == pytest.approx(45.0, abs=1.5)
-    assert plausibility["estimated_abs_rotation_degree"] == pytest.approx(45.0, abs=1.5)
-    assert plausibility["large_rotation_warning"] is True
+    assert plausibility["estimated_abs_rotation_degree"] == pytest.approx(
+        expected_distance, abs=1.5
+    )
+    assert plausibility["large_rotation_warning"] is expected_warning
 
 
 def test_forward_content_transform_is_converted_to_inverse_sampling_and_roundtrips() -> None:
@@ -390,7 +421,7 @@ def test_identity_geometry_transform_does_not_change_volume() -> None:
     torch.testing.assert_close(warp_volume(volume, sampling), volume, atol=3e-6, rtol=0)
 
 
-def test_geometry_correction_reduces_synthetic_ellipse_centroid_and_tilt() -> None:
+def test_geometry_correction_reduces_synthetic_ellipse_centroid_and_vertical_distance() -> None:
     volume = _ellipse_volume(depth=16, offsets=[7.0] * 16, angles=[25.0] * 16)
     before = comparison.estimate_case_geometry(volume)
     correction = comparison.build_geometry_correction_transform(
@@ -405,8 +436,47 @@ def test_geometry_correction_reduces_synthetic_ellipse_centroid_and_tilt() -> No
     assert abs(after.estimated_content_lr_translation_pixels) < abs(
         before.estimated_content_lr_translation_pixels
     )
-    assert abs(after.estimated_content_rotation_degree) < abs(
-        before.estimated_content_rotation_degree
+    assert _axis_distance_to_vertical(after.estimated_content_rotation_degree) < (
+        _axis_distance_to_vertical(before.estimated_content_rotation_degree)
+    )
+
+
+@pytest.mark.parametrize(
+    ("measured_angle", "expected_correction"),
+    [
+        (60.0, 30.0),
+        (-60.0, -30.0),
+        (90.0, 0.0),
+        (-90.0, 0.0),
+        (89.0, 1.0),
+        (-89.0, -1.0),
+    ],
+)
+def test_geometry_correction_targets_canonical_vertical_axis(
+    measured_angle: float, expected_correction: float
+) -> None:
+    volume = _ellipse_volume(depth=16, angle_degree=measured_angle)
+    before = comparison.estimate_case_geometry(volume)
+    correction = comparison.build_geometry_correction_transform(
+        before, spatial_shape=(16, 80, 96)
+    )
+    sampling, _ = comparison.content_transform_to_sampling_matrices(
+        correction, spatial_shape=(16, 80, 96)
+    )
+    aligned = warp_volume(torch.from_numpy(volume)[None, None], sampling, mode="bilinear")
+    after = comparison.estimate_case_geometry(aligned[0, 0].numpy())
+
+    assert _rotation_degree(correction) == pytest.approx(expected_correction, abs=1.0)
+    if expected_correction == 0.0:
+        torch.testing.assert_close(
+            correction, torch.eye(4).unsqueeze(0), atol=2e-6, rtol=0
+        )
+    assert _axis_distance_to_vertical(after.estimated_content_rotation_degree) < 3.0
+    assert _axis_distance_to_vertical(after.estimated_content_rotation_degree) <= (
+        abs(after.estimated_content_rotation_degree)
+    )
+    assert _axis_distance_to_vertical(after.estimated_content_rotation_degree) <= (
+        _axis_distance_to_vertical(before.estimated_content_rotation_degree)
     )
 
 
@@ -435,7 +505,7 @@ def test_cli_writes_required_outputs_without_labels_or_training_when_checkpoint_
     image_path.parent.mkdir(parents=True)
     image_path.write_bytes(b"synthetic image placeholder")
     source = NiftiVolume(
-        _ellipse_volume(depth=9),
+        _ellipse_volume(depth=9, angle_degree=0.0),
         spacing_xyz=(0.7, 0.8, 4.5),
         origin_xyz=(11.0, -2.0, 3.5),
     )
@@ -493,8 +563,8 @@ def test_cli_writes_required_outputs_without_labels_or_training_when_checkpoint_
     assert summary["labels_accessed"] is False
     assert summary["training_called"] is False
     assert summary["geometry_pose_plausibility"] == {
-        "estimated_abs_rotation_degree": pytest.approx(0.0),
-        "large_rotation_warning": False,
+        "estimated_abs_rotation_degree": pytest.approx(90.0),
+        "large_rotation_warning": True,
     }
     assert summary["geometry_mask_assumptions"]["background_reference"].startswith(
         "image-border median"
@@ -506,6 +576,8 @@ def test_cli_writes_required_outputs_without_labels_or_training_when_checkpoint_
         rows = list(csv.DictReader(handle))
     assert [row["state"] for row in rows] == ["identity", "adn_prediction", "geometry_estimate"]
     assert rows[1]["status"] == "not_requested"
+    assert float(rows[0]["absolute_principal_axis_tilt_before_degree"]) == pytest.approx(90.0)
+    assert float(rows[2]["absolute_principal_axis_tilt_after_degree"]) == pytest.approx(0.0)
 
 
 def test_cli_uses_optional_checkpoint_prediction_and_does_not_call_training(

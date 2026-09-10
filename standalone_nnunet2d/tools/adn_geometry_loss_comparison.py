@@ -2,9 +2,9 @@
 
 This is an image-only, diagnostic-only CLI.  It does not train a model or
 construct a lesion mask.  The measured ellipse pose is reported separately
-from the applied correction: the correction is the inverse of the measured
-forward content pose, and its inverse is the sampling transform passed to the
-existing ``warp_volume`` implementation.
+from the applied correction: the correction aligns the measured undirected
+axis to the canonical H/y vertical axis (±90°), and its inverse is the
+sampling transform passed to the existing ``warp_volume`` implementation.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from standalone_nnunet2d.data.nifti_io import read_nifti
 
 
 GEOMETRY_SLICE_PERCENTS = (25, 50, 75)
+CANONICAL_VERTICAL_AXIS_DEGREE = 90.0
 _CASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 CSV_FIELDS = (
@@ -265,6 +266,18 @@ def _axial_median_degree(angles: Sequence[float]) -> float:
     return _normalize_axis_angle(float(np.median(unwrapped)))
 
 
+def _vertical_axis_correction_degree(measured_axis_degree: float) -> float:
+    """Return the shortest modulo-180 rotation from an axis to canonical H/y."""
+    return _normalize_axis_angle(
+        CANONICAL_VERTICAL_AXIS_DEGREE - float(measured_axis_degree)
+    )
+
+
+def _vertical_axis_distance_degree(angle_degree: float) -> float:
+    """Return an undirected axis angle's distance from canonical H/y."""
+    return abs(_vertical_axis_correction_degree(float(angle_degree)))
+
+
 def estimate_slice_geometry(slice_array: np.ndarray, *, slice_index: int, percent: int) -> SliceGeometry:
     """Estimate centroid and principal axis from one foreground component."""
     component, threshold = deterministic_foreground_component(slice_array)
@@ -321,8 +334,10 @@ def estimate_case_geometry(volume: np.ndarray) -> GeometryEstimate:
 
 
 def geometry_pose_plausibility(estimate: GeometryEstimate) -> dict[str, float | bool]:
-    """Report a diagnostic warning for large estimated in-plane poses."""
-    estimated_abs_rotation_degree = abs(float(estimate.estimated_content_rotation_degree))
+    """Report a diagnostic warning for large poses from canonical H/y vertical."""
+    estimated_abs_rotation_degree = _vertical_axis_distance_degree(
+        estimate.estimated_content_rotation_degree
+    )
     return {
         "estimated_abs_rotation_degree": estimated_abs_rotation_degree,
         "large_rotation_warning": estimated_abs_rotation_degree > 30.0,
@@ -389,15 +404,19 @@ def build_geometry_correction_transform(
     dtype: torch.dtype = torch.float32,
     device: torch.device | None = None,
 ) -> Tensor:
-    """Return the forward transform that removes the measured content pose.
+    """Return the forward transform that aligns the measured axis to canonical H/y.
 
-    The measured angle/offset describe a forward pose from centered,
-    horizontal content to the observed content.  Taking its explicit matrix
-    inverse gives the correction applied to the image content; no ADN parameter
-    sign convention is reused.
+    The measured angle is relative to the W/x horizontal axis and is
+    undirected modulo 180 degrees.  The applied rotation is the shortest
+    modulo-180 correction from that axis to canonical H/y vertical (±90°).
+    The reference pose stores the negated correction before taking its explicit
+    inverse, preserving the existing centroid translation order and logic.
     """
+    correction_degree = _vertical_axis_correction_degree(
+        estimate.estimated_content_rotation_degree
+    )
     measured_pose = build_forward_content_transform(
-        rotation_degree=estimate.estimated_content_rotation_degree,
+        rotation_degree=-correction_degree,
         lr_translation_pixels=estimate.estimated_content_lr_translation_pixels,
         spatial_shape=spatial_shape,
         dtype=dtype,
@@ -544,9 +563,13 @@ def _compare_state_geometry(
         "absolute_centroid_offset_after_pixels": (
             None if after is None else abs(after.estimated_content_lr_translation_pixels)
         ),
-        "absolute_principal_axis_tilt_before_degree": abs(before.estimated_content_rotation_degree),
+        "absolute_principal_axis_tilt_before_degree": _vertical_axis_distance_degree(
+            before.estimated_content_rotation_degree
+        ),
         "absolute_principal_axis_tilt_after_degree": (
-            None if after is None else abs(after.estimated_content_rotation_degree)
+            None if after is None else _vertical_axis_distance_degree(
+                after.estimated_content_rotation_degree
+            )
         ),
     }
 
@@ -647,7 +670,7 @@ def _geometry_text(label: str, geometry: GeometryEstimate | None) -> str:
     return (
         f"{label}: centroid=({geometry.estimated_centroid_x:.1f}, "
         f"{geometry.estimated_centroid_y:.1f}), "
-        f"angle={geometry.estimated_content_rotation_degree:.1f} deg"
+        f"axis angle (W/x reference)={geometry.estimated_content_rotation_degree:.1f} deg"
     )
 
 
@@ -726,6 +749,7 @@ def _save_geometry_qc(
         )
     figure.suptitle(
         "Geometry-vs-loss QC: red=centroid, yellow=principal axis; "
+        "geometry target axis = canonical H/y vertical (±90°); "
         "centroid and principal-axis angle are shown before/after",
         fontsize=11,
     )
@@ -912,8 +936,8 @@ def _run_case(
             < abs(before_geometry.estimated_content_lr_translation_pixels)
         ),
         "geometry_reduced_absolute_principal_axis_tilt": (
-            abs(geometry_after.estimated_content_rotation_degree)
-            < abs(before_geometry.estimated_content_rotation_degree)
+            _vertical_axis_distance_degree(geometry_after.estimated_content_rotation_degree)
+            < _vertical_axis_distance_degree(before_geometry.estimated_content_rotation_degree)
         ),
         "geometry_before": asdict(before_geometry),
         "geometry_after": asdict(geometry_after),
@@ -929,8 +953,8 @@ def _run_case(
         },
         "transform_semantics": {
             "content_coordinates": "voxel_(x=W,y=H,z=D)",
-            "geometry_estimate": "observed_content_pose_from_binary_whole_head_centroid_and_PCA_angle",
-            "geometry_forward_transform": "inverse_of_observed_pose; maps input content to corrected output content",
+            "geometry_estimate": "observed_content_pose_from_binary_whole_head_centroid_and_PCA_angle_relative_to_W/x_horizontal",
+            "geometry_forward_transform": "inverse_of_vertical_reference_pose; maps input content to canonical H/y vertical output content",
             "sampling_matrix": "align_corners_false_output_to_input_normalized_inverse(F)",
             "adn_sampling_matrix": "existing_checkpoint_output_to_input_normalized_sampling_matrix",
             "physical_3d_rigid_registration": False,
