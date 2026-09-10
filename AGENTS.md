@@ -35,14 +35,18 @@ weaken repository-level safety rules.
 
 Global reusable skills:
 
-- `subagent-orchestration`: execution-mode selection, scoped normal subagents,
-  automatic independent Worktree Chat/task creation, LunaMax independent workers,
-  result collection, monitoring, escalation, fixer flow, and acceptance.
+- `subagent-orchestration`: implementation-mode selection, scoped normal
+  subagents, independent Worktree Chat/tasks for substantial implementation,
+  ordinary independent reviewer conversations, worker-profile selection,
+  monitoring, escalation, fixer flow, and evidence-based acceptance.
 - `project-memory`: concise repository-level state for cross-session,
   cross-terminal, branch, and worktree continuity under `.project-memory/`.
-- `level3-review`: correctness-sensitive independent review for medical/scientific
-  preprocessing, geometry, leakage, metrics, checkpoint/runtime contracts,
-  cross-module interfaces, destructive behavior, or other high-risk changes.
+- `level3-review`: correctness-sensitive independent read-only review for
+  medical/scientific preprocessing, geometry, leakage, metrics,
+  checkpoint/runtime contracts, cross-module interfaces, destructive behavior,
+  or other high-risk changes. Prefer an ordinary independent reviewer
+  conversation; do not create a reviewer worktree merely to satisfy
+  independence.
 - `test-validation`: focused/affected/full validation, TDD, trustworthy test
   evidence, and temporary-test-artifact discipline.
 - `scientific-experiment-integrity`: experiment classification, leakage
@@ -116,40 +120,88 @@ parent/main agent synchronizes only accepted, validated/integrated state.
 - Synthetic, smoke, and preflight results must never be presented as formal
   clinical or experimental results.
 
-## Agent roles
+## Agent roles and default implementation ownership
 
-The main agent is coordinator, architect, integration manager, acceptance
+The main agent is coordinator, architect/planner, integration manager, acceptance
 decision maker, reviewer/fixer coordinator, Git coordinator, and final reporter.
 
-Preserve main-agent context for architecture, protocol, integration, and
-acceptance.
+Preserve main-agent context for architecture, protocol, integration, acceptance,
+and user-facing decisions.
 
-Before delegation, use `subagent-orchestration`:
+For repository tasks that modify production source code or tests, implementation
+is delegated by default according to `subagent-orchestration`.
 
-- normal scoped subagent for localized/short tasks;
-- automatically created independent Codex Worktree Chat/task using LunaMax for
-  substantial or long-running implementation/review work when supported;
-- user-created top-level LunaMax thread only as fallback when automatic creation
-  or result retrieval is unavailable;
-- persistent external process for multi-hour training or similar execution.
+Default ownership:
+
+- localized implementation -> normal `Luna xhigh` subagent;
+- substantial or multi-module implementation -> independent `LunaMax` Worktree
+  Chat/task;
+- focused fixer or validator -> `Luna xhigh`;
+- Level 3 independent review -> separate ordinary read-only `LunaMax` reviewer
+  conversation by default.
+
+Task smallness alone does not justify direct main-agent source/test
+implementation.
+
+The main agent may directly modify coordination artifacts such as `AGENTS.md`,
+plans, task briefs, review notes, validation checklists, and canonical project
+memory when appropriate.
+
+Direct main-agent production source/test implementation is allowed only when:
+
+- the user explicitly requests it;
+- no supported worker interface is available;
+- supported worker channels have failed and documented fallback is justified;
+- only minimal coordination/integration glue remains and delegation would create
+  more risk than value.
+
+If direct main-agent source/test implementation occurs, record the reason in the
+final report.
 
 Normal subagents are leaf workers: they must not create other subagents,
 reviewers, validators, fixers, or independent tasks. Independent review, fixer
-creation, validation-worker creation, and execution-mode escalation remain main
-agent responsibilities.
+creation, validation-worker creation, and implementation-mode escalation remain
+main-agent responsibilities.
 
-When the main agent creates an independent task, preserve its task/thread/worktree
-IDs and retrieve the final HANDOFF automatically when supported.
-
-Do not require manual HANDOFF copy/paste when the result can be fetched reliably.
-
-An independent worker must not recursively hand the same core task to another
-independent worker. It may use only small scoped normal subagents for focused
-investigation, tests, review, or fixer work; those normal subagents remain leaf
-workers.
+An independent Worktree Chat/task is the top-level implementation worker for its
+core task. It must not recursively hand the same core implementation to another
+independent task. It may use only small scoped normal subagents for focused
+investigation, targeted tests, narrow review, or small fixer work; those normal
+subagents remain leaf workers.
 
 Do not duplicate the same implementation concurrently between parent, normal
 subagents, and independent workers.
+
+## Independent review policy
+
+Choose review strength separately from implementation mode.
+
+A small implementation can still require Level 3 review if it affects sensitive
+geometry, preprocessing, leakage, metrics, data safety, checkpoint/runtime
+contracts, public interfaces, destructive behavior, or other correctness-
+sensitive logic.
+
+For Level 3 review, prefer a separate ordinary reviewer conversation using
+`LunaMax` with read-only scope.
+
+Reviewer independence means:
+
+- the reviewer did not implement the change;
+- the reviewer has a separate context;
+- the exact final diff/commit/snapshot is identified;
+- the reviewer independently inspects the risky code path and evidence;
+- the reviewer returns `PASS`, `BLOCKING`, and optional `NON-BLOCKING` findings.
+
+A separate reviewer Git worktree is **not** required merely to count as
+independent.
+
+Use a reviewer worktree only when an isolated checkout is materially necessary,
+for example when the reviewer must run commands against its own filesystem state
+or the intended final state cannot otherwise be exposed reliably through an
+exact commit, diff, patch, or snapshot.
+
+Main-agent inspection and implementation-worker self-review do not count as
+independent Level 3 review.
 
 ## Scope and implementation economy
 
@@ -256,4 +308,5 @@ Before completion verify, as applicable:
 
 Keep the report concise and evidence-dense: what changed, files, validation and
 results, reviewer result when required, unresolved issues, commit hash, final Git
-status, and whether canonical project memory was synchronized when applicable.
+status, whether direct main-agent source/test implementation occurred and why,
+and whether canonical project memory was synchronized when applicable.
