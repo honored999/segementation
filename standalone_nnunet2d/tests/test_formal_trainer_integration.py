@@ -7,6 +7,7 @@ from torch import nn
 from standalone_nnunet2d.engine.checkpoint import PROJECT_OUTPUTS_DIRECTORY
 from standalone_nnunet2d import formal_train
 from standalone_nnunet2d.losses.compound import DiceCrossEntropyLoss
+from standalone_nnunet2d.models.factory import DEEP_SUPERVISION, H2FORMER, PLAIN_CONV_UNET, SINGLE_OUTPUT
 from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, load_formal_checkpoint, save_formal_checkpoint
 from standalone_nnunet2d.training.formal_trainer import run_formal_epoch, run_formal_validation
 from standalone_nnunet2d.training.official_config import OfficialTrainerSchedule, PolyLRScheduler, make_official_optimizer
@@ -32,6 +33,23 @@ def test_formal_training_persists_resolved_pending_configuration(tmp_path) -> No
  assert resolved['policies']==config['policies']
  assert resolved['model']['name']=='plain_conv_unet'
  assert resolved['model']['supervision_mode']=='deep_supervision'
+
+
+def test_stage3_resolved_config_records_all_three_training_contracts() -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+ plain=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule)
+ matched=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,model_name=PLAIN_CONV_UNET,supervision_mode=SINGLE_OUTPUT)
+ h2=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,model_name=H2FORMER)
+ assert plain['model']['supervision_mode']==DEEP_SUPERVISION
+ assert plain['model']['deep_supervision'] is True
+ assert plain['model']['loss_name']=='DeepSupervisionLoss'
+ assert matched['model']['supervision_mode']==SINGLE_OUTPUT
+ assert matched['model']['deep_supervision'] is False
+ assert matched['model']['loss_name']=='DiceCrossEntropyLoss'
+ assert h2['model']['supervision_mode']==SINGLE_OUTPUT
+ assert h2['model']['deep_supervision'] is False
+ assert h2['model']['loss_name']=='DiceCrossEntropyLoss'
+ assert len({plain['plan_hash'],matched['plan_hash'],h2['plan_hash']})==3
 
 
 def test_formal_trainer_deterministically_continues_after_checkpoint() -> None:

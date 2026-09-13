@@ -44,6 +44,59 @@ def test_parser_accepts_explicit_h2former() -> None:
     assert arguments.model == H2FORMER
 
 
+def test_stage3_parser_and_contract_resolve_model_specific_supervision_defaults() -> None:
+    plain_arguments = formal_train.build_parser().parse_args(_parser_arguments())
+    h2_arguments = formal_train.build_parser().parse_args(
+        _parser_arguments() + ["--model", H2FORMER]
+    )
+
+    assert plain_arguments.supervision_mode is None
+    assert h2_arguments.supervision_mode is None
+    assert get_model_contract(PLAIN_CONV_UNET, supervision_mode=plain_arguments.supervision_mode).supervision_mode == DEEP_SUPERVISION
+    assert get_model_contract(H2FORMER, supervision_mode=h2_arguments.supervision_mode).supervision_mode == SINGLE_OUTPUT
+
+
+def test_stage3_plain_matched_single_output_builds_tensor_and_dice_ce() -> None:
+    contract = get_model_contract(PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT)
+    model = build_model(PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT)
+    loss, validation_loss = formal_train.build_training_losses(
+        PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT
+    )
+    image = torch.zeros((1, 1, 256, 256))
+    target = torch.zeros((1, 256, 256), dtype=torch.long)
+
+    logits = model(image)
+    value = loss(logits, target)
+    value.backward()
+
+    assert contract.deep_supervision is False
+    assert contract.loss_name == "DiceCrossEntropyLoss"
+    assert isinstance(loss, DiceCrossEntropyLoss)
+    assert isinstance(validation_loss, DiceCrossEntropyLoss)
+    assert logits.shape == (1, 2, 256, 256)
+    assert torch.isfinite(value)
+    gradients = [parameter.grad for parameter in model.parameters() if parameter.grad is not None]
+    assert gradients
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+    assert any(torch.count_nonzero(gradient) > 0 for gradient in gradients)
+
+
+def test_stage3_h2_and_plain_matched_use_the_same_base_loss_type() -> None:
+    plain_loss, _ = formal_train.build_training_losses(
+        PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT
+    )
+    h2_loss, _ = formal_train.build_training_losses(
+        H2FORMER, supervision_mode=SINGLE_OUTPUT
+    )
+
+    assert type(plain_loss) is type(h2_loss) is DiceCrossEntropyLoss
+
+
+def test_stage3_h2_deep_supervision_is_rejected() -> None:
+    with pytest.raises(ValueError, match="supervision_mode"):
+        get_model_contract(H2FORMER, supervision_mode=DEEP_SUPERVISION)
+
+
 def test_plain_factory_training_and_inference_supervision_modes() -> None:
     training_model = build_model(PLAIN_CONV_UNET)
     inference_model = build_model(PLAIN_CONV_UNET, inference=True)
@@ -84,8 +137,10 @@ def test_factory_contracts_are_explicit_and_reject_unsupported_combinations() ->
 
     with pytest.raises(ValueError, match="supervision_mode"):
         get_model_contract(H2FORMER, supervision_mode=DEEP_SUPERVISION)
-    with pytest.raises(ValueError, match="supervision_mode"):
-        get_model_contract(PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT)
+    matched = get_model_contract(PLAIN_CONV_UNET, supervision_mode=SINGLE_OUTPUT)
+    assert matched.supervision_mode == SINGLE_OUTPUT
+    assert matched.deep_supervision is False
+    assert matched.loss_name == "DiceCrossEntropyLoss"
 
 
 def test_factory_builds_both_explicit_model_names() -> None:
@@ -141,6 +196,13 @@ def test_resolved_config_records_distinct_model_identity_and_plan_hash() -> None
         schedule=schedule,
         model_name=H2FORMER,
     )
+    matched = formal_train.build_formal_config(
+        fold=0,
+        epochs=1,
+        schedule=schedule,
+        model_name=PLAIN_CONV_UNET,
+        supervision_mode=SINGLE_OUTPUT,
+    )
 
     assert plain["model"] == {
         "name": PLAIN_CONV_UNET,
@@ -148,6 +210,8 @@ def test_resolved_config_records_distinct_model_identity_and_plan_hash() -> None
         "num_classes": 2,
         "image_size": None,
         "supervision_mode": DEEP_SUPERVISION,
+        "deep_supervision": True,
+        "loss_name": "DeepSupervisionLoss",
     }
     assert h2["model"] == {
         "name": H2FORMER,
@@ -155,5 +219,23 @@ def test_resolved_config_records_distinct_model_identity_and_plan_hash() -> None
         "num_classes": 2,
         "image_size": 512,
         "supervision_mode": SINGLE_OUTPUT,
+        "deep_supervision": False,
+        "loss_name": "DiceCrossEntropyLoss",
     }
-    assert plain["plan_hash"] != h2["plan_hash"]
+    assert matched["model"] == {
+        "name": PLAIN_CONV_UNET,
+        "in_channels": 1,
+        "num_classes": 2,
+        "image_size": None,
+        "supervision_mode": SINGLE_OUTPUT,
+        "deep_supervision": False,
+        "loss_name": "DiceCrossEntropyLoss",
+    }
+    assert len({plain["plan_hash"], matched["plan_hash"], h2["plan_hash"]}) == 3
+    invariant_keys = set(plain) - {"model", "plan_hash"}
+    assert {key: plain[key] for key in invariant_keys} == {
+        key: matched[key] for key in invariant_keys
+    }
+    assert {key: matched[key] for key in invariant_keys} == {
+        key: h2[key] for key in invariant_keys
+    }

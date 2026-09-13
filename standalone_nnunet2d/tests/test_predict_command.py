@@ -131,11 +131,11 @@ def test_prediction_loader_uses_explicit_h2former_metadata(
         },
         name="h2-loader",
     )
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, str, bool]] = []
     tiny_model = torch.nn.Conv2d(1, 2, 1)
 
-    def build_selected_model(model_name: str, *, inference: bool) -> torch.nn.Module:
-        calls.append((model_name, inference))
+    def build_selected_model(model_name: str, *, supervision_mode: str, inference: bool) -> torch.nn.Module:
+        calls.append((model_name, supervision_mode, inference))
         return tiny_model
 
     monkeypatch.setattr(predict_module, "build_model", build_selected_model)
@@ -143,24 +143,24 @@ def test_prediction_loader_uses_explicit_h2former_metadata(
 
     assert loaded is tiny_model
     assert metadata["model_name"] == "h2former"
-    assert calls == [("h2former", True)]
+    assert calls == [("h2former", "single_output", True)]
 
 
 def test_prediction_loader_legacy_checkpoint_defaults_to_plain_conv(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     checkpoint = _tiny_checkpoint_with_metadata(tmp_path, {}, name="legacy-loader")
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, str, bool]] = []
     tiny_model = torch.nn.Conv2d(1, 2, 1)
 
-    def build_selected_model(model_name: str, *, inference: bool) -> torch.nn.Module:
-        calls.append((model_name, inference))
+    def build_selected_model(model_name: str, *, supervision_mode: str, inference: bool) -> torch.nn.Module:
+        calls.append((model_name, supervision_mode, inference))
         return tiny_model
 
     monkeypatch.setattr(predict_module, "build_model", build_selected_model)
     predict_module._load_model(checkpoint, torch.device("cpu"))
 
-    assert calls == [("plain_conv_unet", True)]
+    assert calls == [("plain_conv_unet", "deep_supervision", True)]
 
 
 @pytest.mark.parametrize(

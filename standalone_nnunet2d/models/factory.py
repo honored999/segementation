@@ -27,6 +27,8 @@ class ModelContract:
     num_classes: int
     image_size: int | None
     supervision_mode: str
+    deep_supervision: bool
+    loss_name: str
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -39,6 +41,8 @@ _CONTRACTS = {
         num_classes=2,
         image_size=None,
         supervision_mode=DEEP_SUPERVISION,
+        deep_supervision=True,
+        loss_name="DeepSupervisionLoss",
     ),
     H2FORMER: ModelContract(
         name=H2FORMER,
@@ -46,6 +50,8 @@ _CONTRACTS = {
         num_classes=2,
         image_size=512,
         supervision_mode=SINGLE_OUTPUT,
+        deep_supervision=False,
+        loss_name="DiceCrossEntropyLoss",
     ),
 }
 
@@ -62,24 +68,54 @@ def get_model_contract(
         raise ValueError(
             f"unsupported model_name {model_name!r}; choices are {MODEL_NAMES}"
         ) from error
-    if supervision_mode is not None and supervision_mode != contract.supervision_mode:
+    resolved_supervision_mode = (
+        contract.supervision_mode if supervision_mode is None else supervision_mode
+    )
+    if model_name == H2FORMER and resolved_supervision_mode != SINGLE_OUTPUT:
         raise ValueError(
-            f"model {model_name!r} requires supervision_mode={contract.supervision_mode!r}, "
-            f"got {supervision_mode!r}"
+            f"model {model_name!r} requires supervision_mode={SINGLE_OUTPUT!r}, "
+            f"got {resolved_supervision_mode!r}"
         )
-    return contract
+    if model_name == PLAIN_CONV_UNET and resolved_supervision_mode not in {
+        DEEP_SUPERVISION,
+        SINGLE_OUTPUT,
+    }:
+        raise ValueError(
+            f"model {model_name!r} does not support supervision_mode={resolved_supervision_mode!r}"
+        )
+    return ModelContract(
+        name=contract.name,
+        in_channels=contract.in_channels,
+        num_classes=contract.num_classes,
+        image_size=contract.image_size,
+        supervision_mode=resolved_supervision_mode,
+        deep_supervision=resolved_supervision_mode == DEEP_SUPERVISION,
+        loss_name=(
+            "DeepSupervisionLoss"
+            if resolved_supervision_mode == DEEP_SUPERVISION
+            else "DiceCrossEntropyLoss"
+        ),
+    )
 
 
-def build_model(model_name: str = PLAIN_CONV_UNET, *, inference: bool = False) -> nn.Module:
+def build_model(
+    model_name: str = PLAIN_CONV_UNET,
+    *,
+    supervision_mode: str | None = None,
+    inference: bool = False,
+) -> nn.Module:
     """Build a model from its stable explicit name.
 
     ``inference=True`` only disables PlainConvUNet's auxiliary outputs for the
     existing inference contract.  It does not change the training contract.
     H2Former always remains a single-output model.
     """
-    contract = get_model_contract(model_name)
+    contract = get_model_contract(model_name, supervision_mode=supervision_mode)
     if contract.name == PLAIN_CONV_UNET:
-        return PlainConvUNet2D(load_model_config(), deep_supervision=not inference)
+        return PlainConvUNet2D(
+            load_model_config(),
+            deep_supervision=False if inference else contract.deep_supervision,
+        )
     if contract.name == H2FORMER:
         return H2Former(
             in_channels=contract.in_channels,

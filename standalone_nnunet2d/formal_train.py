@@ -22,6 +22,7 @@ from standalone_nnunet2d.models.factory import (
  DEEP_SUPERVISION,
  MODEL_NAMES,
  PLAIN_CONV_UNET,
+ SINGLE_OUTPUT,
  build_model,
  get_model_contract,
 )
@@ -30,9 +31,9 @@ from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, c
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, resolve_alignment_state, validate_alignment_evidence_record
 
 
-def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET) -> dict[str, object]:
+def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET, supervision_mode: str | None = None) -> dict[str, object]:
  if performance is None: performance=resolve_performance_config('alignment',device='cpu')
- model_contract=get_model_contract(model_name)
+ model_contract=get_model_contract(model_name, supervision_mode=supervision_mode)
  model_config=model_contract.as_dict()
  if alignment_evidence is None:
   run_state=DEFAULT_RUN_STATE
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
  p.add_argument('--raw-root',required=True,type=Path); p.add_argument('--output-root',required=True,type=Path); p.add_argument('--plans',required=True,type=Path); p.add_argument('--fold',type=int,default=0); p.add_argument('--device',default='cuda:0'); p.add_argument('--epochs',type=int,default=1000); p.add_argument('--resume',type=Path); p.add_argument('--confirm-run',action='store_true')
  p.add_argument('--performance-profile',choices=('alignment','throughput'),default='alignment')
  p.add_argument('--model',choices=MODEL_NAMES,default=PLAIN_CONV_UNET)
+ p.add_argument('--supervision-mode',choices=(DEEP_SUPERVISION,SINGLE_OUTPUT),default=None)
  p.add_argument('--num-workers',type=int)
  p.add_argument('--pin-memory',choices=('auto','on','off'),default='auto')
  p.add_argument('--persistent-workers',dest='persistent_workers',action='store_true')
@@ -81,8 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
  return p
 
 
-def build_training_losses(model_name: str = PLAIN_CONV_UNET) -> tuple[nn.Module, nn.Module]:
- model_contract=get_model_contract(model_name)
+def build_training_losses(model_name: str = PLAIN_CONV_UNET, *, supervision_mode: str | None = None) -> tuple[nn.Module, nn.Module]:
+ model_contract=get_model_contract(model_name, supervision_mode=supervision_mode)
  validation_loss=DiceCrossEntropyLoss()
  if model_contract.supervision_mode==DEEP_SUPERVISION:
   return DeepSupervisionLoss(validation_loss,weights=deep_supervision_weights(7)), validation_loss
@@ -98,6 +100,10 @@ def run_formal_epochs(*, model: nn.Module, train_loader: Iterable[tuple[torch.Te
 def main(arguments: Sequence[str] | None = None) -> int:
  p=build_parser(); a=p.parse_args(arguments)
  try:
+  model_contract=get_model_contract(a.model, supervision_mode=a.supervision_mode)
+ except ValueError as exc:
+  p.error(str(exc))
+ try:
   performance=resolve_performance_config(a.performance_profile,device=a.device,num_workers=a.num_workers,pin_memory=a.pin_memory,persistent_workers=a.persistent_workers,prefetch_factor=a.prefetch_factor)
  except ValueError as exc:
   p.error(str(exc))
@@ -106,7 +112,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
  except ValueError as exc:
   p.error(str(exc))
  patch_size,use_mask_for_norm=load_2d_plan_config(a.plans)
- schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=a.model)
+ schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=model_contract.name,supervision_mode=model_contract.supervision_mode)
  if not a.confirm_run: print(json.dumps({'execution':'not-confirmed','config':config},indent=2,default=str)); return 0
  if not 1<=a.epochs<=schedule.num_epochs: p.error('epochs must be in [1,1000]')
  random.seed(0); np.random.seed(0); torch.manual_seed(0)
@@ -114,7 +120,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
  device=torch.device(a.device); a.output_root.mkdir(parents=True,exist_ok=True); write_resolved_config(a.output_root/'resolved_config.json',config)
  train,val=build_formal_datasets(a.raw_root,fold=a.fold,patch_size=patch_size,use_mask_for_norm=use_mask_for_norm)
  train_loader,val_loader=build_formal_loaders(train,val,performance=performance,batch_size=12)
- model_contract=get_model_contract(a.model); model=build_model(a.model).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); loss,validation_loss=build_training_losses(a.model)
+ model=build_model(a.model, supervision_mode=model_contract.supervision_mode).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); loss,validation_loss=build_training_losses(a.model, supervision_mode=model_contract.supervision_mode)
  state=FormalTrainerState(0,0,-1.,a.fold)
  if a.resume is not None: state=load_formal_checkpoint(model,optimizer,scheduler,a.resume,fold=a.fold,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode).state
  log=(a.output_root/'training_log.csv').open('a',newline='',encoding='utf-8'); writer=csv.DictWriter(log,fieldnames=('epoch','global_step','train_loss','validation_dice','best_dice','lr')); 

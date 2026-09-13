@@ -414,6 +414,51 @@ def test_formal_checkpoint_round_trip_preserves_model_identity(
 
 
 @pytest.mark.parametrize(
+    ("saved_mode", "expected_mode"),
+    [("deep_supervision", "single_output"), ("single_output", "deep_supervision")],
+)
+def test_plain_stage3_supervision_modes_are_isolated_before_state_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    saved_mode: str,
+    expected_mode: str,
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "PROJECT_OUTPUTS_DIRECTORY", tmp_path.resolve())
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), 0.01)
+    state = FormalTrainerState(epoch=1, global_step=1, best_validation_dice=0.1, fold=0)
+    config = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "model": {
+            "name": "plain_conv_unet",
+            "in_channels": 1,
+            "num_classes": 2,
+            "image_size": None,
+            "supervision_mode": saved_mode,
+            "deep_supervision": saved_mode == "deep_supervision",
+            "loss_name": "DeepSupervisionLoss" if saved_mode == "deep_supervision" else "DiceCrossEntropyLoss",
+        },
+    }
+    path = tmp_path / f"plain-{saved_mode}.pth"
+    save_formal_checkpoint(model, optimizer, path, state, config)
+
+    restored = nn.Conv2d(1, 2, 1)
+    load_state_dict = Mock(wraps=restored.load_state_dict)
+    restored.load_state_dict = load_state_dict  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="model_name|supervision"):
+        load_formal_checkpoint(
+            restored,
+            torch.optim.SGD(restored.parameters(), 0.01),
+            path,
+            fold=0,
+            model_name="plain_conv_unet",
+            supervision_mode=expected_mode,
+        )
+    assert load_state_dict.call_count == 0
+
+
+@pytest.mark.parametrize(
     ("model_name", "supervision_mode", "message"),
     [
         ("unknown_model", "single_output", "unsupported model_name"),

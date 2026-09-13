@@ -76,8 +76,12 @@ def _read_checkpoint(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def _load_model(path: Path, device: torch.device) -> tuple[torch.nn.Module, dict[str, Any]]:
     state_dict, metadata = _read_checkpoint(path)
-    model_name, _ = resolve_checkpoint_model_identity(metadata)
-    model = build_model(model_name, inference=True)
+    model_name, supervision_mode = resolve_checkpoint_model_identity(metadata)
+    model = build_model(
+        model_name,
+        supervision_mode=supervision_mode,
+        inference=True,
+    )
     model.load_state_dict(state_dict)
     return model.to(device), metadata
 
