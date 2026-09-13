@@ -10,6 +10,8 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
+from standalone_nnunet2d.models.factory import resolve_checkpoint_model_identity
+
 
 CHECKPOINT_FORMAT_VERSION = 1
 PROJECT_OUTPUTS_DIRECTORY = Path(__file__).resolve().parents[1] / "outputs"
@@ -70,6 +72,21 @@ def _validate_payload(payload: object, expected_metadata: Mapping[str, Any] | No
     metadata = payload["metadata"]
     if not isinstance(metadata, dict):
         raise ValueError("checkpoint metadata must be a dictionary")
-    for key, expected_value in (expected_metadata or {}).items():
+    expected_items = dict(expected_metadata or {})
+    checkpoint_model_name, checkpoint_supervision_mode = resolve_checkpoint_model_identity(metadata)
+    expected_model_keys = {"model_name", "supervision_mode"}.intersection(expected_items)
+    if expected_model_keys and expected_model_keys != {"model_name", "supervision_mode"}:
+        raise ValueError("expected checkpoint model identity must contain model_name and supervision_mode")
+    if expected_model_keys:
+        if (
+            checkpoint_model_name != expected_items["model_name"]
+            or checkpoint_supervision_mode != expected_items["supervision_mode"]
+        ):
+            raise ValueError(
+                "checkpoint model_name/supervision_mode identity does not match expectations"
+            )
+    for key, expected_value in expected_items.items():
+        if key in {"model_name", "supervision_mode"}:
+            continue
         if metadata.get(key) != expected_value:
-            raise ValueError("checkpoint metadata does not match expectations")
+            raise ValueError(f"checkpoint metadata key {key!r} does not match expectations")

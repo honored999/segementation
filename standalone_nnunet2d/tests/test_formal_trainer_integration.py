@@ -30,6 +30,8 @@ def test_formal_training_persists_resolved_pending_configuration(tmp_path) -> No
  assert resolved['run_state']!='official_aligned'
  assert resolved['plan_hash']==config['plan_hash']
  assert resolved['policies']==config['policies']
+ assert resolved['model']['name']=='plain_conv_unet'
+ assert resolved['model']['supervision_mode']=='deep_supervision'
 
 
 def test_formal_trainer_deterministically_continues_after_checkpoint() -> None:

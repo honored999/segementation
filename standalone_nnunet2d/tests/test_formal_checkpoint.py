@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import random
+from unittest.mock import Mock
 from uuid import uuid4
 from copy import deepcopy
 from pathlib import Path
@@ -9,7 +10,8 @@ import pytest
 import numpy as np
 import torch
 from torch import nn
-from standalone_nnunet2d.engine.checkpoint import PROJECT_OUTPUTS_DIRECTORY
+from standalone_nnunet2d.engine.checkpoint import PROJECT_OUTPUTS_DIRECTORY, load_checkpoint
+from standalone_nnunet2d.engine import checkpoint as checkpoint_module
 from standalone_nnunet2d.alignment_evidence import build_alignment_evidence
 from standalone_nnunet2d.training.formal_checkpoint import (
     FormalTrainerState,
@@ -317,3 +319,245 @@ def test_aligned_checkpoint_load_rejects_tampered_embedded_evidence(tmp_path: Pa
             run_state="official_aligned",
             alignment_evidence=evidence,
         )
+
+
+def _model_identity(name: str, supervision_mode: str) -> dict[str, object]:
+    return {
+        "name": name,
+        "in_channels": 1,
+        "num_classes": 2,
+        "image_size": None if name == "plain_conv_unet" else 512,
+        "supervision_mode": supervision_mode,
+    }
+
+
+@pytest.mark.parametrize(
+    ("saved_name", "saved_mode", "expected_name", "expected_mode"),
+    [
+        ("plain_conv_unet", "deep_supervision", "h2former", "single_output"),
+        ("h2former", "single_output", "plain_conv_unet", "deep_supervision"),
+    ],
+)
+def test_formal_checkpoint_rejects_cross_model_before_state_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    saved_name: str,
+    saved_mode: str,
+    expected_name: str,
+    expected_mode: str,
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "PROJECT_OUTPUTS_DIRECTORY", tmp_path.resolve())
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), 0.01)
+    state = FormalTrainerState(epoch=1, global_step=1, best_validation_dice=0.1, fold=0)
+    config = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "model": _model_identity(saved_name, saved_mode),
+    }
+    path = tmp_path / f"cross-model-{saved_name}.pth"
+    save_formal_checkpoint(model, optimizer, path, state, config)
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    assert payload["metadata"]["model_name"] == saved_name
+    assert payload["metadata"]["supervision_mode"] == saved_mode
+
+    restored = nn.Conv2d(1, 2, 1)
+    load_called = False
+
+    def fail_if_loaded(*_args: object, **_kwargs: object) -> None:
+        nonlocal load_called
+        load_called = True
+        raise AssertionError("cross-model checkpoint must fail before model.load_state_dict")
+
+    restored.load_state_dict = fail_if_loaded  # type: ignore[method-assign]
+    restored_optimizer = torch.optim.SGD(restored.parameters(), 0.01)
+    with pytest.raises(ValueError, match="model_name"):
+        load_formal_checkpoint(
+            restored,
+            restored_optimizer,
+            path,
+            fold=0,
+            model_name=expected_name,
+            supervision_mode=expected_mode,
+        )
+    assert not load_called
+
+
+def test_formal_checkpoint_round_trip_preserves_model_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "PROJECT_OUTPUTS_DIRECTORY", tmp_path.resolve())
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), 0.01)
+    state = FormalTrainerState(epoch=1, global_step=1, best_validation_dice=0.1, fold=0)
+    config = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "model": _model_identity("h2former", "single_output"),
+    }
+    path = tmp_path / "same-model.pth"
+    save_formal_checkpoint(model, optimizer, path, state, config)
+
+    restored = nn.Conv2d(1, 2, 1)
+    restored_optimizer = torch.optim.SGD(restored.parameters(), 0.01)
+    result = load_formal_checkpoint(
+        restored,
+        restored_optimizer,
+        path,
+        fold=0,
+        model_name="h2former",
+        supervision_mode="single_output",
+    )
+
+    assert result.config["model"]["name"] == "h2former"
+    assert result.config["model"]["supervision_mode"] == "single_output"
+
+
+@pytest.mark.parametrize(
+    ("model_name", "supervision_mode", "message"),
+    [
+        ("unknown_model", "single_output", "unsupported model_name"),
+        ("h2former", "deep_supervision", "supervision_mode"),
+    ],
+)
+def test_formal_checkpoint_validates_explicit_identity_without_nested_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    model_name: str,
+    supervision_mode: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "PROJECT_OUTPUTS_DIRECTORY", tmp_path.resolve())
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), 0.01)
+    state = FormalTrainerState(epoch=1, global_step=1, best_validation_dice=0.1, fold=0)
+
+    with pytest.raises(ValueError, match=message):
+        save_formal_checkpoint(
+            model,
+            optimizer,
+            tmp_path / f"invalid-{model_name}.pth",
+            state,
+            {"run_type": "official_alignment_pending", "run_state": "official_alignment_pending"},
+            model_name=model_name,
+            supervision_mode=supervision_mode,
+        )
+
+
+def _write_minimal_checkpoint(path: Path, metadata: dict[str, object]) -> None:
+    model = nn.Conv2d(1, 2, 1)
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": None,
+            "metadata": metadata,
+        },
+        path,
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "metadata", "expected", "should_load"),
+    [
+        (
+            "top_plain_config_h2",
+            {
+                "model_name": "plain_conv_unet",
+                "supervision_mode": "deep_supervision",
+                "config": {"model": _model_identity("h2former", "single_output")},
+            },
+            {"model_name": "plain_conv_unet", "supervision_mode": "deep_supervision"},
+            False,
+        ),
+        (
+            "top_plain_resolved_h2",
+            {
+                "model_name": "plain_conv_unet",
+                "supervision_mode": "deep_supervision",
+                "resolved_config": {"model": _model_identity("h2former", "single_output")},
+            },
+            {"model_name": "plain_conv_unet", "supervision_mode": "deep_supervision"},
+            False,
+        ),
+        (
+            "top_h2_config_plain",
+            {
+                "model_name": "h2former",
+                "supervision_mode": "single_output",
+                "config": {"model": _model_identity("plain_conv_unet", "deep_supervision")},
+            },
+            {"model_name": "h2former", "supervision_mode": "single_output"},
+            False,
+        ),
+        (
+            "missing_top_config_h2_expected_plain",
+            {"config": {"model": _model_identity("h2former", "single_output")}},
+            {"model_name": "plain_conv_unet", "supervision_mode": "deep_supervision"},
+            False,
+        ),
+        (
+            "missing_top_config_h2_expected_h2",
+            {"config": {"model": _model_identity("h2former", "single_output")}},
+            {"model_name": "h2former", "supervision_mode": "single_output"},
+            True,
+        ),
+        (
+            "missing_top_resolved_h2_expected_h2",
+            {"resolved_config": {"model": _model_identity("h2former", "single_output")}},
+            {"model_name": "h2former", "supervision_mode": "single_output"},
+            True,
+        ),
+        (
+            "config_resolved_conflict",
+            {
+                "config": {"model": _model_identity("plain_conv_unet", "deep_supervision")},
+                "resolved_config": {"model": _model_identity("h2former", "single_output")},
+            },
+            {"model_name": "h2former", "supervision_mode": "single_output"},
+            False,
+        ),
+        (
+            "true_legacy_expected_plain",
+            {"run_state": "official_alignment_pending"},
+            {"model_name": "plain_conv_unet", "supervision_mode": "deep_supervision"},
+            True,
+        ),
+        (
+            "true_legacy_expected_h2",
+            {"run_state": "official_alignment_pending"},
+            {"model_name": "h2former", "supervision_mode": "single_output"},
+            False,
+        ),
+        (
+            "partial_nested_identity_does_not_fallback",
+            {"config": {"model": {"name": "h2former"}}},
+            {"model_name": "plain_conv_unet", "supervision_mode": "deep_supervision"},
+            False,
+        ),
+    ],
+)
+def test_checkpoint_identity_is_canonical_and_preload_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case: str,
+    metadata: dict[str, object],
+    expected: dict[str, str],
+    should_load: bool,
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "PROJECT_OUTPUTS_DIRECTORY", tmp_path.resolve())
+    path = tmp_path / f"identity-{case}.pth"
+    _write_minimal_checkpoint(path, metadata)
+
+    restored = nn.Conv2d(1, 2, 1)
+    original_load = restored.load_state_dict
+    load_state_dict = Mock(wraps=original_load)
+    restored.load_state_dict = load_state_dict  # type: ignore[method-assign]
+
+    if should_load:
+        load_checkpoint(restored, None, path, expected)
+        assert load_state_dict.call_count == 1
+    else:
+        with pytest.raises(ValueError):
+            load_checkpoint(restored, None, path, expected)
+        assert load_state_dict.call_count == 0

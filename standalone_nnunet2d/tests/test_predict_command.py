@@ -104,6 +104,89 @@ def _minimal_checkpoint_with_metadata(
     return checkpoint
 
 
+def _tiny_checkpoint_with_metadata(
+    tmp_path: Path, metadata: dict[str, object], *, name: str
+) -> Path:
+    model = torch.nn.Conv2d(1, 2, 1)
+    checkpoint = tmp_path / f"{name}.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "model_state_dict": model.state_dict(),
+            "metadata": metadata,
+        },
+        checkpoint,
+    )
+    return checkpoint
+
+
+def test_prediction_loader_uses_explicit_h2former_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint = _tiny_checkpoint_with_metadata(
+        tmp_path,
+        {
+            "model_name": "h2former",
+            "supervision_mode": "single_output",
+        },
+        name="h2-loader",
+    )
+    calls: list[tuple[str, bool]] = []
+    tiny_model = torch.nn.Conv2d(1, 2, 1)
+
+    def build_selected_model(model_name: str, *, inference: bool) -> torch.nn.Module:
+        calls.append((model_name, inference))
+        return tiny_model
+
+    monkeypatch.setattr(predict_module, "build_model", build_selected_model)
+    loaded, metadata = predict_module._load_model(checkpoint, torch.device("cpu"))
+
+    assert loaded is tiny_model
+    assert metadata["model_name"] == "h2former"
+    assert calls == [("h2former", True)]
+
+
+def test_prediction_loader_legacy_checkpoint_defaults_to_plain_conv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint = _tiny_checkpoint_with_metadata(tmp_path, {}, name="legacy-loader")
+    calls: list[tuple[str, bool]] = []
+    tiny_model = torch.nn.Conv2d(1, 2, 1)
+
+    def build_selected_model(model_name: str, *, inference: bool) -> torch.nn.Module:
+        calls.append((model_name, inference))
+        return tiny_model
+
+    monkeypatch.setattr(predict_module, "build_model", build_selected_model)
+    predict_module._load_model(checkpoint, torch.device("cpu"))
+
+    assert calls == [("plain_conv_unet", True)]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"model_name": "h2former"},
+        {
+            "model_name": "h2former",
+            "supervision_mode": "single_output",
+            "resolved_config": {"model": {"name": "plain_conv_unet", "supervision_mode": "deep_supervision"}},
+        },
+    ],
+)
+def test_prediction_loader_rejects_incomplete_or_conflicting_model_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, metadata: dict[str, object]
+) -> None:
+    checkpoint = _minimal_checkpoint_with_metadata(tmp_path, metadata, name="invalid-model-identity")
+
+    def fail_if_model_is_built(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid model identity must fail before model construction")
+
+    monkeypatch.setattr(predict_module, "build_model", fail_if_model_is_built)
+    with pytest.raises(ValueError, match="model|supervision"):
+        predict_module._load_model(checkpoint, torch.device("cpu"))
+
+
 def test_prediction_command_requires_allow_pending_and_preserves_source_space_metadata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

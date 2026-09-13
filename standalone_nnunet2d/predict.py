@@ -12,7 +12,6 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 
-from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.data.dataset import load_fold_cases
 from standalone_nnunet2d.data.nifti_io import read_nifti
 from standalone_nnunet2d.alignment_evidence import (
@@ -26,7 +25,7 @@ from standalone_nnunet2d.engine.predictor import (
     predict_volume,
     save_and_validate_prediction,
 )
-from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
+from standalone_nnunet2d.models.factory import build_model, resolve_checkpoint_model_identity
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 
 
@@ -75,9 +74,10 @@ def _read_checkpoint(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return payload["model_state_dict"], dict(metadata)
 
 
-def _load_model(path: Path, device: torch.device) -> tuple[PlainConvUNet2D, dict[str, Any]]:
+def _load_model(path: Path, device: torch.device) -> tuple[torch.nn.Module, dict[str, Any]]:
     state_dict, metadata = _read_checkpoint(path)
-    model = PlainConvUNet2D(load_model_config(), deep_supervision=False)
+    model_name, _ = resolve_checkpoint_model_identity(metadata)
+    model = build_model(model_name, inference=True)
     model.load_state_dict(state_dict)
     return model.to(device), metadata
 

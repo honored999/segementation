@@ -18,6 +18,7 @@ from torch.optim import Optimizer
 from standalone_nnunet2d.engine.checkpoint import load_checkpoint, save_checkpoint
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, validate_alignment_evidence_record
+from standalone_nnunet2d.models.factory import get_model_contract
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,8 @@ def save_formal_checkpoint(
     policies: Mapping[str, Any] | None = None,
     run_state: str = DEFAULT_RUN_STATE,
     alignment_evidence: Mapping[str, Any] | None = None,
+    model_name: str | None = None,
+    supervision_mode: str | None = None,
 ) -> Path:
     scheduler, path, state, resolved_config = _normalise_save_arguments(
         scheduler_or_path, path_or_state, state_or_config, config
@@ -213,6 +216,27 @@ def save_formal_checkpoint(
     )
     resolved_plan_hash = plan_hash or str(resolved_config.get("plan_hash") or compute_plan_hash(resolved_config))
     resolved_policies = dict(policies or resolved_config.get("policies", {}))
+    nested_model = resolved_config.get("model")
+    if nested_model is not None:
+        if not isinstance(nested_model, Mapping):
+            raise ValueError("formal checkpoint config model must be a mapping")
+        config_model_name = nested_model.get("name")
+        config_supervision_mode = nested_model.get("supervision_mode")
+        if config_model_name is None or config_supervision_mode is None:
+            raise ValueError("formal checkpoint config model must contain name and supervision_mode")
+        contract = get_model_contract(str(config_model_name), supervision_mode=str(config_supervision_mode))
+        if model_name is not None and model_name != contract.name:
+            raise ValueError("formal checkpoint model_name does not match config model")
+        if supervision_mode is not None and supervision_mode != contract.supervision_mode:
+            raise ValueError("formal checkpoint supervision_mode does not match config model")
+        model_name = contract.name
+        supervision_mode = contract.supervision_mode
+    elif (model_name is None) != (supervision_mode is None):
+        raise ValueError("formal checkpoint model identity must contain model_name and supervision_mode")
+    elif model_name is not None and supervision_mode is not None:
+        contract = get_model_contract(model_name, supervision_mode=supervision_mode)
+        model_name = contract.name
+        supervision_mode = contract.supervision_mode
     metadata: dict[str, Any] = {
         "run_type": run_state,
         "run_state": run_state,
@@ -228,6 +252,9 @@ def save_formal_checkpoint(
         "rng_state": dict(capture_rng_state() if rng_state is None else rng_state),
         "scheduler_state": None if scheduler is None else _capture_scheduler_state(scheduler, state),
     }
+    if model_name is not None and supervision_mode is not None:
+        metadata["model_name"] = model_name
+        metadata["supervision_mode"] = supervision_mode
     return save_checkpoint(model, optimizer, path, metadata)
 
 
@@ -242,6 +269,8 @@ def load_formal_checkpoint(
     policies: Mapping[str, Any] | None = None,
     run_state: str = DEFAULT_RUN_STATE,
     alignment_evidence: Mapping[str, Any] | None = None,
+    model_name: str | None = None,
+    supervision_mode: str | None = None,
 ) -> FormalCheckpointRestore:
     if path is None:
         scheduler = None
@@ -264,6 +293,12 @@ def load_formal_checkpoint(
         expected["plan_hash"] = plan_hash
     if policies is not None:
         expected["policies"] = dict(policies)
+    if (model_name is None) != (supervision_mode is None):
+        raise ValueError("expected model identity must contain model_name and supervision_mode")
+    if model_name is not None and supervision_mode is not None:
+        contract = get_model_contract(model_name, supervision_mode=supervision_mode)
+        expected["model_name"] = contract.name
+        expected["supervision_mode"] = contract.supervision_mode
     metadata = load_checkpoint(model, optimizer, checkpoint_path, expected)
     actual_run_state = str(metadata.get("run_state", metadata.get("run_type", "")))
     actual_evidence = _resolve_contract(
