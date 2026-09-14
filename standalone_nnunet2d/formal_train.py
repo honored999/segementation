@@ -12,6 +12,13 @@ import numpy as np
 import torch
 from torch import nn
 from torch.optim import Optimizer
+from standalone_nnunet2d.data.data_source import (
+    DataSourceName,
+    NNUNET_PREPROCESSED_B2ND,
+    RAW_NIFTI_ONLINE,
+    resolve_data_source_root,
+    validate_data_source,
+)
 from standalone_nnunet2d.performance import PerformanceConfig, build_formal_loaders, resolve_performance_config
 from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
 from standalone_nnunet2d.training.formal_trainer import run_formal_epoch, run_formal_validation
@@ -31,9 +38,11 @@ from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, c
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, resolve_alignment_state, validate_alignment_evidence_record
 
 
-def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET, supervision_mode: str | None = None, batch_size: int = 12) -> dict[str, object]:
+def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET, supervision_mode: str | None = None, batch_size: int = 12, data_source: DataSourceName = RAW_NIFTI_ONLINE, data_root: Path | None = None) -> dict[str, object]:
  if batch_size<=0: raise ValueError(f'batch_size must be positive, got {batch_size}')
  if performance is None: performance=resolve_performance_config('alignment',device='cpu')
+ source=validate_data_source(data_source)
+ resolved_data_root=None if data_root is None else str(Path(data_root).expanduser().resolve())
  model_contract=get_model_contract(model_name, supervision_mode=supervision_mode)
  model_config=model_contract.as_dict()
  if alignment_evidence is None:
@@ -46,8 +55,9 @@ def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSche
  optimizer_config={'name':'SGD','lr':.01,'momentum':.99,'nesterov':True,'weight_decay':3e-5}
  policies={'scheduler':{'name':'poly','exponent':.9,'initial_lr':.01,'max_steps':schedule.num_epochs},'training':{'iterations_per_epoch':schedule.num_iterations_per_epoch,'oversample_foreground_percent':schedule.oversample_foreground_percent},'validation':{'iterations_per_epoch':schedule.num_val_iterations_per_epoch}}
  performance_config={'profile':performance.profile,'loader':performance.as_dict(),'optimizations':{'amp':performance.amp,'tf32':performance.tf32,'compile':performance.compile}}
- plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance':performance_config,'model':model_config,'batch_size':batch_size}
- config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'batch_size':batch_size,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance_profile':performance.profile,'performance':performance_config,'model':deepcopy(model_config),'plan_hash':compute_plan_hash(plan)}
+ data_source_config={'type':source,'root':resolved_data_root}
+ plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance':performance_config,'model':model_config,'batch_size':batch_size,'data_source':{'type':source}}
+ config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'batch_size':batch_size,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance_profile':performance.profile,'performance':performance_config,'model':deepcopy(model_config),'data_source':data_source_config,'plan_hash':compute_plan_hash(plan)}
  if validated_evidence is not None:
   config['alignment_evidence']=deepcopy(validated_evidence)
  return config
@@ -62,14 +72,15 @@ def load_2d_plan_config(path: Path) -> tuple[tuple[int, int], tuple[bool, ...]]:
   configuration=json.load(handle)['configurations']['2d']
  return tuple(int(value) for value in configuration['patch_size']), tuple(bool(value) for value in configuration['use_mask_for_norm'])
 
-def build_formal_datasets(raw_root: Path, *, fold: int, patch_size: tuple[int, int], use_mask_for_norm: tuple[bool, ...]) -> tuple[FormalPatchDataset, FormalPatchDataset]:
- train=FormalPatchDataset(raw_root,fold=fold,split='train',patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,augment=True)
- validation=FormalPatchDataset(raw_root,fold=fold,split='val',patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,augment=False,oversample_foreground_percent=0.0)
+def build_formal_datasets(data_root: Path, *, fold: int, patch_size: tuple[int, int], use_mask_for_norm: tuple[bool, ...], data_source: DataSourceName = RAW_NIFTI_ONLINE) -> tuple[FormalPatchDataset, FormalPatchDataset]:
+ source_kwargs = {} if data_source == RAW_NIFTI_ONLINE else {'data_source': data_source}
+ train=FormalPatchDataset(data_root,fold=fold,split='train',patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,augment=True,**source_kwargs)
+ validation=FormalPatchDataset(data_root,fold=fold,split='val',patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,augment=False,oversample_foreground_percent=0.0,**source_kwargs)
  return train,validation
 
 def build_parser() -> argparse.ArgumentParser:
  p=argparse.ArgumentParser(description='Explicit formal-alignment training entry point')
- p.add_argument('--raw-root',required=True,type=Path); p.add_argument('--output-root',required=True,type=Path); p.add_argument('--plans',required=True,type=Path); p.add_argument('--fold',type=int,default=0); p.add_argument('--device',default='cuda:0'); p.add_argument('--epochs',type=int,default=1000); p.add_argument('--batch-size',type=int,default=12); p.add_argument('--resume',type=Path); p.add_argument('--confirm-run',action='store_true')
+ source_group=p.add_mutually_exclusive_group(required=True); source_group.add_argument('--raw-root',type=Path); source_group.add_argument('--preprocessed-root',type=Path); p.add_argument('--output-root',required=True,type=Path); p.add_argument('--plans',required=True,type=Path); p.add_argument('--fold',type=int,default=0); p.add_argument('--device',default='cuda:0'); p.add_argument('--epochs',type=int,default=1000); p.add_argument('--batch-size',type=int,default=12); p.add_argument('--resume',type=Path); p.add_argument('--confirm-run',action='store_true')
  p.add_argument('--performance-profile',choices=('alignment','throughput'),default='alignment')
  p.add_argument('--model',choices=MODEL_NAMES,default=PLAIN_CONV_UNET)
  p.add_argument('--supervision-mode',choices=(DEEP_SUPERVISION,SINGLE_OUTPUT),default=None)
@@ -114,13 +125,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
  except ValueError as exc:
   p.error(str(exc))
  patch_size,use_mask_for_norm=load_2d_plan_config(a.plans)
- schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,batch_size=a.batch_size)
+ try:
+  data_source, data_root = resolve_data_source_root(a.raw_root, a.preprocessed_root, data_source=RAW_NIFTI_ONLINE if a.raw_root is not None else NNUNET_PREPROCESSED_B2ND)
+ except ValueError as exc:
+  p.error(str(exc))
+ schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,batch_size=a.batch_size,data_source=data_source,data_root=data_root)
  if not a.confirm_run: print(json.dumps({'execution':'not-confirmed','config':config},indent=2,default=str)); return 0
  if not 1<=a.epochs<=schedule.num_epochs: p.error('epochs must be in [1,1000]')
  random.seed(0); np.random.seed(0); torch.manual_seed(0)
  if torch.cuda.is_available(): torch.cuda.manual_seed_all(0)
  device=torch.device(a.device); a.output_root.mkdir(parents=True,exist_ok=True); write_resolved_config(a.output_root/'resolved_config.json',config)
- train,val=build_formal_datasets(a.raw_root,fold=a.fold,patch_size=patch_size,use_mask_for_norm=use_mask_for_norm)
+ train,val=build_formal_datasets(data_root,fold=a.fold,patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,data_source=data_source)
  train_loader,val_loader=build_formal_loaders(train,val,performance=performance,batch_size=a.batch_size)
  model=build_model(a.model, supervision_mode=model_contract.supervision_mode).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); loss,validation_loss=build_training_losses(a.model, supervision_mode=model_contract.supervision_mode)
  state=FormalTrainerState(0,0,-1.,a.fold)

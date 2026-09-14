@@ -8,19 +8,25 @@ from typing import Literal
 import numpy as np
 import torch
 from torch import Tensor
+from torch.utils.data import Dataset
 
-from standalone_nnunet2d.data.dataset import SplitName, StrokeSliceDataset
+from standalone_nnunet2d.data.data_source import (
+    DataSourceName,
+    RAW_NIFTI_ONLINE,
+    make_formal_case_source,
+)
+from standalone_nnunet2d.data.dataset import SplitName
 from standalone_nnunet2d.training.batch_sampler import PatchRequest
 from standalone_nnunet2d.training.official_augmentation import apply_official_2d_batchgeneratorsv2
 from standalone_nnunet2d.training.patch_sampler import crop_or_pad, sample_patch_center
 
 
-class FormalPatchDataset(StrokeSliceDataset):
+class FormalPatchDataset(Dataset[tuple[Tensor, Tensor]]):
     """Read one fixed-fold case on demand and return one random 2D patch."""
 
     def __init__(
         self,
-        raw_root: Path,
+        data_root: Path,
         *,
         fold: int,
         split: SplitName,
@@ -31,6 +37,7 @@ class FormalPatchDataset(StrokeSliceDataset):
         rng: np.random.Generator | None = None,
         augment: bool = True,
         patch_request: PatchRequest | None = None,
+        data_source: DataSourceName = RAW_NIFTI_ONLINE,
     ) -> None:
         if len(patch_size) != 2 or any(size <= 0 for size in patch_size):
             raise ValueError("patch_size must contain two positive values")
@@ -44,12 +51,27 @@ class FormalPatchDataset(StrokeSliceDataset):
         if patch_request is not None and case_ids is None:
             case_ids = (patch_request.case_id,)
         self.patch_request = patch_request
-        super().__init__(raw_root, fold=fold, split=split, case_ids=case_ids, rng=self.patch_rng, foreground_probability=0.0)
+        self.data_root = Path(data_root).expanduser().resolve()
+        self.data_source = data_source
+        self._case_source = make_formal_case_source(
+            self.data_root,
+            data_source=data_source,
+            fold=fold,
+            split=split,
+            case_ids=case_ids,
+        )
+        self.case_ids = self._case_source.case_ids
+        self.fold = fold
+        self.split = split
         if self.patch_request is not None and self.patch_request.case_id not in self.case_ids:
             raise ValueError(f"patch request case {self.patch_request.case_id!r} is not in this dataset")
 
+    def __len__(self) -> int:
+        return len(self.case_ids)
+
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
-        image, label = self.load_case(self.case_ids[index])
+        prepared_case = self._case_source.prepare_case(self.case_ids[index])
+        label = prepared_case.label
         if self.patch_request is None:
             z_index, force_foreground = self._select_z_index(label)
             center = None
@@ -61,7 +83,7 @@ class FormalPatchDataset(StrokeSliceDataset):
                 raise ValueError("patch request z_index is outside the loaded label volume")
             force_foreground = self.patch_request.force_foreground
             center = self.patch_request.center_yx
-        image_slice, label_slice = image[z_index], label[z_index]
+        image_slice, label_slice = prepared_case.image_slice(z_index), label[z_index]
         if center is None:
             center = sample_patch_center(
                 label_slice,
