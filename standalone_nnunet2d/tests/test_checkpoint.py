@@ -47,6 +47,61 @@ def test_save_checkpoint_rejects_path_outside_project_outputs(
         checkpoint.save_checkpoint(nn.Conv2d(1, 2, 1), None, tmp_path.parent / "outside.pt")
 
 
+def test_save_checkpoint_allows_path_under_explicit_root_and_rejects_escapes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "run"
+    model = nn.Conv2d(1, 2, 1)
+
+    resolved = checkpoint.save_checkpoint(
+        model,
+        None,
+        root / "nested" / "checkpoint.pth",
+        allowed_root=root,
+    )
+
+    assert resolved == (root / "nested" / "checkpoint.pth").resolve()
+    assert resolved.exists()
+
+    with pytest.raises(ValueError, match="allowed root"):
+        checkpoint.save_checkpoint(model, None, tmp_path / "run_sibling" / "checkpoint.pth", allowed_root=root)
+
+    with pytest.raises(ValueError, match="allowed root"):
+        checkpoint.save_checkpoint(model, None, root / "nested" / ".." / ".." / "escape.pth", allowed_root=root)
+
+
+def test_load_checkpoint_allows_path_under_explicit_root(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    checkpoint_path = root / "checkpoint.pth"
+    source = nn.Conv2d(1, 2, 1)
+    checkpoint.save_checkpoint(source, None, checkpoint_path, {"fold": 0}, allowed_root=root)
+
+    target = nn.Conv2d(1, 2, 1)
+    metadata = checkpoint.load_checkpoint(target, None, checkpoint_path, {"fold": 0}, allowed_root=root)
+
+    assert metadata == {"fold": 0}
+    assert torch.equal(source.weight, target.weight)
+
+
+def test_load_checkpoint_rejects_outside_explicit_root_before_read_or_state_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "run"
+    outside_path = tmp_path / "other" / "checkpoint.pth"
+    load_calls: list[tuple[object, ...]] = []
+    state_load_calls: list[object] = []
+
+    monkeypatch.setattr(checkpoint.torch, "load", lambda *args, **kwargs: load_calls.append(args) or {})
+    model = nn.Conv2d(1, 2, 1)
+    model.load_state_dict = lambda *args, **kwargs: state_load_calls.append(args)  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="allowed root"):
+        checkpoint.load_checkpoint(model, None, outside_path, allowed_root=root)
+
+    assert load_calls == []
+    assert state_load_calls == []
+
+
 def test_load_checkpoint_rejects_metadata_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

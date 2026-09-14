@@ -205,6 +205,7 @@ def save_formal_checkpoint(
     alignment_evidence: Mapping[str, Any] | None = None,
     model_name: str | None = None,
     supervision_mode: str | None = None,
+    checkpoint_root: str | Path | None = None,
 ) -> Path:
     scheduler, path, state, resolved_config = _normalise_save_arguments(
         scheduler_or_path, path_or_state, state_or_config, config
@@ -255,7 +256,7 @@ def save_formal_checkpoint(
     if model_name is not None and supervision_mode is not None:
         metadata["model_name"] = model_name
         metadata["supervision_mode"] = supervision_mode
-    return save_checkpoint(model, optimizer, path, metadata)
+    return save_checkpoint(model, optimizer, path, metadata, allowed_root=checkpoint_root)
 
 
 def load_formal_checkpoint(
@@ -271,6 +272,7 @@ def load_formal_checkpoint(
     alignment_evidence: Mapping[str, Any] | None = None,
     model_name: str | None = None,
     supervision_mode: str | None = None,
+    checkpoint_root: str | Path | None = None,
 ) -> FormalCheckpointRestore:
     if path is None:
         scheduler = None
@@ -299,7 +301,7 @@ def load_formal_checkpoint(
         contract = get_model_contract(model_name, supervision_mode=supervision_mode)
         expected["model_name"] = contract.name
         expected["supervision_mode"] = contract.supervision_mode
-    metadata = load_checkpoint(model, optimizer, checkpoint_path, expected)
+    metadata = load_checkpoint(model, optimizer, checkpoint_path, expected, allowed_root=checkpoint_root)
     actual_run_state = str(metadata.get("run_state", metadata.get("run_type", "")))
     actual_evidence = _resolve_contract(
         config=dict(metadata.get("resolved_config", metadata.get("config", {}))),

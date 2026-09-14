@@ -22,9 +22,11 @@ def save_checkpoint(
     optimizer: Optimizer | None,
     path: str | Path,
     metadata: Mapping[str, Any] | None = None,
+    *,
+    allowed_root: str | Path | None = None,
 ) -> Path:
-    """Persist explicitly supplied state below the standalone outputs directory."""
-    resolved_path = _resolve_output_path(path)
+    """Persist explicitly supplied state below the configured checkpoint root."""
+    resolved_path = _resolve_output_path(path, allowed_root=allowed_root)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -43,9 +45,15 @@ def load_checkpoint(
     optimizer: Optimizer | None,
     path: str | Path,
     expected_metadata: Mapping[str, Any] | None = None,
+    *,
+    allowed_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Restore an explicit local checkpoint after format and metadata checks."""
-    payload = torch.load(_resolve_output_path(path), map_location="cpu", weights_only=False)
+    payload = torch.load(
+        _resolve_output_path(path, allowed_root=allowed_root),
+        map_location="cpu",
+        weights_only=False,
+    )
     _validate_payload(payload, expected_metadata)
     model.load_state_dict(payload["model_state_dict"])
     optimizer_state = payload["optimizer_state_dict"]
@@ -54,12 +62,15 @@ def load_checkpoint(
     return dict(payload["metadata"])
 
 
-def _resolve_output_path(path: str | Path) -> Path:
+def _resolve_output_path(path: str | Path, *, allowed_root: str | Path | None = None) -> Path:
     candidate = Path(path).resolve()
+    root = (PROJECT_OUTPUTS_DIRECTORY if allowed_root is None else Path(allowed_root)).resolve()
     try:
-        candidate.relative_to(PROJECT_OUTPUTS_DIRECTORY.resolve())
+        candidate.relative_to(root)
     except ValueError as error:
-        raise ValueError("checkpoint path must be under standalone_nnunet2d/outputs") from error
+        if allowed_root is None:
+            raise ValueError("checkpoint path must be under standalone_nnunet2d/outputs") from error
+        raise ValueError(f"checkpoint path must be under allowed root: {root}") from error
     return candidate
 
 

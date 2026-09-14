@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 import pytest
 import torch
@@ -81,6 +82,52 @@ def test_main_passes_explicit_batch_size_to_loader_before_training(
   '--confirm-run',
  ])==0
  assert seen==[4]
+
+
+def test_main_passes_output_root_to_formal_checkpoint_operations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+ output_root=tmp_path/'formal-run'
+ resume_path=output_root/'checkpoint_latest.pth'
+ seen_load_roots: list[object] = []
+ seen_save_operations: list[tuple[object,object]] = []
+ tiny_model=nn.Conv2d(1,2,1)
+
+ monkeypatch.setattr(formal_train,'load_2d_plan_config',lambda path:((4,4),(False,)))
+ monkeypatch.setattr(formal_train,'build_formal_datasets',lambda *args,**kwargs:('train','val'))
+ monkeypatch.setattr(formal_train,'build_formal_loaders',lambda *args,**kwargs:([],[]))
+ monkeypatch.setattr(formal_train,'build_model',lambda *args,**kwargs:tiny_model)
+
+ def fake_load(*args,**kwargs):
+  seen_load_roots.append(kwargs['checkpoint_root'])
+  return SimpleNamespace(state=FormalTrainerState(0,0,-1.,0))
+
+ def fake_save(*args,**kwargs):
+  seen_save_operations.append((args[3],kwargs['checkpoint_root']))
+  return args[3]
+
+ monkeypatch.setattr(formal_train,'load_formal_checkpoint',fake_load)
+ monkeypatch.setattr(formal_train,'save_formal_checkpoint',fake_save)
+ monkeypatch.setattr(
+  formal_train,
+  'run_formal_epochs',
+  lambda **kwargs: iter(((0,SimpleNamespace(mean_loss=.5),SimpleNamespace(dice=.2),.001),)),
+ )
+
+ assert formal_train.main([
+  '--raw-root',str(tmp_path/'raw'),
+  '--output-root',str(output_root),
+  '--plans',str(tmp_path/'plans.json'),
+  '--device','cpu',
+  '--epochs','1',
+  '--resume',str(resume_path),
+  '--confirm-run',
+ ])==0
+ assert seen_load_roots==[output_root]
+ assert seen_save_operations==[
+  (output_root/'checkpoint_latest.pth',output_root),
+  (output_root/'checkpoint_best.pth',output_root),
+ ]
 
 
 def test_stage3_resolved_config_records_all_three_training_contracts() -> None:

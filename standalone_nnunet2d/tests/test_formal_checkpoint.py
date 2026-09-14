@@ -145,6 +145,36 @@ def test_formal_checkpoint_restores_scheduler_and_rng_state() -> None:
     assert metadata["resolved_config"] == config
 
 
+def test_formal_checkpoint_save_and_load_use_explicit_checkpoint_root(tmp_path: Path) -> None:
+    root = tmp_path / "formal-run"
+    path = root / "checkpoint_latest.pth"
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), .01)
+    state = FormalTrainerState(epoch=1, global_step=2, best_validation_dice=.3, fold=0)
+    config = {"run_type": "official_alignment_pending", "run_state": "official_alignment_pending"}
+
+    save_formal_checkpoint(
+        model,
+        optimizer,
+        path,
+        state,
+        config,
+        checkpoint_root=root,
+    )
+
+    restored_model = nn.Conv2d(1, 2, 1)
+    restored = load_formal_checkpoint(
+        restored_model,
+        torch.optim.SGD(restored_model.parameters(), .01),
+        path,
+        fold=0,
+        checkpoint_root=root,
+    )
+
+    assert restored.state == state
+    assert torch.equal(model.weight, restored_model.weight)
+
+
 def test_formal_checkpoint_rejects_official_aligned_local_state() -> None:
     model = nn.Conv2d(1, 2, 1)
     optimizer = torch.optim.SGD(model.parameters(), .01)
