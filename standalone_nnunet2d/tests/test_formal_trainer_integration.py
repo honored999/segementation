@@ -35,6 +35,54 @@ def test_formal_training_persists_resolved_pending_configuration(tmp_path) -> No
  assert resolved['model']['supervision_mode']=='deep_supervision'
 
 
+def test_batch_size_is_recorded_in_config_and_changes_plan_hash() -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+ default=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule)
+ explicit=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,batch_size=4)
+
+ assert default['batch_size']==12
+ assert explicit['batch_size']==4
+ assert default['plan_hash']!=explicit['plan_hash']
+
+
+@pytest.mark.parametrize('batch_size',[0,-1])
+def test_build_formal_config_rejects_nonpositive_batch_size(batch_size: int) -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+
+ with pytest.raises(ValueError,match='batch_size'):
+  formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,batch_size=batch_size)
+
+
+def test_main_passes_explicit_batch_size_to_loader_before_training(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+ seen: list[int] = []
+ tiny_model=nn.Conv2d(1,2,1)
+
+ monkeypatch.setattr(formal_train,'load_2d_plan_config',lambda path:((4,4),(False,)))
+ monkeypatch.setattr(formal_train,'build_formal_datasets',lambda *args,**kwargs:('train','val'))
+
+ def fake_build_loaders(train,val,*,performance,batch_size):
+  del train,val,performance
+  seen.append(batch_size)
+  return [],[]
+
+ monkeypatch.setattr(formal_train,'build_formal_loaders',fake_build_loaders)
+ monkeypatch.setattr(formal_train,'build_model',lambda *args,**kwargs:tiny_model)
+ monkeypatch.setattr(formal_train,'run_formal_epochs',lambda **kwargs:iter(()))
+
+ assert formal_train.main([
+  '--raw-root',str(tmp_path/'raw'),
+  '--output-root',str(tmp_path/'output'),
+  '--plans',str(tmp_path/'plans.json'),
+  '--device','cpu',
+  '--epochs','1',
+  '--batch-size','4',
+  '--confirm-run',
+ ])==0
+ assert seen==[4]
+
+
 def test_stage3_resolved_config_records_all_three_training_contracts() -> None:
  schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
  plain=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule)

@@ -36,6 +36,31 @@ def test_parser_defaults_to_plain_conv_unet() -> None:
     arguments = formal_train.build_parser().parse_args(_parser_arguments())
 
     assert arguments.model == PLAIN_CONV_UNET
+    assert arguments.batch_size == 12
+
+
+def test_parser_accepts_explicit_batch_size() -> None:
+    arguments = formal_train.build_parser().parse_args(
+        _parser_arguments() + ["--batch-size", "4"]
+    )
+
+    assert arguments.batch_size == 4
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+def test_main_rejects_nonpositive_batch_size_before_plan_access(
+    monkeypatch: pytest.MonkeyPatch, batch_size: int
+) -> None:
+    monkeypatch.setattr(
+        formal_train,
+        "load_2d_plan_config",
+        lambda path: pytest.fail("invalid batch_size reached plan access"),
+    )
+
+    with pytest.raises(SystemExit):
+        formal_train.main(
+            _parser_arguments() + ["--batch-size", str(batch_size)]
+        )
 
 
 def test_parser_accepts_explicit_h2former() -> None:
