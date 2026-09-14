@@ -9,6 +9,7 @@ from standalone_nnunet2d.data.dataset import StrokeSliceDataset, load_fold_cases
 from standalone_nnunet2d.data.augmentation import AugmentationConfig
 from standalone_nnunet2d.data.nifti_io import NiftiVolume, write_nifti
 from standalone_nnunet2d.data.sampling import select_axial_slice, select_slice_index
+from standalone_nnunet2d.training.patch_sampler import sample_patch_center
 
 
 def test_fold_cases_are_loaded_from_the_supplied_fixed_splits() -> None:
@@ -34,10 +35,31 @@ def test_foreground_sampler_chooses_foreground_slice_when_probability_is_one() -
     assert select_slice_index(labels, np.random.default_rng(7), foreground_probability=1.0) == 2
 
 
+def test_foreground_sampler_uses_only_label_one_as_foreground() -> None:
+    labels = np.full((3, 2, 2), -1, dtype=np.int16)
+    labels[2, 0, 0] = 1
+
+    for seed in range(20):
+        assert select_slice_index(
+            labels, np.random.default_rng(seed), foreground_probability=1.0
+        ) == 2
+
+
 def test_foreground_sampler_falls_back_to_valid_index_without_foreground() -> None:
     result = select_slice_index(np.zeros((3, 2, 2), dtype=np.int16), np.random.default_rng(7), foreground_probability=1.0)
 
     assert 0 <= result < 3
+
+
+def test_foreground_voxel_sampler_uses_only_label_one() -> None:
+    label = np.zeros((2, 2), dtype=np.int16)
+    label[0, 0] = 2
+    label[1, 1] = 1
+
+    for seed in range(20):
+        assert sample_patch_center(
+            label, np.random.default_rng(seed), oversample_foreground_percent=1.0
+        ) == (1, 1)
 
 
 def test_dataset_loads_one_requested_fixed_fold_case_on_demand(tmp_path: Path) -> None:

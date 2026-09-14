@@ -4,7 +4,7 @@ import numpy as np
 
 def sample_patch_center(label: np.ndarray, rng: np.random.Generator, *, oversample_foreground_percent: float=.33) -> tuple[int,int]:
  if label.ndim!=2 or not 0<=oversample_foreground_percent<=1: raise ValueError('expected 2D label and probability in [0,1]')
- foreground=np.argwhere(label>0)
+ foreground=np.argwhere(label==1)
  if len(foreground) and rng.random()<oversample_foreground_percent:
   y,x=foreground[rng.integers(len(foreground))]; return int(y),int(x)
  return int(rng.integers(label.shape[0])),int(rng.integers(label.shape[1]))

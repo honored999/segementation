@@ -143,6 +143,11 @@ def audit_data_source_parity(
                 "split": split,
                 "raw": raw_stats,
                 "preprocessed": preprocessed_stats,
+                "preprocessed_raw_label_unique": list(preprocessed_case.raw_label_unique),
+                "preprocessed_raw_label_counts": {
+                    str(value): count
+                    for value, count in preprocessed_case.raw_label_counts.items()
+                },
                 "shape_match": raw_image.shape == preprocessed_image.shape and raw_label.shape == preprocessed_label.shape,
                 "image_close": image_close,
                 "label_equal": label_equal,

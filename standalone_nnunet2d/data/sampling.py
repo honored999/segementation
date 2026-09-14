@@ -34,7 +34,7 @@ def select_slice_index(
         raise ValueError("labels must contain at least one slice")
     if not 0.0 <= foreground_probability <= 1.0:
         raise ValueError("foreground_probability must be in [0, 1]")
-    foreground_indices = np.flatnonzero(np.any(labels != 0, axis=(1, 2)))
+    foreground_indices = np.flatnonzero(np.any(labels == 1, axis=(1, 2)))
     if foreground_indices.size and rng.random() < foreground_probability:
         return int(rng.choice(foreground_indices))
     return int(rng.integers(labels.shape[0]))

@@ -98,6 +98,67 @@ def test_formal_preprocessed_dataset_reads_only_selected_image_slice(
     assert all(key != (slice(None),) for key in data_calls)
 
 
+def test_preprocessed_source_normalizes_minus_one_before_binary_sampling(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("blosc2")
+    case_id = load_fold_cases(0, "train")[0]
+    preprocessed_root = tmp_path / "preprocessed"
+    preprocessed_root.mkdir()
+    image = np.zeros((3, 4, 4), dtype=np.float32)
+    label = np.zeros((3, 4, 4), dtype=np.int16)
+    label[0, 0, 0] = -1
+    label[2, 1, 2] = 1
+    _write_preprocessed_case(preprocessed_root, case_id, image, label)
+
+    from standalone_nnunet2d.data.data_source import PreprocessedB2ndCaseSource
+
+    prepared = PreprocessedB2ndCaseSource(
+        preprocessed_root, fold=0, split="train", case_ids=(case_id,)
+    ).prepare_case(case_id)
+
+    np.testing.assert_array_equal(prepared.label, np.where(label == -1, 0, label))
+    assert set(np.unique(prepared.label).tolist()) <= {0, 1}
+    assert prepared.raw_label_unique == (-1, 0, 1)
+    assert prepared.raw_label_counts == {
+        -1: 1,
+        0: int(np.count_nonzero(label == 0)),
+        1: 1,
+    }
+
+
+def test_preprocessed_formal_sampling_uses_only_label_one(tmp_path: Path) -> None:
+    pytest.importorskip("blosc2")
+    case_id = load_fold_cases(0, "train")[0]
+    preprocessed_root = tmp_path / "preprocessed"
+    preprocessed_root.mkdir()
+    image = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    label = np.full((3, 4, 4), -1, dtype=np.int16)
+    label[2, 1, 2] = 1
+    _write_preprocessed_case(preprocessed_root, case_id, image, label)
+
+    from standalone_nnunet2d.data.data_source import NNUNET_PREPROCESSED_B2ND
+    from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
+
+    dataset = FormalPatchDataset(
+        preprocessed_root,
+        fold=0,
+        split="train",
+        case_ids=(case_id,),
+        data_source=NNUNET_PREPROCESSED_B2ND,
+        patch_size=(4, 4),
+        oversample_foreground_percent=1.0,
+        rng=np.random.default_rng(0),
+        augment=False,
+    )
+
+    _, target = dataset[0]
+
+    assert target.sum().item() == 1
+    assert target[2, 2].item() == 1
+    assert set(target.unique().tolist()) <= {0, 1}
+
+
 def test_formal_preprocessed_dataset_supports_len_and_real_dataloader(
     tmp_path: Path,
 ) -> None:
@@ -189,7 +250,8 @@ def test_formal_preprocessed_source_rejects_shape_and_label_contract_violations(
     from standalone_nnunet2d.data.data_source import NNUNET_PREPROCESSED_B2ND
     from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
 
-    for data, seg, message in (
+    for index, (data, seg, message) in enumerate(
+        (
         (
             np.zeros((1, 2, 4, 4), dtype=np.float32),
             np.zeros((1, 3, 4, 4), dtype=np.int16),
@@ -200,8 +262,14 @@ def test_formal_preprocessed_source_rejects_shape_and_label_contract_violations(
             np.full((1, 2, 4, 4), 2, dtype=np.int16),
             "labels",
         ),
+        (
+            np.zeros((1, 2, 4, 4), dtype=np.float32),
+            np.full((1, 2, 4, 4), -2, dtype=np.int16),
+            "labels",
+        ),
+        )
     ):
-        root = tmp_path / message
+        root = tmp_path / f"invalid-{index}-{message}"
         root.mkdir()
         _save_b2nd(root / f"{case_id}.b2nd", data)
         _save_b2nd(root / f"{case_id}_seg.b2nd", seg)
@@ -321,7 +389,11 @@ def test_data_source_parity_audit_writes_split_and_statistics(
         processed_image, processed_label = raw_dataset.load_case(case_id)
         if offset == 0:
             processed_image = processed_image + np.float32(5e-7)
-        _write_preprocessed_case(preprocessed_root, case_id, processed_image, processed_label)
+        raw_preprocessed_label = processed_label.copy()
+        raw_preprocessed_label[0, 0, 0] = -1
+        _write_preprocessed_case(
+            preprocessed_root, case_id, processed_image, raw_preprocessed_label
+        )
 
     output_path = tmp_path / "audit.json"
     assert main(
@@ -342,6 +414,12 @@ def test_data_source_parity_audit_writes_split_and_statistics(
     assert all(record["shape_match"] for record in report["cases"])
     assert all(record["image_close"] for record in report["cases"])
     assert all(record["label_equal"] for record in report["cases"])
+    assert report["cases"][0]["preprocessed_raw_label_unique"] == [-1, 0, 1]
+    assert report["cases"][0]["preprocessed_raw_label_counts"] == {
+        "-1": 1,
+        "0": 190,
+        "1": 1,
+    }
     assert report["image_tolerance"] == {"rtol": 1e-5, "atol": 1e-6}
     assert report["cases"][0]["image_difference"]["max_abs"] > 0.0
     assert report["cases"][0]["image_difference"]["rmse"] > 0.0

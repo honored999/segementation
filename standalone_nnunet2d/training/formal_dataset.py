@@ -106,7 +106,7 @@ class FormalPatchDataset(Dataset[tuple[Tensor, Tensor]]):
         return torch.from_numpy(image_patch).unsqueeze(0).float(), torch.from_numpy(label_patch).long()
 
     def _select_z_index(self, label: np.ndarray) -> tuple[int, bool]:
-        foreground_z = np.flatnonzero(label.sum(axis=(1, 2)) > 0)
+        foreground_z = np.flatnonzero(np.any(label == 1, axis=(1, 2)))
         force_foreground = len(foreground_z) > 0 and self.patch_rng.random() < self.oversample_foreground_percent
         z_index = int(self.patch_rng.choice(foreground_z)) if force_foreground else int(self.patch_rng.integers(label.shape[0]))
         return z_index, force_foreground

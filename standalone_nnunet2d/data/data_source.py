@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -68,6 +68,8 @@ class PreparedCase:
     shape: tuple[int, int, int]
     _image_volume: np.ndarray | None = None
     _image_store: Any | None = None
+    raw_label_unique: tuple[int, ...] = ()
+    raw_label_counts: dict[int, int] = field(default_factory=dict)
 
     def image_slice(self, z_index: int) -> np.ndarray:
         if not 0 <= z_index < self.shape[0]:
@@ -157,14 +159,28 @@ def _validate_b2nd_store_pair(
     return data_shape[1], data_shape[2], data_shape[3]
 
 
-def _validate_b2nd_label(case_id: str, label: np.ndarray, shape: tuple[int, int, int]) -> np.ndarray:
+def _validate_b2nd_label(
+    case_id: str, label: np.ndarray, shape: tuple[int, int, int]
+) -> tuple[np.ndarray, tuple[int, ...], dict[int, int]]:
     if label.shape != shape:
         raise ValueError(
             f"preprocessed label shape for {case_id} is {label.shape}, expected {shape}"
         )
-    if not np.isin(label, (0, 1)).all():
-        raise ValueError(f"preprocessed labels for {case_id} must contain only 0 and 1")
-    return label.astype(np.int16, copy=False)
+    raw_unique, raw_counts = np.unique(label, return_counts=True)
+    if not np.isin(raw_unique, (-1, 0, 1)).all():
+        raise ValueError(
+            f"preprocessed labels for {case_id} must contain only -1, 0, and 1; "
+            f"found {raw_unique.tolist()}"
+        )
+    normalized = np.where(label == -1, 0, label).astype(np.int16, copy=False)
+    if not np.isin(normalized, (0, 1)).all():
+        raise ValueError(
+            f"normalized preprocessed labels for {case_id} must contain only 0 and 1"
+        )
+    return normalized, tuple(int(value) for value in raw_unique.tolist()), {
+        int(value): int(count)
+        for value, count in zip(raw_unique.tolist(), raw_counts.tolist())
+    }
 
 
 class PreprocessedB2ndCaseSource:
@@ -209,9 +225,17 @@ class PreprocessedB2ndCaseSource:
         shape = _validate_b2nd_store_pair(case_id, data_store, seg_store)
         # Full seg loading is intentional: current formal z oversampling samples
         # from the same foreground-slice distribution as the raw loader.
-        label = np.asarray(seg_store[0, :, :, :])
-        label = _validate_b2nd_label(case_id, label, shape)
-        return PreparedCase(label=label, shape=shape, _image_store=data_store)
+        raw_label = np.asarray(seg_store[0, :, :, :])
+        label, raw_label_unique, raw_label_counts = _validate_b2nd_label(
+            case_id, raw_label, shape
+        )
+        return PreparedCase(
+            label=label,
+            shape=shape,
+            _image_store=data_store,
+            raw_label_unique=raw_label_unique,
+            raw_label_counts=raw_label_counts,
+        )
 
 
 def make_formal_case_source(
