@@ -124,6 +124,86 @@ nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerTopK10 -p nnUNetPla
 Assess the same 19 full reconstructed 3D validation volumes using the stated
 foreground case-macro Dice rule before comparing with the baseline.
 
+## Foreground50 full-resolution detail refinement
+
+`nnUNetTrainerForeground50DetailRefine` is an isolated A/B architecture variant
+of `nnUNetTrainerForeground50`. The official nnU-Net constructor first builds and
+initializes the complete baseline network. The variant then replaces only the
+highest-resolution segmentation head with:
+
+```text
+F -> [1x1 C->16, 3x3, norm, activation, 3x3, norm, activation, 1x1 16->C]
+  -> F + residual -> original segmentation head
+```
+
+`C`, convolution dimensionality, convolution bias, normalization, and activation
+come from the constructed baseline decoder. The final 1x1 projection and its bias
+(when present) are zero initialized after official initialization, so the initial
+logits equal the baseline logits within floating-point tolerance. Existing shallow
+skip connections are unchanged; this module refines the final fused full-resolution
+feature and does not recover information already lost. Lower-resolution deep-
+supervision heads, output order, and the deep-supervision toggle are unchanged.
+
+Local engineering validation used `nnunetv2==2.8.1`,
+`dynamic-network-architectures==0.4.4`, and `torch==2.11.0+cu126` from `newconda`.
+The server must independently confirm the same source/API contract and its actual
+Dataset501 plans/checkpoints before a formal run. The historical result CSVs do not
+establish those training details.
+
+From the experiment worktree in Windows `cmd.exe`, keep the extension directory
+available for training, resume, validation, and prediction:
+
+```bat
+set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
+set nnUNet_compile=false
+```
+
+The fixed fold-0 A/B commands are:
+
+```bat
+nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerForeground50 -p nnUNetPlans
+nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerForeground50DetailRefine -p nnUNetPlans
+```
+
+They create independent standard nnU-Net result directories:
+
+```text
+Dataset501_StrokeLesion\nnUNetTrainerForeground50__nnUNetPlans__2d\fold_0
+Dataset501_StrokeLesion\nnUNetTrainerForeground50DetailRefine__nnUNetPlans__2d\fold_0
+```
+
+Resume and validate only the DetailRefine run with its own Trainer/checkpoint:
+
+```bat
+nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerForeground50DetailRefine -p nnUNetPlans --c
+nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerForeground50DetailRefine -p nnUNetPlans --val
+```
+
+Prediction also names the same Trainer so nnU-Net reconstructs the same network:
+
+```bat
+nnUNetv2_predict -i INPUT_FOLDER -o DETAIL_REFINE_PREDICTIONS -d Dataset501_StrokeLesion -c 2d -f 0 -tr nnUNetTrainerForeground50DetailRefine -p nnUNetPlans
+```
+
+Do not use a baseline Foreground50 checkpoint as a DetailRefine resume checkpoint;
+strict loading intentionally rejects the different architecture. For a paired from-
+scratch comparison, keep the patient-level five-fold split, plans, batch/patch,
+training budget, seed policy, augmentation, loss, optimizer, scheduler, checkpoint
+selection, inference, and postprocessing identical. A historical A run is reusable
+only if its complete configuration, provenance, seed/initialization, and checkpoint
+selection are verified; otherwise rerun A under the matched protocol.
+
+Start with fold 0. Compare all reconstructed original full-volume validation cases
+using equal-case macro Dice, precision, recall, and HD95, and report paired per-case
+differences. Do not substitute online patch Dice or connected-component count
+differences for full-volume metrics or lesion-detection recall. Before seeing results,
+the suggested engineering screen is at least +0.5 Dice percentage points, no recall
+decrease, and inspection for HD95 and false-positive degradation. This is a fixed
+engineering screening rule, not a statistical-significance claim.
+
+No real-data training or formal evaluation was run as part of this implementation,
+so there is no evidence yet that detail refinement improves segmentation quality.
+
 ## TopK20 fold-0 screen
 
 `nnUNetTrainerTopK20` inherits the already validated TopK10 experiment and
