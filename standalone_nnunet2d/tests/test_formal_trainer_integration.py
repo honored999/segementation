@@ -35,6 +35,22 @@ def test_formal_training_persists_resolved_pending_configuration(tmp_path) -> No
  assert resolved['model']['name']=='plain_conv_unet'
  assert resolved['model']['supervision_mode']=='deep_supervision'
 
+def test_formal_config_records_optimizer_selection_and_policies() -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+ default=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule)
+ h2=formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,model_name=H2FORMER,optimizer_name='adamw')
+ assert default['optimizer']=={'name':'SGD','lr':.01,'momentum':.99,'nesterov':True,'weight_decay':3e-5}
+ assert h2['optimizer']=={'name':'AdamW','lr':1e-4,'betas':(.9,.999),'eps':1e-8,'weight_decay':3e-5}
+ assert h2['policies']['scheduler']['initial_lr']==pytest.approx(1e-4)
+ assert h2['selection']=={'interval_epochs':10,'mirror_axes':[],'aggregation':'case_macro_mean'}
+ assert h2['early_stopping']=={'max_epochs':1000,'start_epoch':100,'patience':10,'min_delta':.001}
+ assert default['plan_hash']!=h2['plan_hash']
+
+def test_formal_config_rejects_adamw_for_non_h2former() -> None:
+ schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
+ with pytest.raises(ValueError,match='H2Former'):
+  formal_train.build_formal_config(fold=0,epochs=1,schedule=schedule,optimizer_name='adamw')
+
 
 def test_batch_size_is_recorded_in_config_and_changes_plan_hash() -> None:
  schedule=OfficialTrainerSchedule(num_iterations_per_epoch=1,num_val_iterations_per_epoch=1)
@@ -124,10 +140,91 @@ def test_main_passes_output_root_to_formal_checkpoint_operations(
   '--confirm-run',
  ])==0
  assert seen_load_roots==[output_root]
- assert seen_save_operations==[
-  (output_root/'checkpoint_latest.pth',output_root),
-  (output_root/'checkpoint_best.pth',output_root),
- ]
+ assert seen_save_operations==[(output_root/'checkpoint_latest.pth',output_root)]
+
+
+def test_main_skips_training_selection_and_optimizer_update_for_terminal_resume(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+ counters = {"optimizer_steps": 0, "train_loop_calls": 0, "selection_calls": 0}
+ output_root=tmp_path/'terminal-resume'
+ tiny_model=nn.Conv2d(1,2,1)
+
+ monkeypatch.setattr(formal_train,'load_2d_plan_config',lambda path:((4,4),(False,)))
+ monkeypatch.setattr(formal_train,'build_formal_datasets',lambda *args,**kwargs:('train','val'))
+ monkeypatch.setattr(formal_train,'build_formal_loaders',lambda *args,**kwargs:([],[]))
+ monkeypatch.setattr(formal_train,'build_model',lambda *args,**kwargs:tiny_model)
+
+ def make_counting_optimizer(*args,**kwargs):
+  optimizer=torch.optim.SGD(tiny_model.parameters(),lr=.01)
+  original_step=optimizer.step
+  def step(*step_args,**step_kwargs):
+   counters['optimizer_steps']+=1
+   return original_step(*step_args,**step_kwargs)
+  optimizer.step=step
+  return optimizer
+
+ monkeypatch.setattr(formal_train,'make_official_optimizer',make_counting_optimizer)
+ monkeypatch.setattr(
+  formal_train,
+  'load_formal_checkpoint',
+  lambda *args,**kwargs: SimpleNamespace(
+   state=FormalTrainerState(
+    epoch=110,
+    global_step=110,
+    best_validation_dice=.4,
+    fold=0,
+    best_selection_dice=.73,
+    best_selection_epoch=100,
+    early_stop_reference_dice=.72,
+    checks_without_improvement=10,
+   )
+  ),
+ )
+
+ def fail_if_training_runs(**kwargs):
+  counters['train_loop_calls']+=1
+  raise AssertionError('terminal early-stop resume must not enter the training loop')
+
+ def fail_if_selection_runs(*args,**kwargs):
+  counters['selection_calls']+=1
+  raise AssertionError('terminal early-stop resume must not run selection')
+
+ monkeypatch.setattr(formal_train,'run_formal_epochs',fail_if_training_runs)
+ monkeypatch.setattr(formal_train,'select_fold',fail_if_selection_runs)
+
+ assert formal_train.main([
+  '--raw-root',str(tmp_path/'raw'),
+  '--output-root',str(output_root),
+  '--plans',str(tmp_path/'plans.json'),
+  '--device','cpu',
+  '--epochs','1000',
+  '--resume',str(output_root/'checkpoint_latest.pth'),
+  '--confirm-run',
+ ])==0
+ assert counters=={"optimizer_steps":0,"train_loop_calls":0,"selection_calls":0}
+ assert (output_root/'training_log.csv').read_text(encoding='utf-8')=='epoch,global_step,train_loss,validation_dice,best_dice,selection_dice,lr\n'
+
+
+def test_main_reports_non_h2former_adamw_as_argparse_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+ monkeypatch.setattr(formal_train,'load_2d_plan_config',lambda path:((4,4),(False,)))
+
+ with pytest.raises(SystemExit) as error:
+  formal_train.main([
+   '--raw-root',str(tmp_path/'raw'),
+   '--output-root',str(tmp_path/'output'),
+   '--plans',str(tmp_path/'plans.json'),
+   '--device','cpu',
+   '--model',PLAIN_CONV_UNET,
+   '--optimizer','adamw',
+  ])
+
+ assert error.value.code==2
+ captured=capsys.readouterr()
+ assert 'AdamW is only supported for H2Former' in captured.err
+ assert 'Traceback' not in captured.err
 
 
 def test_stage3_resolved_config_records_all_three_training_contracts() -> None:

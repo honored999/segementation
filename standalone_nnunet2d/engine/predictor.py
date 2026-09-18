@@ -236,11 +236,16 @@ def predict_volume(
     patch_size: tuple[int, int] = DEFAULT_PATCH_SIZE,
     tile_step_size: float = DEFAULT_TILE_STEP_SIZE,
     slice_batch_size: int = 1,
+    normalise_inputs: bool = True,
 ) -> np.ndarray:
     """Return one binary uint8 prediction per source-space ``(z, y, x)`` slice."""
     if slice_batch_size <= 0:
         raise ValueError(f"slice_batch_size must be positive, got {slice_batch_size}")
-    normalized = z_score_normalize(image.array)
+    normalized = (
+        z_score_normalize(image.array)
+        if normalise_inputs
+        else np.asarray(image.array, dtype=np.float32)
+    )
     slice_count, height, width = normalized.shape
     total_logits: Tensor | None = None
     for z_start in range(0, slice_count, slice_batch_size):

@@ -27,6 +27,10 @@ class FormalTrainerState:
     global_step: int
     best_validation_dice: float
     fold: int
+    best_selection_dice: float = -1.0
+    best_selection_epoch: int = 0
+    early_stop_reference_dice: float = -1.0
+    checks_without_improvement: int = 0
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,10 @@ def save_formal_checkpoint(
         "epoch": state.epoch,
         "global_step": state.global_step,
         "best_validation_dice": state.best_validation_dice,
+        "best_selection_dice": state.best_selection_dice,
+        "best_selection_epoch": state.best_selection_epoch,
+        "early_stop_reference_dice": state.early_stop_reference_dice,
+        "checks_without_improvement": state.checks_without_improvement,
         "fold": state.fold,
         "config": resolved_config,
         "resolved_config": resolved_config,
@@ -313,6 +321,10 @@ def load_formal_checkpoint(
         int(metadata["global_step"]),
         float(metadata["best_validation_dice"]),
         int(metadata["fold"]),
+        float(metadata.get("best_selection_dice", -1.0)),
+        int(metadata.get("best_selection_epoch", 0)),
+        float(metadata.get("early_stop_reference_dice", -1.0)),
+        int(metadata.get("checks_without_improvement", 0)),
     )
     scheduler_state = metadata.get("scheduler_state")
     if scheduler is not None and scheduler_state is None:

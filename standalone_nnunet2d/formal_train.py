@@ -20,9 +20,10 @@ from standalone_nnunet2d.data.data_source import (
     validate_data_source,
 )
 from standalone_nnunet2d.performance import PerformanceConfig, build_formal_loaders, resolve_performance_config
+from standalone_nnunet2d.engine.formal_validation import select_fold
 from standalone_nnunet2d.training.formal_dataset import FormalPatchDataset
 from standalone_nnunet2d.training.formal_trainer import run_formal_epoch, run_formal_validation
-from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE, OfficialTrainerSchedule, PolyLRScheduler, make_official_optimizer
+from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE, OfficialTrainerSchedule, PolyLRScheduler, make_official_optimizer, resolve_optimizer_config
 from standalone_nnunet2d.losses.compound import DiceCrossEntropyLoss
 from standalone_nnunet2d.losses.deep_supervision import DeepSupervisionLoss
 from standalone_nnunet2d.models.factory import (
@@ -38,7 +39,7 @@ from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, c
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, resolve_alignment_state, validate_alignment_evidence_record
 
 
-def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET, supervision_mode: str | None = None, batch_size: int = 12, data_source: DataSourceName = RAW_NIFTI_ONLINE, data_root: Path | None = None) -> dict[str, object]:
+def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSchedule, performance: PerformanceConfig | None = None, alignment_evidence: dict[str, object] | None = None, model_name: str = PLAIN_CONV_UNET, supervision_mode: str | None = None, batch_size: int = 12, data_source: DataSourceName = RAW_NIFTI_ONLINE, data_root: Path | None = None, optimizer_name: str = 'sgd') -> dict[str, object]:
  if batch_size<=0: raise ValueError(f'batch_size must be positive, got {batch_size}')
  if performance is None: performance=resolve_performance_config('alignment',device='cpu')
  source=validate_data_source(data_source)
@@ -52,12 +53,14 @@ def build_formal_config(*, fold: int, epochs: int, schedule: OfficialTrainerSche
   validated_evidence=validate_alignment_evidence_record(alignment_evidence)
   run_state=OFFICIAL_ALIGNED
  schedule_config=asdict(schedule)
- optimizer_config={'name':'SGD','lr':.01,'momentum':.99,'nesterov':True,'weight_decay':3e-5}
- policies={'scheduler':{'name':'poly','exponent':.9,'initial_lr':.01,'max_steps':schedule.num_epochs},'training':{'iterations_per_epoch':schedule.num_iterations_per_epoch,'oversample_foreground_percent':schedule.oversample_foreground_percent},'validation':{'iterations_per_epoch':schedule.num_val_iterations_per_epoch}}
+ optimizer_config=resolve_optimizer_config(model_name=model_contract.name,optimizer_name=optimizer_name)
+ policies={'scheduler':{'name':'poly','exponent':.9,'initial_lr':optimizer_config['lr'],'max_steps':schedule.num_epochs},'training':{'iterations_per_epoch':schedule.num_iterations_per_epoch,'oversample_foreground_percent':schedule.oversample_foreground_percent},'validation':{'iterations_per_epoch':schedule.num_val_iterations_per_epoch}}
+ selection_config={'interval_epochs':10,'mirror_axes':[],'aggregation':'case_macro_mean'}
+ early_stopping_config={'max_epochs':schedule.num_epochs,'start_epoch':100,'patience':10,'min_delta':.001}
  performance_config={'profile':performance.profile,'loader':performance.as_dict(),'optimizations':{'amp':performance.amp,'tf32':performance.tf32,'compile':performance.compile}}
  data_source_config={'type':source,'root':resolved_data_root}
- plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance':performance_config,'model':model_config,'batch_size':batch_size,'data_source':{'type':source}}
- config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'batch_size':batch_size,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'performance_profile':performance.profile,'performance':performance_config,'model':deepcopy(model_config),'data_source':data_source_config,'plan_hash':compute_plan_hash(plan)}
+ plan={'run_type':run_state,'run_state':run_state,'alignment_evidence':validated_evidence,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'selection':selection_config,'early_stopping':early_stopping_config,'performance':performance_config,'model':model_config,'batch_size':batch_size,'data_source':{'type':source}}
+ config={'run_type':run_state,'run_state':run_state,'fold':fold,'epochs':epochs,'batch_size':batch_size,'schedule':schedule_config,'optimizer':optimizer_config,'policies':policies,'selection':selection_config,'early_stopping':early_stopping_config,'performance_profile':performance.profile,'performance':performance_config,'model':deepcopy(model_config),'data_source':data_source_config,'plan_hash':compute_plan_hash(plan)}
  if validated_evidence is not None:
   config['alignment_evidence']=deepcopy(validated_evidence)
  return config
@@ -82,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
  p=argparse.ArgumentParser(description='Explicit formal-alignment training entry point')
  source_group=p.add_mutually_exclusive_group(required=True); source_group.add_argument('--raw-root',type=Path); source_group.add_argument('--preprocessed-root',type=Path); p.add_argument('--output-root',required=True,type=Path); p.add_argument('--plans',required=True,type=Path); p.add_argument('--fold',type=int,default=0); p.add_argument('--device',default='cuda:0'); p.add_argument('--epochs',type=int,default=1000); p.add_argument('--batch-size',type=int,default=12); p.add_argument('--resume',type=Path); p.add_argument('--confirm-run',action='store_true')
  p.add_argument('--performance-profile',choices=('alignment','throughput'),default='alignment')
- p.add_argument('--model',choices=MODEL_NAMES,default=PLAIN_CONV_UNET)
+ p.add_argument('--model',choices=MODEL_NAMES,default=PLAIN_CONV_UNET); p.add_argument('--optimizer',choices=('sgd','adamw'),default='sgd')
  p.add_argument('--supervision-mode',choices=(DEEP_SUPERVISION,SINGLE_OUTPUT),default=None)
  p.add_argument('--num-workers',type=int)
  p.add_argument('--pin-memory',choices=('auto','on','off'),default='auto')
@@ -109,11 +112,41 @@ def run_formal_epochs(*, model: nn.Module, train_loader: Iterable[tuple[torch.Te
   yield epoch,train_result,validation,lr
 
 
+def update_selection_state(
+    state: FormalTrainerState,
+    selection_dice: float,
+    *,
+    completed_epoch: int,
+    start_epoch: int = 100,
+    patience: int = 10,
+    min_delta: float = .001,
+) -> tuple[FormalTrainerState, bool, bool]:
+ strict_improvement=selection_dice>state.best_selection_dice
+ best_dice=max(state.best_selection_dice,selection_dice)
+ best_epoch=completed_epoch if strict_improvement else state.best_selection_epoch
+ reference=state.early_stop_reference_dice
+ checks=state.checks_without_improvement
+ stop=False
+ if completed_epoch < start_epoch:
+  checks=0
+ elif selection_dice>=reference+min_delta:
+  reference=selection_dice
+  checks=0
+ else:
+  checks+=1
+  stop=checks>=patience
+ return FormalTrainerState(state.epoch,state.global_step,state.best_validation_dice,state.fold,best_dice,best_epoch,reference,checks),strict_improvement,stop
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
  p=build_parser(); a=p.parse_args(arguments)
  if a.batch_size<=0: p.error('batch_size must be positive')
  try:
   model_contract=get_model_contract(a.model, supervision_mode=a.supervision_mode)
+ except ValueError as exc:
+  p.error(str(exc))
+ try:
+  resolve_optimizer_config(model_name=model_contract.name,optimizer_name=a.optimizer)
  except ValueError as exc:
   p.error(str(exc))
  try:
@@ -129,7 +162,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
   data_source, data_root = resolve_data_source_root(a.raw_root, a.preprocessed_root, data_source=RAW_NIFTI_ONLINE if a.raw_root is not None else NNUNET_PREPROCESSED_B2ND)
  except ValueError as exc:
   p.error(str(exc))
- schedule=OfficialTrainerSchedule(); config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,batch_size=a.batch_size,data_source=data_source,data_root=data_root)
+ schedule=OfficialTrainerSchedule()
+ try:
+  config=build_formal_config(fold=a.fold,epochs=a.epochs,schedule=schedule,performance=performance,alignment_evidence=alignment_evidence,model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,batch_size=a.batch_size,data_source=data_source,data_root=data_root,optimizer_name=a.optimizer)
+ except ValueError as exc:
+  p.error(str(exc))
  if not a.confirm_run: print(json.dumps({'execution':'not-confirmed','config':config},indent=2,default=str)); return 0
  if not 1<=a.epochs<=schedule.num_epochs: p.error('epochs must be in [1,1000]')
  random.seed(0); np.random.seed(0); torch.manual_seed(0)
@@ -137,16 +174,27 @@ def main(arguments: Sequence[str] | None = None) -> int:
  device=torch.device(a.device); a.output_root.mkdir(parents=True,exist_ok=True); write_resolved_config(a.output_root/'resolved_config.json',config)
  train,val=build_formal_datasets(data_root,fold=a.fold,patch_size=patch_size,use_mask_for_norm=use_mask_for_norm,data_source=data_source)
  train_loader,val_loader=build_formal_loaders(train,val,performance=performance,batch_size=a.batch_size)
- model=build_model(a.model, supervision_mode=model_contract.supervision_mode).to(device); optimizer=make_official_optimizer(model); scheduler=PolyLRScheduler(optimizer,.01,schedule.num_epochs); loss,validation_loss=build_training_losses(a.model, supervision_mode=model_contract.supervision_mode)
+ model=build_model(a.model, supervision_mode=model_contract.supervision_mode).to(device); optimizer=make_official_optimizer(model,model_name=model_contract.name,optimizer_name=a.optimizer); scheduler=PolyLRScheduler(optimizer,schedule.num_epochs); loss,validation_loss=build_training_losses(a.model, supervision_mode=model_contract.supervision_mode)
  state=FormalTrainerState(0,0,-1.,a.fold)
  if a.resume is not None: state=load_formal_checkpoint(model,optimizer,scheduler,a.resume,fold=a.fold,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,checkpoint_root=a.output_root).state
- log=(a.output_root/'training_log.csv').open('a',newline='',encoding='utf-8'); writer=csv.DictWriter(log,fieldnames=('epoch','global_step','train_loss','validation_dice','best_dice','lr')); 
+ log=(a.output_root/'training_log.csv').open('a',newline='',encoding='utf-8'); writer=csv.DictWriter(log,fieldnames=('epoch','global_step','train_loss','validation_dice','best_dice','selection_dice','lr'));
  if log.tell()==0: writer.writeheader()
+ early_stopping=config['early_stopping']
+ if (state.epoch>=int(early_stopping['start_epoch']) and state.checks_without_improvement>=int(early_stopping['patience'])):
+  log.close()
+  return 0
  for epoch,train_result,validation,lr in run_formal_epochs(model=model,train_loader=train_loader,val_loader=val_loader,loss=loss,validation_loss=validation_loss,optimizer=optimizer,scheduler=scheduler,device=device,start_epoch=state.epoch,end_epoch=a.epochs,schedule=schedule,non_blocking=performance.non_blocking):
   print({'run_type':config['run_type'],'run_state':config['run_state'],'epoch':epoch,'train_loss':train_result.mean_loss,'validation_dice':validation.dice,'lr':lr})
-  improved=validation.dice>state.best_validation_dice; state=FormalTrainerState(epoch+1,state.global_step+schedule.num_iterations_per_epoch,max(state.best_validation_dice,validation.dice),a.fold); save_formal_checkpoint(model,optimizer,scheduler,a.output_root/'checkpoint_latest.pth',state,config,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,checkpoint_root=a.output_root)
-  if improved: save_formal_checkpoint(model,optimizer,scheduler,a.output_root/'checkpoint_best.pth',state,config,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,checkpoint_root=a.output_root)
-  writer.writerow({'epoch':epoch,'global_step':state.global_step,'train_loss':train_result.mean_loss,'validation_dice':validation.dice,'best_dice':state.best_validation_dice,'lr':lr}); log.flush()
+  state=FormalTrainerState(epoch+1,state.global_step+schedule.num_iterations_per_epoch,max(state.best_validation_dice,validation.dice),a.fold,state.best_selection_dice,state.best_selection_epoch,state.early_stop_reference_dice,state.checks_without_improvement)
+  selection_dice=None; selection_saved=False; should_stop=False
+  if state.epoch % int(config['selection']['interval_epochs'])==0:
+   selection=select_fold(model,data_root,data_source=data_source,fold=a.fold,device=device,case_source=getattr(val,'_case_source',None))
+   state,selection_saved,should_stop=update_selection_state(state,selection['selection_dice'],completed_epoch=state.epoch,start_epoch=int(config['early_stopping']['start_epoch']),patience=int(config['early_stopping']['patience']),min_delta=float(config['early_stopping']['min_delta']))
+   selection_dice=selection['selection_dice']
+  save_formal_checkpoint(model,optimizer,scheduler,a.output_root/'checkpoint_latest.pth',state,config,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,checkpoint_root=a.output_root)
+  if selection_saved: save_formal_checkpoint(model,optimizer,scheduler,a.output_root/'checkpoint_best.pth',state,config,plan_hash=str(config['plan_hash']),policies=config['policies'],run_state=str(config['run_state']),alignment_evidence=config.get('alignment_evidence'),model_name=model_contract.name,supervision_mode=model_contract.supervision_mode,checkpoint_root=a.output_root)
+  writer.writerow({'epoch':epoch,'global_step':state.global_step,'train_loss':train_result.mean_loss,'validation_dice':validation.dice,'best_dice':state.best_selection_dice,'selection_dice':selection_dice,'lr':lr}); log.flush()
+  if should_stop: break
  log.close()
  return 0
 if __name__=='__main__': raise SystemExit(main())

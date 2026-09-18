@@ -8,11 +8,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 from standalone_nnunet2d import alignment_evidence as alignment_evidence_module
+from standalone_nnunet2d.data.data_source import FormalCaseSource, make_formal_case_source
 from standalone_nnunet2d.data.dataset import load_fold_cases, validate_raw_root
-from standalone_nnunet2d.data.nifti_io import read_nifti
+from standalone_nnunet2d.data.nifti_io import NiftiVolume, read_nifti
 from standalone_nnunet2d.engine.predictor import predict_volume, save_and_validate_prediction
 from standalone_nnunet2d.metrics.segmentation_metrics import (
     METRIC_POLICY,
@@ -22,6 +24,58 @@ from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 
 
 CASE_METRIC_FIELDS = ("case_id", "TP", "FP", "FN", "TN", "Dice", "IoU")
+
+
+def select_fold(
+    model: torch.nn.Module,
+    source_root: Path | None,
+    *,
+    data_source: str,
+    fold: int,
+    device: torch.device,
+    case_source: FormalCaseSource | None = None,
+) -> dict[str, Any]:
+    """Score every validation case and slice deterministically in memory."""
+    previous_benchmark = torch.backends.cudnn.benchmark
+    try:
+        source = case_source or make_formal_case_source(
+            Path(source_root) if source_root is not None else Path("."),
+            data_source=data_source,
+            fold=fold,
+            split="val",
+        )
+        records: list[dict[str, str | float | int]] = []
+        for case_id in source.case_ids:
+            try:
+                prepared = source.prepare_case(case_id)
+                image_array = np.stack(
+                    [prepared.image_slice(z_index) for z_index in range(prepared.shape[0])],
+                    axis=0,
+                )
+                image = NiftiVolume(
+                    image_array,
+                    spacing_xyz=(1.0, 1.0, 1.0),
+                    origin_xyz=(0.0, 0.0, 0.0),
+                )
+                prediction = predict_volume(
+                    model,
+                    image,
+                    device,
+                    mirror_axes=(),
+                    normalise_inputs=False,
+                )
+                records.append(case_metric_record(case_id, prediction, prepared.label))
+            except Exception as exc:
+                raise RuntimeError(f"full-volume selection failed for case {case_id}: {exc}") from exc
+        if len(records) != len(source.case_ids):
+            raise RuntimeError("full-volume selection did not score every validation case")
+        return {
+            "case_ids": tuple(record["case_id"] for record in records),
+            "metric_per_case": records,
+            "selection_dice": float(np.mean([float(record["Dice"]) for record in records])),
+        }
+    finally:
+        torch.backends.cudnn.benchmark = previous_benchmark
 
 
 def _case_paths(raw_root: Path, case_id: str) -> tuple[Path, Path]:

@@ -145,6 +145,57 @@ def test_formal_checkpoint_restores_scheduler_and_rng_state() -> None:
     assert metadata["resolved_config"] == config
 
 
+def test_formal_checkpoint_round_trip_preserves_selection_continuation_state(tmp_path: Path) -> None:
+    model = nn.Conv2d(1, 2, 1)
+    optimizer = torch.optim.SGD(model.parameters(), .01)
+    scheduler = PolyLRScheduler(optimizer, 1000)
+    state = FormalTrainerState(
+        epoch=110,
+        global_step=7,
+        best_validation_dice=.4,
+        fold=0,
+        best_selection_dice=.73,
+        best_selection_epoch=100,
+        early_stop_reference_dice=.72,
+        checks_without_improvement=2,
+    )
+    config = {
+        "run_type": "official_alignment_pending",
+        "run_state": "official_alignment_pending",
+        "plan_hash": "selection-plan",
+    }
+    path = tmp_path / "checkpoint_latest.pth"
+    save_formal_checkpoint(
+        model,
+        optimizer,
+        scheduler,
+        path,
+        state,
+        config,
+        plan_hash="selection-plan",
+        checkpoint_root=tmp_path,
+    )
+
+    restored_model = nn.Conv2d(1, 2, 1)
+    restored_optimizer = torch.optim.SGD(restored_model.parameters(), .01)
+    restored_scheduler = PolyLRScheduler(restored_optimizer, 1000)
+    restored = load_formal_checkpoint(
+        restored_model,
+        restored_optimizer,
+        restored_scheduler,
+        path,
+        fold=0,
+        plan_hash="selection-plan",
+        checkpoint_root=tmp_path,
+    )
+    assert restored.state == state
+    metadata = torch.load(path, map_location="cpu", weights_only=False)["metadata"]
+    assert metadata["best_selection_dice"] == pytest.approx(.73)
+    assert metadata["best_selection_epoch"] == 100
+    assert metadata["early_stop_reference_dice"] == pytest.approx(.72)
+    assert metadata["checks_without_improvement"] == 2
+
+
 def test_formal_checkpoint_save_and_load_use_explicit_checkpoint_root(tmp_path: Path) -> None:
     root = tmp_path / "formal-run"
     path = root / "checkpoint_latest.pth"
