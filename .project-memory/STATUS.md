@@ -19,5 +19,5 @@ Updated: 2026-09-20
 ## Active design
 
 - A design is approved for independent `h2former_lite_upernet` and
-  `plain_conv_unet_lite_upernet` single-output variants. Implementation has not
-  started.
+  `plain_conv_unet_lite_upernet` single-output variants. The written design is
+  approved and the implementation plan is ready; implementation has not started.

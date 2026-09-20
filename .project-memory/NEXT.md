@@ -2,15 +2,17 @@
 
 ## Current focus
 
-- Review the approved Lite-UPerNet decoder design specification.
+- Manually dispatch the Lite-UPerNet implementation worker from the approved
+  design and implementation plan.
 
 ## Next actions
 
-1. User reviews the written design specification.
-2. Prepare a detailed implementation plan after design acceptance.
-3. Manually dispatch the implementation worker; do not auto-create subagents.
-4. Run synthetic validation and an independent Level 3 review before acceptance.
+1. User manually opens a LunaMax Worktree Chat from the commit containing the
+   approved implementation plan.
+2. Worker executes the implementation plan and returns a terminal HANDOFF.
+3. Main agent inspects and integrates accepted implementation evidence.
+4. User manually dispatches an independent Level 3 reviewer.
 
 ## Blockers
 
-- Implementation is gated on written-spec review.
+- Waiting for the manually dispatched implementation worker HANDOFF.

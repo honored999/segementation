@@ -41,6 +41,8 @@ This project deliberately deviates from that implementation:
 - FPN width is 64 channels.
 - PPM scales are `(1, 2, 4)` so the 4x4 deepest nnU-Net feature does not request
   a larger 6x6 adaptive pooling output.
+- PPM pooled branches use `1x1 Conv + ReLU` without normalization. This avoids
+  invalid training-mode `InstanceNorm2d` on the scale-1 branch's 1x1 feature.
 - The head performs binary stroke-lesion segmentation only; it does not
   reproduce UPerNet's multi-task scene/object/part/material heads.
 - Backbone-specific feature selections and normalization preserve this
@@ -62,12 +64,13 @@ Introduce one reusable `LiteUPerDecoder` with explicit constructor inputs:
 - output class count;
 - `fpn_channels=64`;
 - `pool_scales=(1, 2, 4)`;
-- a normalization factory;
+- a normalization factory for lateral, refinement, and fusion blocks;
 - interpolation mode fixed to bilinear with `align_corners=False`.
 
 The decoder performs:
 
-1. PPM on the deepest feature.
+1. PPM on the deepest feature using `1x1 Conv + ReLU` pooled branches without
+   normalization.
 2. A 1x1 projection of each lateral feature to 64 channels.
 3. Top-down interpolation to the exact lateral spatial size followed by
    elementwise addition.
