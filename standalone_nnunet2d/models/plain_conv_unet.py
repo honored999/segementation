@@ -90,14 +90,21 @@ class PlainConvUNet2D(nn.Module):
             inplace=self.config.leaky_relu_inplace,
         )
 
-    def forward(self, image: Tensor) -> Tensor | tuple[Tensor, ...]:
-        """Map ``(B, 1, H, W)`` image tensors to raw segmentation logits."""
+    def forward_features(
+        self, image: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Return all encoder outputs in increasing downsampling order."""
         encoder_outputs: list[Tensor] = []
         features = image  # (B, 1, 512, 512) for the supplied plans.
         for encoder_stage in self.encoder_stages:
             features = encoder_stage(features)
             encoder_outputs.append(features)
         self.last_encoder_shapes = tuple(tuple(output.shape) for output in encoder_outputs)
+        return tuple(encoder_outputs)  # type: ignore[return-value]
+
+    def forward(self, image: Tensor) -> Tensor | tuple[Tensor, ...]:
+        """Map ``(B, 1, H, W)`` image tensors to raw segmentation logits."""
+        encoder_outputs = self.forward_features(image)
 
         decoder_outputs: list[Tensor] = []
         segmentation_outputs: list[Tensor] = []

@@ -33,6 +33,25 @@ def test_plain_conv_unet_returns_full_resolution_logits_and_records_shapes() -> 
     print(f"parameter_count={sum(parameter.numel() for parameter in model.parameters())}")
 
 
+def test_plain_conv_unet_forward_features_preserves_all_encoder_outputs() -> None:
+    model = _model(deep_supervision=False)
+    image = torch.randn(1, 1, 512, 512)
+
+    with torch.inference_mode():
+        features = model.forward_features(image)
+
+    assert tuple(tuple(feature.shape) for feature in features) == (
+        (1, 32, 512, 512),
+        (1, 64, 256, 256),
+        (1, 128, 128, 128),
+        (1, 256, 64, 64),
+        (1, 512, 32, 32),
+        (1, 512, 16, 16),
+        (1, 512, 8, 8),
+        (1, 512, 4, 4),
+    )
+
+
 def test_deep_supervision_returns_main_logits_then_descending_auxiliary_scales() -> None:
     model = _model(deep_supervision=True)
     image = torch.randn(1, 1, 512, 512)

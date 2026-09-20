@@ -4,8 +4,11 @@ import pytest
 import torch
 from torch import nn
 
+from standalone_nnunet2d.config import load_model_config
+from standalone_nnunet2d.losses.compound import DiceCrossEntropyLoss
 from standalone_nnunet2d.models.lite_upernet import LiteUPerDecoder
 from standalone_nnunet2d.models.h2former_lite_upernet import H2FormerLiteUPerNet
+from standalone_nnunet2d.models.plain_conv_unet_lite_upernet import PlainConvUNetLiteUPerNet
 
 
 def _batch_norm(channels: int) -> nn.Module:
@@ -151,3 +154,59 @@ def test_h2former_lite_upernet_backward_reaches_encoder_and_decoder() -> None:
         assert gradient is not None, name
         assert torch.isfinite(gradient).all(), name
         assert torch.count_nonzero(gradient) > 0, name
+
+
+def test_plain_conv_unet_lite_upernet_returns_selected_features_and_logits() -> None:
+    model = PlainConvUNetLiteUPerNet(load_model_config()).eval()
+    image = torch.zeros((1, 1, 512, 512))
+    with torch.inference_mode():
+        logits = model(image)
+
+    assert logits.shape == (1, 2, 512, 512)
+    assert torch.isfinite(logits).all()
+    assert model.last_encoder_shapes == (
+        (1, 32, 512, 512),
+        (1, 64, 256, 256),
+        (1, 128, 128, 128),
+        (1, 256, 64, 64),
+        (1, 512, 32, 32),
+        (1, 512, 16, 16),
+        (1, 512, 8, 8),
+        (1, 512, 4, 4),
+    )
+    assert model.last_selected_feature_shapes == (
+        (1, 64, 256, 256),
+        (1, 256, 64, 64),
+        (1, 512, 16, 16),
+        (1, 512, 4, 4),
+    )
+
+
+def test_plain_conv_unet_lite_upernet_backward_reaches_all_encoder_stages() -> None:
+    model = PlainConvUNetLiteUPerNet(load_model_config()).train()
+    image = torch.zeros((1, 1, 512, 512))
+    image[:, :, 256, 256] = 1.0
+    target = torch.zeros((1, 512, 512), dtype=torch.long)
+    logits = model(image)
+    loss = DiceCrossEntropyLoss()(logits, target)
+    loss.backward()
+
+    assert torch.isfinite(logits).all()
+    assert torch.isfinite(loss)
+    named_parameters = dict(model.named_parameters())
+    for prefix in (
+        "encoder_stages.0",
+        "encoder_stages.2",
+        "encoder_stages.4",
+        "encoder_stages.6",
+        "encoder_stages.7",
+        "decoder.classifier",
+    ):
+        gradients = [
+            parameter.grad
+            for name, parameter in named_parameters.items()
+            if name.startswith(prefix)
+        ]
+        assert gradients, prefix
+        assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in gradients), prefix
+        assert any(torch.count_nonzero(gradient) > 0 for gradient in gradients if gradient is not None), prefix
