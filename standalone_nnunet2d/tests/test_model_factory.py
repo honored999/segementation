@@ -10,14 +10,19 @@ from standalone_nnunet2d.losses.compound import DiceCrossEntropyLoss
 from standalone_nnunet2d.losses.deep_supervision import DeepSupervisionLoss
 from standalone_nnunet2d.models.factory import (
     H2FORMER,
+    H2FORMER_LITE_UPERNET,
     PLAIN_CONV_UNET,
+    PLAIN_CONV_UNET_LITE_UPERNET,
     DEEP_SUPERVISION,
+    MODEL_NAMES,
     SINGLE_OUTPUT,
     build_model,
     get_model_contract,
 )
 from standalone_nnunet2d.models.h2former import H2Former
+from standalone_nnunet2d.models.h2former_lite_upernet import H2FormerLiteUPerNet
 from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
+from standalone_nnunet2d.models.plain_conv_unet_lite_upernet import PlainConvUNetLiteUPerNet
 from standalone_nnunet2d.training.official_config import OfficialTrainerSchedule
 
 
@@ -67,6 +72,15 @@ def test_parser_accepts_explicit_h2former() -> None:
     arguments = formal_train.build_parser().parse_args(_parser_arguments() + ["--model", H2FORMER])
 
     assert arguments.model == H2FORMER
+
+
+@pytest.mark.parametrize("model_name", [H2FORMER_LITE_UPERNET, PLAIN_CONV_UNET_LITE_UPERNET])
+def test_parser_accepts_lite_upernet_model_names(model_name: str) -> None:
+    arguments = formal_train.build_parser().parse_args(
+        _parser_arguments() + ["--model", model_name]
+    )
+
+    assert arguments.model == model_name
 
 
 def test_stage3_parser_and_contract_resolve_model_specific_supervision_defaults() -> None:
@@ -168,6 +182,54 @@ def test_factory_contracts_are_explicit_and_reject_unsupported_combinations() ->
     assert matched.loss_name == "DiceCrossEntropyLoss"
 
 
+@pytest.mark.parametrize(
+    ("model_name", "image_size"),
+    [
+        (H2FORMER_LITE_UPERNET, 512),
+        (PLAIN_CONV_UNET_LITE_UPERNET, None),
+    ],
+)
+def test_lite_upernet_contracts_are_single_output_and_dice_ce(
+    model_name: str, image_size: int | None
+) -> None:
+    assert model_name in MODEL_NAMES
+    contract = get_model_contract(model_name)
+    assert contract.name == model_name
+    assert contract.in_channels == 1
+    assert contract.num_classes == 2
+    assert contract.image_size == image_size
+    assert contract.supervision_mode == SINGLE_OUTPUT
+    assert contract.deep_supervision is False
+    assert contract.loss_name == "DiceCrossEntropyLoss"
+
+    with pytest.raises(ValueError, match="supervision_mode"):
+        get_model_contract(model_name, supervision_mode=DEEP_SUPERVISION)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "model_type"),
+    [
+        (H2FORMER_LITE_UPERNET, H2FormerLiteUPerNet),
+        (PLAIN_CONV_UNET_LITE_UPERNET, PlainConvUNetLiteUPerNet),
+    ],
+)
+@pytest.mark.parametrize("inference", [False, True])
+def test_factory_builds_lite_upernet_as_one_tensor_in_both_modes(
+    model_name: str, model_type: type[nn.Module], inference: bool
+) -> None:
+    model = build_model(model_name, inference=inference)
+    assert isinstance(model, model_type)
+    assert model.deep_supervision is False
+    image_size = 512
+    image = torch.zeros((1, 1, image_size, image_size))
+    with torch.inference_mode():
+        logits = model(image)
+    assert isinstance(logits, torch.Tensor)
+    assert logits.shape == (1, 2, image_size, image_size)
+    del logits, image, model
+    gc.collect()
+
+
 def test_factory_builds_both_explicit_model_names() -> None:
     plain = build_model(PLAIN_CONV_UNET)
     assert isinstance(plain, PlainConvUNet2D)
@@ -228,6 +290,18 @@ def test_resolved_config_records_distinct_model_identity_and_plan_hash() -> None
         model_name=PLAIN_CONV_UNET,
         supervision_mode=SINGLE_OUTPUT,
     )
+    h2_lite = formal_train.build_formal_config(
+        fold=0,
+        epochs=1,
+        schedule=schedule,
+        model_name=H2FORMER_LITE_UPERNET,
+    )
+    plain_lite = formal_train.build_formal_config(
+        fold=0,
+        epochs=1,
+        schedule=schedule,
+        model_name=PLAIN_CONV_UNET_LITE_UPERNET,
+    )
 
     assert plain["model"] == {
         "name": PLAIN_CONV_UNET,
@@ -256,11 +330,35 @@ def test_resolved_config_records_distinct_model_identity_and_plan_hash() -> None
         "deep_supervision": False,
         "loss_name": "DiceCrossEntropyLoss",
     }
-    assert len({plain["plan_hash"], matched["plan_hash"], h2["plan_hash"]}) == 3
+    assert h2_lite["model"] == {
+        "name": H2FORMER_LITE_UPERNET,
+        "in_channels": 1,
+        "num_classes": 2,
+        "image_size": 512,
+        "supervision_mode": SINGLE_OUTPUT,
+        "deep_supervision": False,
+        "loss_name": "DiceCrossEntropyLoss",
+    }
+    assert plain_lite["model"] == {
+        "name": PLAIN_CONV_UNET_LITE_UPERNET,
+        "in_channels": 1,
+        "num_classes": 2,
+        "image_size": None,
+        "supervision_mode": SINGLE_OUTPUT,
+        "deep_supervision": False,
+        "loss_name": "DiceCrossEntropyLoss",
+    }
+    assert len({plain["plan_hash"], matched["plan_hash"], h2["plan_hash"], h2_lite["plan_hash"], plain_lite["plan_hash"]}) == 5
     invariant_keys = set(plain) - {"model", "plan_hash"}
     assert {key: plain[key] for key in invariant_keys} == {
         key: matched[key] for key in invariant_keys
     }
     assert {key: matched[key] for key in invariant_keys} == {
         key: h2[key] for key in invariant_keys
+    }
+    assert {key: h2[key] for key in invariant_keys} == {
+        key: h2_lite[key] for key in invariant_keys
+    }
+    assert {key: h2_lite[key] for key in invariant_keys} == {
+        key: plain_lite[key] for key in invariant_keys
     }

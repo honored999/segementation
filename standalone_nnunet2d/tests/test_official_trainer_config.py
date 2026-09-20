@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 from standalone_nnunet2d.training import official_config
-from standalone_nnunet2d.models.factory import H2FORMER, PLAIN_CONV_UNET
+from standalone_nnunet2d.models.factory import H2FORMER, H2FORMER_LITE_UPERNET, PLAIN_CONV_UNET, PLAIN_CONV_UNET_LITE_UPERNET
 from standalone_nnunet2d.training.official_config import OfficialTrainerSchedule, PolyLRScheduler, deep_supervision_weights, make_official_optimizer
 
 def test_official_optimizer_matches_inspected_trainer() -> None:
@@ -68,9 +68,10 @@ def test_poly_lr_captures_each_optimizer_group_initial_lr() -> None:
   .01*(1-.5)**.9,.001*(1-.5)**.9,
  ])
 
-def test_adamw_preset_is_exactly_h2former_only() -> None:
+@pytest.mark.parametrize("model_name", [H2FORMER, H2FORMER_LITE_UPERNET])
+def test_adamw_preset_is_exactly_h2former_family(model_name: str) -> None:
  model=nn.Conv2d(1,2,1)
- optimizer=make_official_optimizer(model,model_name=H2FORMER,optimizer_name='adamw')
+ optimizer=make_official_optimizer(model,model_name=model_name,optimizer_name='adamw')
  group=optimizer.param_groups[0]
  assert isinstance(optimizer,torch.optim.AdamW)
  assert group['lr']==pytest.approx(1e-4)
@@ -80,8 +81,12 @@ def test_adamw_preset_is_exactly_h2former_only() -> None:
  scheduler=PolyLRScheduler(optimizer,1000)
  scheduler.step(0)
  assert optimizer.param_groups[0]['lr']==pytest.approx(1e-4)
+
+@pytest.mark.parametrize("model_name", [PLAIN_CONV_UNET, PLAIN_CONV_UNET_LITE_UPERNET])
+def test_adamw_rejected_for_plain_model_family(model_name: str) -> None:
+ model=nn.Conv2d(1,2,1)
  with pytest.raises(ValueError,match='H2Former'):
-  make_official_optimizer(model,model_name=PLAIN_CONV_UNET,optimizer_name='adamw')
+  make_official_optimizer(model,model_name=model_name,optimizer_name='adamw')
 
 def test_official_schedule_matches_inspected_defaults() -> None:
  schedule=OfficialTrainerSchedule()
