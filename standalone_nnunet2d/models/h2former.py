@@ -179,7 +179,8 @@ class H2Former(nn.Module):
             )
         return tokens.view(batch, expected_side, expected_side, channels).permute(0, 3, 1, 2)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward_features(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Return encoder features ordered from highest to lowest resolution."""
         if x.ndim != 4:
             raise ValueError(f"H2Former expects BCHW input, got shape {tuple(x.shape)}")
         if x.shape[1] != self.in_channels:
@@ -228,6 +229,10 @@ class H2Former(nn.Module):
         x = self.swin_layers[3](x.flatten(2).transpose(1, 2))
         encoder.append(self._tokens_to_image(x, 3))
 
+        return tuple(encoder)  # type: ignore[return-value]
+
+    def forward(self, x: Tensor) -> Tensor:
+        encoder = self.forward_features(x)
         x = self.decode4(encoder[3], encoder[2])
         x = self.decode3(x, encoder[1])
         x = self.decode2(x, encoder[0])

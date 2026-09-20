@@ -127,3 +127,23 @@ def test_h2former_rejects_non_bchw_wrong_channels_and_wrong_spatial_size() -> No
 
     del model
     gc.collect()
+
+
+def test_h2former_forward_features_preserves_baseline_output_contract() -> None:
+    model = _make_model().eval()
+    image = torch.zeros((1, 1, IMAGE_SIZE, IMAGE_SIZE), device=_device())
+
+    with torch.inference_mode():
+        features = model.forward_features(image)
+        logits = model(image)
+
+    assert tuple(tuple(feature.shape) for feature in features) == (
+        (1, 64, 256, 256),
+        (1, 128, 128, 128),
+        (1, 256, 64, 64),
+        (1, 512, 32, 32),
+    )
+    assert logits.shape == (1, 2, IMAGE_SIZE, IMAGE_SIZE)
+    assert torch.isfinite(logits).all()
+    del features, logits, image, model
+    gc.collect()

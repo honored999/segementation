@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from standalone_nnunet2d.models.lite_upernet import LiteUPerDecoder
+from standalone_nnunet2d.models.h2former_lite_upernet import H2FormerLiteUPerNet
 
 
 def _batch_norm(channels: int) -> nn.Module:
@@ -109,3 +110,44 @@ def test_lite_uper_decoder_rejects_invalid_contracts(features, output_size, mess
     decoder = LiteUPerDecoder((8, 16, 32, 64), 2, 8, (1, 2, 4), _batch_norm)
     with pytest.raises((TypeError, ValueError), match=message):
         decoder(features, output_size=output_size)
+
+
+def _device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def test_h2former_lite_upernet_returns_selected_features_and_full_resolution_logits() -> None:
+    model = H2FormerLiteUPerNet(in_channels=1, num_classes=2, image_size=512).to(_device()).eval()
+    image = torch.zeros((1, 1, 512, 512), device=_device())
+    with torch.inference_mode():
+        logits = model(image)
+
+    assert logits.shape == (1, 2, 512, 512)
+    assert torch.isfinite(logits).all()
+    assert model.last_feature_shapes == (
+        (1, 64, 256, 256),
+        (1, 128, 128, 128),
+        (1, 256, 64, 64),
+        (1, 512, 32, 32),
+    )
+
+
+def test_h2former_lite_upernet_backward_reaches_encoder_and_decoder() -> None:
+    model = H2FormerLiteUPerNet(in_channels=1, num_classes=2, image_size=512).to(_device()).eval()
+    image = torch.zeros((1, 1, 512, 512), device=_device())
+    image[:, :, 256, 256] = 1.0
+    logits = model(image)
+    loss = logits.square().mean() + logits.mean()
+    loss.backward()
+
+    named_parameters = dict(model.named_parameters())
+    for name in (
+        "conv1.weight",
+        "swin_layers.0.blocks.0.attn.qkv.weight",
+        "swin_layers.3.blocks.0.attn.qkv.weight",
+        "decoder.classifier.weight",
+    ):
+        gradient = named_parameters[name].grad
+        assert gradient is not None, name
+        assert torch.isfinite(gradient).all(), name
+        assert torch.count_nonzero(gradient) > 0, name
