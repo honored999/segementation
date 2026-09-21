@@ -120,16 +120,20 @@ def _tiny_checkpoint_with_metadata(
     return checkpoint
 
 
-def test_prediction_loader_uses_explicit_h2former_metadata(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    "model_name",
+    ["h2former", "h2former_lite_upernet", "plain_conv_unet_lite_upernet"],
+)
+def test_prediction_loader_uses_explicit_single_output_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_name: str
 ) -> None:
     checkpoint = _tiny_checkpoint_with_metadata(
         tmp_path,
         {
-            "model_name": "h2former",
+            "model_name": model_name,
             "supervision_mode": "single_output",
         },
-        name="h2-loader",
+        name=f"{model_name}-loader",
     )
     calls: list[tuple[str, str, bool]] = []
     tiny_model = torch.nn.Conv2d(1, 2, 1)
@@ -142,8 +146,8 @@ def test_prediction_loader_uses_explicit_h2former_metadata(
     loaded, metadata = predict_module._load_model(checkpoint, torch.device("cpu"))
 
     assert loaded is tiny_model
-    assert metadata["model_name"] == "h2former"
-    assert calls == [("h2former", "single_output", True)]
+    assert metadata["model_name"] == model_name
+    assert calls == [(model_name, "single_output", True)]
 
 
 def test_prediction_loader_legacy_checkpoint_defaults_to_plain_conv(
@@ -171,6 +175,11 @@ def test_prediction_loader_legacy_checkpoint_defaults_to_plain_conv(
             "model_name": "h2former",
             "supervision_mode": "single_output",
             "resolved_config": {"model": {"name": "plain_conv_unet", "supervision_mode": "deep_supervision"}},
+        },
+        {
+            "model_name": "h2former_lite_upernet",
+            "supervision_mode": "single_output",
+            "config": {"model": {"name": "plain_conv_unet_lite_upernet", "supervision_mode": "single_output"}},
         },
     ],
 )
