@@ -6,13 +6,19 @@ from torch import nn
 
 from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.losses.compound import DiceCrossEntropyLoss
+from standalone_nnunet2d.models.h2former import H2Former
 from standalone_nnunet2d.models.lite_upernet import LiteUPerDecoder
 from standalone_nnunet2d.models.h2former_lite_upernet import H2FormerLiteUPerNet
+from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
 from standalone_nnunet2d.models.plain_conv_unet_lite_upernet import PlainConvUNetLiteUPerNet
 
 
 def _batch_norm(channels: int) -> nn.Module:
     return nn.BatchNorm2d(channels)
+
+
+def _parameters(modules) -> int:
+    return sum(parameter.numel() for module in modules for parameter in module.parameters())
 
 
 def test_lite_uper_decoder_returns_exact_output_size_and_finite_logits() -> None:
@@ -210,3 +216,32 @@ def test_plain_conv_unet_lite_upernet_backward_reaches_all_encoder_stages() -> N
         assert gradients, prefix
         assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in gradients), prefix
         assert any(torch.count_nonzero(gradient) > 0 for gradient in gradients if gradient is not None), prefix
+
+
+def test_lite_upernet_decoders_have_fewer_parameters_than_baseline_decoders() -> None:
+    config = load_model_config()
+    h2_baseline = H2Former(in_channels=1, num_classes=2, image_size=512)
+    h2_variant = H2FormerLiteUPerNet(in_channels=1, num_classes=2, image_size=512)
+    plain_baseline = PlainConvUNet2D(config)
+    plain_variant = PlainConvUNetLiteUPerNet(config)
+
+    h2_baseline_decoder = _parameters(
+        (h2_baseline.decode4, h2_baseline.decode3, h2_baseline.decode2, h2_baseline.decode0)
+    )
+    plain_baseline_decoder = _parameters(
+        (
+            plain_baseline.transposed_convolutions,
+            plain_baseline.decoder_stages,
+            plain_baseline.segmentation_heads,
+        )
+    )
+    h2_lite_decoder = _parameters((h2_variant.decoder,))
+    plain_lite_decoder = _parameters((plain_variant.decoder,))
+
+    print(f"h2_baseline_decoder_parameters={h2_baseline_decoder}")
+    print(f"h2_lite_decoder_parameters={h2_lite_decoder}")
+    print(f"plain_baseline_decoder_parameters={plain_baseline_decoder}")
+    print(f"plain_lite_decoder_parameters={plain_lite_decoder}")
+
+    assert h2_lite_decoder < h2_baseline_decoder
+    assert plain_lite_decoder < plain_baseline_decoder
