@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-09-20
+Updated: 2026-09-21
 
 ## Current state
 
@@ -8,6 +8,19 @@ Updated: 2026-09-20
   model families with explicit model/supervision checkpoint identities.
 - Existing H2Former uses single-output supervision; PlainConvUNet supports its
   default deep supervision and a matched single-output mode.
+- Independent `h2former_lite_upernet` and `plain_conv_unet_lite_upernet`
+  single-output variants are implemented at `53472ae`. Both use the shared
+  lightweight PPM/FPN decoder while preserving the baseline model identities.
+
+## Verified capabilities/results
+
+- Fresh main-agent validation: standalone suite `424 passed in 47.67s`; root
+  `tests/` suite `26 passed in 6.67s`.
+- Independent Level 3 review of `bbe65b5..53472ae` returned PASS with no
+  blocking findings.
+- Synthetic complexity evidence shows both new decoders have fewer parameters
+  than their corresponding baseline decoders. This is engineering evidence,
+  not medical-performance evidence.
 
 ## Verified constraints
 
@@ -16,8 +29,7 @@ Updated: 2026-09-20
   formal-evaluation semantics.
 - Synthetic validation is engineering evidence only.
 
-## Active design
+## Active work
 
-- A design is approved for independent `h2former_lite_upernet` and
-  `plain_conv_unet_lite_upernet` single-output variants. The written design is
-  approved and the implementation plan is ready; implementation has not started.
+- Lite-UPerNet implementation is accepted. No real-data training, preflight,
+  fold evaluation, or formal five-fold OOF evaluation has been run.

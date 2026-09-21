@@ -1,5 +1,17 @@
 # Log
 
+## 2026-09-21 - Lite UPerNet variants accepted
+
+- Changed: added isolated H2Former and PlainConvUNet Lite-UPerNet single-output
+  variants, shared decoder, model/checkpoint contracts, tests, and complexity
+  reporting through commit `53472ae`.
+- Validation: fresh main-agent runs reported `424 passed` for
+  `standalone_nnunet2d/tests` and `26 passed` for root `tests/`; independent
+  Level 3 review returned PASS with no blockers.
+- Result: implementation accepted as synthetic engineering evidence only; no
+  real medical data, training, preflight, or formal evaluation was performed.
+- Next: run an isolated experiment only if explicitly authorized.
+
 ## 2026-09-20 - Lite UPerNet implementation plan
 
 - Changed: corrected PPM normalization for 1x1 pooled features and added the
