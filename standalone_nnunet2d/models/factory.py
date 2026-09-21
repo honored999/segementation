@@ -10,14 +10,28 @@ from torch import nn
 
 from standalone_nnunet2d.config import load_model_config
 from standalone_nnunet2d.models.h2former import H2Former
+from standalone_nnunet2d.models.h2former_lite_upernet import H2FormerLiteUPerNet
 from standalone_nnunet2d.models.plain_conv_unet import PlainConvUNet2D
+from standalone_nnunet2d.models.plain_conv_unet_lite_upernet import PlainConvUNetLiteUPerNet
 
 
 PLAIN_CONV_UNET = "plain_conv_unet"
 H2FORMER = "h2former"
-MODEL_NAMES = (PLAIN_CONV_UNET, H2FORMER)
+H2FORMER_LITE_UPERNET = "h2former_lite_upernet"
+PLAIN_CONV_UNET_LITE_UPERNET = "plain_conv_unet_lite_upernet"
+MODEL_NAMES = (
+    PLAIN_CONV_UNET,
+    H2FORMER,
+    H2FORMER_LITE_UPERNET,
+    PLAIN_CONV_UNET_LITE_UPERNET,
+)
 DEEP_SUPERVISION = "deep_supervision"
 SINGLE_OUTPUT = "single_output"
+
+_SINGLE_OUTPUT_ONLY_MODELS = frozenset(
+    {H2FORMER, H2FORMER_LITE_UPERNET, PLAIN_CONV_UNET_LITE_UPERNET}
+)
+_PLAIN_CONV_UNET_MODELS = frozenset({PLAIN_CONV_UNET})
 
 
 @dataclass(frozen=True)
@@ -53,6 +67,24 @@ _CONTRACTS = {
         deep_supervision=False,
         loss_name="DiceCrossEntropyLoss",
     ),
+    H2FORMER_LITE_UPERNET: ModelContract(
+        name=H2FORMER_LITE_UPERNET,
+        in_channels=1,
+        num_classes=2,
+        image_size=512,
+        supervision_mode=SINGLE_OUTPUT,
+        deep_supervision=False,
+        loss_name="DiceCrossEntropyLoss",
+    ),
+    PLAIN_CONV_UNET_LITE_UPERNET: ModelContract(
+        name=PLAIN_CONV_UNET_LITE_UPERNET,
+        in_channels=1,
+        num_classes=2,
+        image_size=None,
+        supervision_mode=SINGLE_OUTPUT,
+        deep_supervision=False,
+        loss_name="DiceCrossEntropyLoss",
+    ),
 }
 
 
@@ -71,12 +103,12 @@ def get_model_contract(
     resolved_supervision_mode = (
         contract.supervision_mode if supervision_mode is None else supervision_mode
     )
-    if model_name == H2FORMER and resolved_supervision_mode != SINGLE_OUTPUT:
+    if model_name in _SINGLE_OUTPUT_ONLY_MODELS and resolved_supervision_mode != SINGLE_OUTPUT:
         raise ValueError(
             f"model {model_name!r} requires supervision_mode={SINGLE_OUTPUT!r}, "
             f"got {resolved_supervision_mode!r}"
         )
-    if model_name == PLAIN_CONV_UNET and resolved_supervision_mode not in {
+    if model_name in _PLAIN_CONV_UNET_MODELS and resolved_supervision_mode not in {
         DEEP_SUPERVISION,
         SINGLE_OUTPUT,
     }:
@@ -116,8 +148,16 @@ def build_model(
             load_model_config(),
             deep_supervision=False if inference else contract.deep_supervision,
         )
+    if contract.name == PLAIN_CONV_UNET_LITE_UPERNET:
+        return PlainConvUNetLiteUPerNet(load_model_config())
     if contract.name == H2FORMER:
         return H2Former(
+            in_channels=contract.in_channels,
+            num_classes=contract.num_classes,
+            image_size=contract.image_size or 512,
+        )
+    if contract.name == H2FORMER_LITE_UPERNET:
+        return H2FormerLiteUPerNet(
             in_channels=contract.in_channels,
             num_classes=contract.num_classes,
             image_size=contract.image_size or 512,
@@ -179,9 +219,11 @@ def resolve_checkpoint_model_identity(metadata: Mapping[str, Any]) -> tuple[str,
 __all__ = [
     "DEEP_SUPERVISION",
     "H2FORMER",
+    "H2FORMER_LITE_UPERNET",
     "MODEL_NAMES",
     "ModelContract",
     "PLAIN_CONV_UNET",
+    "PLAIN_CONV_UNET_LITE_UPERNET",
     "SINGLE_OUTPUT",
     "build_model",
     "get_model_contract",

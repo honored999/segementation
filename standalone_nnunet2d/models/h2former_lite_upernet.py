@@ -30,6 +30,7 @@ class H2FormerLiteUPerNet(H2Former):
             pool_scales=(1, 2, 4),
             norm_factory=nn.BatchNorm2d,
         )
+        self.deep_supervision = False
         self.last_feature_shapes: tuple[tuple[int, ...], ...] = ()
 
     def forward(self, x: Tensor) -> Tensor:

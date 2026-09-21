@@ -9,6 +9,8 @@ DEFAULT_RUN_STATE = "official_alignment_pending"
 DEFAULT_OPTIMIZER = "sgd"
 ADAMW_OPTIMIZER = "adamw"
 H2FORMER_MODEL = "h2former"
+H2FORMER_LITE_UPERNET_MODEL = "h2former_lite_upernet"
+H2FORMER_MODELS = (H2FORMER_MODEL, H2FORMER_LITE_UPERNET_MODEL)
 
 
 @dataclass(frozen=True)
@@ -72,7 +74,7 @@ def resolve_optimizer_config(*, model_name: str='plain_conv_unet', optimizer_nam
  if name==DEFAULT_OPTIMIZER:
   return {'name':'SGD','lr':.01,'momentum':.99,'nesterov':True,'weight_decay':3e-5}
  if name==ADAMW_OPTIMIZER:
-  if model_name!=H2FORMER_MODEL: raise ValueError('AdamW is only supported for H2Former')
+  if model_name not in H2FORMER_MODELS: raise ValueError('AdamW is only supported for H2Former')
   return {'name':'AdamW','lr':1e-4,'betas':(.9,.999),'eps':1e-8,'weight_decay':3e-5}
  raise ValueError(f'unsupported optimizer_name {optimizer_name!r}; choices are {DEFAULT_OPTIMIZER!r} and {ADAMW_OPTIMIZER!r}')
 
