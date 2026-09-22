@@ -430,6 +430,7 @@ class OptoelectronicPCAConv2d(nn.Module):
         self._creation_exposure_ledger: ExposureLedger | None = None
         self._creation_route_topology: tuple[tuple[int, tuple[tuple[str, ActiveRoute], ...]], ...] = ()
         self._creation_phase_keys: tuple[str, ...] = ()
+        self._creation_phase_psf_refs: tuple[tuple[str, PhaseOnlyPSF], ...] = ()
         if self.mode == "physical" and self.physical_config.phase.phase_grid_size < max(self.kernel_size):
             raise ValueError(
                 "physical phase_grid_size must be at least the entrance kernel size "
@@ -519,6 +520,7 @@ class OptoelectronicPCAConv2d(nn.Module):
             for component_index, routes in sorted(self._routes_by_component.items())
         )
         self._creation_phase_keys = tuple(sorted(self.phase_psfs.keys()))
+        self._creation_phase_psf_refs = tuple(sorted(self.phase_psfs.items()))
 
     @staticmethod
     def _phase_key(component_index: int, sign: str) -> str:
@@ -560,15 +562,19 @@ class OptoelectronicPCAConv2d(nn.Module):
             raise RuntimeError("entry binding drift: exposure ledger is not the root creation ledger")
         if self.exposure_ledger is not None:
             if validate_ledger:
+                self.exposure_ledger.validate_runtime()
                 if full:
                     self.exposure_ledger.validate()
-                else:
-                    self.exposure_ledger.validate_runtime()
             elif not full:
                 self.exposure_ledger.validate_runtime()
 
         if tuple(sorted(self.phase_psfs.keys())) != self._creation_phase_keys:
             raise RuntimeError("entry binding drift: phase route topology changed")
+        for phase_key, expected_phase_psf in self._creation_phase_psf_refs:
+            if self.phase_psfs[phase_key] is not expected_phase_psf:
+                raise RuntimeError(
+                    "entry binding drift: PhaseOnlyPSF module object was replaced"
+                )
         if len(self._routes_by_component) != len(self._creation_route_topology):
             raise RuntimeError("entry binding drift: route topology changed")
         for component_index, expected_routes in self._creation_route_topology:
@@ -586,6 +592,7 @@ class OptoelectronicPCAConv2d(nn.Module):
         return super().state_dict(*args, **kwargs)
 
     def pca_metadata(self) -> dict[str, Any]:
+        self._assert_runtime_binding(full=True)
         return {
             "group_id": self.group_id,
             "resolved_rank": self.resolved_rank,
@@ -1031,10 +1038,9 @@ class OptoelectronicH2Former(H2Former):
             raise RuntimeError("creation identity drift: configuration object was replaced")
         if self.exposure_ledger is not self._creation_ledger:
             raise RuntimeError("creation identity drift: exposure ledger was replaced")
+        self.exposure_ledger.validate_runtime()
         if full:
             self.exposure_ledger.validate()
-        else:
-            self.exposure_ledger.validate_runtime()
 
         entries = self._entry_modules()
         if tuple(id(module) for module in entries) != tuple(

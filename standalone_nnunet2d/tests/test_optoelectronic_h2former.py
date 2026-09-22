@@ -904,6 +904,43 @@ def test_physical_entry_hot_path_uses_no_route_digest_and_keeps_phase_gradient(
     assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in phase_gradients)
 
 
+def test_phase_theta_update_is_legal_and_round_trips_without_hot_path_hashing(
+    monkeypatch: pytest.MonkeyPatch,
+    source_h2former: H2Former,
+) -> None:
+    model = _small_physical_model(source_h2former)
+    phase_psf = next(iter(model.conv1.phase_psfs.values()))
+    with torch.no_grad():
+        phase_psf.theta.add_(0.05)
+
+    calls = 0
+    frontend = __import__(
+        "standalone_nnunet2d.models.optoelectronic_frontend",
+        fromlist=["optoelectronic_frontend"],
+    )
+    original = frontend._active_route_identity_snapshot
+
+    def recording(route: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original(route)
+
+    monkeypatch.setattr(frontend, "_active_route_identity_snapshot", recording)
+    output = model.conv1(torch.randn(1, 1, 32, 32))
+    output.square().mean().backward()
+
+    assert torch.isfinite(output).all()
+    assert phase_psf.theta.grad is not None
+    assert torch.isfinite(phase_psf.theta.grad).all()
+    assert calls == 0
+
+    state = _clone_state_dict(model.state_dict())
+    restored = _small_physical_model(source_h2former)
+    restored.load_state_dict(state)
+    restored.state_dict()
+    restored.identity_metadata()
+
+
 @pytest.mark.parametrize(
     ("entry_index", "drift"),
     [
@@ -946,6 +983,17 @@ def test_entry_physical_config_drift_fails_closed_on_all_model_surfaces(
         model.identity_metadata()
 
 
+def test_entry_pca_metadata_rejects_physical_config_drift_without_payload(
+    source_h2former: H2Former,
+) -> None:
+    model = _small_physical_model(source_h2former)
+    entry = model.conv1
+    object.__setattr__(entry.physical_config, "rho", entry.physical_config.rho + 0.25)
+
+    with pytest.raises((ValueError, RuntimeError), match="config|identity|drift|creation"):
+        entry.pca_metadata()
+
+
 def test_entry_ledger_replacement_fails_closed_on_direct_and_model_surfaces(
     source_h2former: H2Former,
 ) -> None:
@@ -964,6 +1012,51 @@ def test_entry_ledger_replacement_fails_closed_on_direct_and_model_surfaces(
     with pytest.raises((ValueError, RuntimeError), match="ledger|identity|drift|creation|binding"):
         model.state_dict()
     with pytest.raises((ValueError, RuntimeError), match="ledger|identity|drift|creation|binding"):
+        model.identity_metadata()
+
+
+def test_full_identity_surfaces_reject_replaced_canonical_routes_tuple(
+    source_h2former: H2Former,
+) -> None:
+    model = _small_physical_model(source_h2former)
+    entry = model.conv1
+    assert torch.isfinite(entry(torch.zeros(1, 1, 32, 32))).all()
+    model.state_dict()
+    model.identity_metadata()
+
+    ledger = model.exposure_ledger
+    original_routes = ledger.canonical_routes
+    replacement_routes = tuple(route for route in original_routes)
+    assert replacement_routes is not original_routes
+    object.__setattr__(ledger, "canonical_routes", replacement_routes)
+
+    with pytest.raises((ValueError, RuntimeError), match="ledger|route|identity|drift|binding"):
+        entry(torch.zeros(1, 1, 32, 32))
+    with pytest.raises((ValueError, RuntimeError), match="ledger|route|identity|drift|binding"):
+        model.state_dict()
+    with pytest.raises((ValueError, RuntimeError), match="ledger|route|identity|drift|binding"):
+        model.identity_metadata()
+
+
+def test_phase_psf_module_replacement_fails_closed_on_all_identity_surfaces(
+    source_h2former: H2Former,
+) -> None:
+    model = _small_physical_model(source_h2former)
+    entry = model.conv1
+    phase_key = next(iter(entry.phase_psfs))
+    entry.phase_psfs[phase_key] = copy.deepcopy(entry.phase_psfs[phase_key])
+
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
+        entry(torch.zeros(1, 1, 32, 32))
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
+        model(torch.zeros(1, 1, 512, 512))
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
+        entry.state_dict()
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
+        model.state_dict()
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
+        entry.pca_metadata()
+    with pytest.raises((ValueError, RuntimeError), match="phase|PSF|module|identity|drift|binding"):
         model.identity_metadata()
 
 
