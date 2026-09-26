@@ -18,6 +18,7 @@ from standalone_nnunet2d.alignment_evidence import (
     OFFICIAL_ALIGNED,
     validate_checkpoint_alignment_metadata,
 )
+from standalone_nnunet2d.engine.checkpoint import validate_model_state_compatibility
 from standalone_nnunet2d.engine.predictor import (
     DEFAULT_MIRROR_AXES,
     DEFAULT_PATCH_SIZE,
@@ -82,6 +83,7 @@ def _load_model(path: Path, device: torch.device) -> tuple[torch.nn.Module, dict
         supervision_mode=supervision_mode,
         inference=True,
     )
+    validate_model_state_compatibility(model, state_dict)
     model.load_state_dict(state_dict)
     return model.to(device), metadata
 

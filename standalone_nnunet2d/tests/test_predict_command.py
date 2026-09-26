@@ -122,7 +122,7 @@ def _tiny_checkpoint_with_metadata(
 
 @pytest.mark.parametrize(
     "model_name",
-    ["h2former", "h2former_lite_upernet", "plain_conv_unet_lite_upernet"],
+    ["h2former", "h2former_lite_upernet", "h2former_lite_upernet_w128", "plain_conv_unet_lite_upernet"],
 )
 def test_prediction_loader_uses_explicit_single_output_metadata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_name: str

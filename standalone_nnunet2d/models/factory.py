@@ -18,18 +18,20 @@ from standalone_nnunet2d.models.plain_conv_unet_lite_upernet import PlainConvUNe
 PLAIN_CONV_UNET = "plain_conv_unet"
 H2FORMER = "h2former"
 H2FORMER_LITE_UPERNET = "h2former_lite_upernet"
+H2FORMER_LITE_UPERNET_W128 = "h2former_lite_upernet_w128"
 PLAIN_CONV_UNET_LITE_UPERNET = "plain_conv_unet_lite_upernet"
 MODEL_NAMES = (
     PLAIN_CONV_UNET,
     H2FORMER,
     H2FORMER_LITE_UPERNET,
+    H2FORMER_LITE_UPERNET_W128,
     PLAIN_CONV_UNET_LITE_UPERNET,
 )
 DEEP_SUPERVISION = "deep_supervision"
 SINGLE_OUTPUT = "single_output"
 
 _SINGLE_OUTPUT_ONLY_MODELS = frozenset(
-    {H2FORMER, H2FORMER_LITE_UPERNET, PLAIN_CONV_UNET_LITE_UPERNET}
+    {H2FORMER, H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128, PLAIN_CONV_UNET_LITE_UPERNET}
 )
 _PLAIN_CONV_UNET_MODELS = frozenset({PLAIN_CONV_UNET})
 
@@ -69,6 +71,15 @@ _CONTRACTS = {
     ),
     H2FORMER_LITE_UPERNET: ModelContract(
         name=H2FORMER_LITE_UPERNET,
+        in_channels=1,
+        num_classes=2,
+        image_size=512,
+        supervision_mode=SINGLE_OUTPUT,
+        deep_supervision=False,
+        loss_name="DiceCrossEntropyLoss",
+    ),
+    H2FORMER_LITE_UPERNET_W128: ModelContract(
+        name=H2FORMER_LITE_UPERNET_W128,
         in_channels=1,
         num_classes=2,
         image_size=512,
@@ -156,11 +167,12 @@ def build_model(
             num_classes=contract.num_classes,
             image_size=contract.image_size or 512,
         )
-    if contract.name == H2FORMER_LITE_UPERNET:
+    if contract.name in {H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128}:
         return H2FormerLiteUPerNet(
             in_channels=contract.in_channels,
             num_classes=contract.num_classes,
             image_size=contract.image_size or 512,
+            fpn_channels=128 if contract.name == H2FORMER_LITE_UPERNET_W128 else 64,
         )
     raise AssertionError(f"unhandled model contract: {contract.name}")
 
@@ -220,6 +232,7 @@ __all__ = [
     "DEEP_SUPERVISION",
     "H2FORMER",
     "H2FORMER_LITE_UPERNET",
+    "H2FORMER_LITE_UPERNET_W128",
     "MODEL_NAMES",
     "ModelContract",
     "PLAIN_CONV_UNET",

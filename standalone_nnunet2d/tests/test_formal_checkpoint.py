@@ -407,7 +407,7 @@ def _model_identity(name: str, supervision_mode: str) -> dict[str, object]:
         "name": name,
         "in_channels": 1,
         "num_classes": 2,
-        "image_size": 512 if name in {"h2former", "h2former_lite_upernet"} else None,
+        "image_size": 512 if name in {"h2former", "h2former_lite_upernet", "h2former_lite_upernet_w128"} else None,
         "supervision_mode": supervision_mode,
     }
 
@@ -420,6 +420,8 @@ def _model_identity(name: str, supervision_mode: str) -> dict[str, object]:
         ("h2former", "single_output", "h2former_lite_upernet", "single_output"),
         ("plain_conv_unet", "deep_supervision", "plain_conv_unet_lite_upernet", "single_output"),
         ("h2former_lite_upernet", "single_output", "plain_conv_unet_lite_upernet", "single_output"),
+        ("h2former_lite_upernet", "single_output", "h2former_lite_upernet_w128", "single_output"),
+        ("h2former_lite_upernet_w128", "single_output", "h2former_lite_upernet", "single_output"),
     ],
 )
 def test_formal_checkpoint_rejects_cross_model_before_state_load(

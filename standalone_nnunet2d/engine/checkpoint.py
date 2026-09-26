@@ -55,11 +55,25 @@ def load_checkpoint(
         weights_only=False,
     )
     _validate_payload(payload, expected_metadata)
+    validate_model_state_compatibility(model, payload["model_state_dict"])
     model.load_state_dict(payload["model_state_dict"])
     optimizer_state = payload["optimizer_state_dict"]
     if optimizer is not None and optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
     return dict(payload["metadata"])
+
+
+def validate_model_state_compatibility(model: nn.Module, state_dict: object) -> None:
+    """Reject missing, unexpected or differently shaped weights before target loading."""
+    if not isinstance(state_dict, Mapping):
+        raise ValueError("checkpoint model_state_dict must be a mapping")
+    target = model.state_dict()
+    if set(state_dict) != set(target):
+        raise ValueError("checkpoint model_state_dict keys do not match target model")
+    for key, expected in target.items():
+        value = state_dict[key]
+        if not isinstance(value, torch.Tensor) or value.shape != expected.shape:
+            raise ValueError(f"checkpoint model_state_dict shape/type mismatch for {key!r}")
 
 
 def _resolve_output_path(path: str | Path, *, allowed_root: str | Path | None = None) -> Path:
