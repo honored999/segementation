@@ -18,6 +18,7 @@ class H2FormerLiteUPerNet(H2Former):
         num_classes: int = 2,
         image_size: int = 512,
         fpn_channels: int = 64,
+        pool_scales: tuple[int, ...] = (1, 2, 4),
     ) -> None:
         super().__init__(in_channels=in_channels, num_classes=num_classes, image_size=image_size)
         del self.decode4
@@ -28,7 +29,7 @@ class H2FormerLiteUPerNet(H2Former):
             in_channels=(64, 128, 256, 512),
             num_classes=num_classes,
             fpn_channels=fpn_channels,
-            pool_scales=(1, 2, 4),
+            pool_scales=pool_scales,
             norm_factory=nn.BatchNorm2d,
         )
         self.deep_supervision = False

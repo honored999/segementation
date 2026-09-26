@@ -19,19 +19,22 @@ PLAIN_CONV_UNET = "plain_conv_unet"
 H2FORMER = "h2former"
 H2FORMER_LITE_UPERNET = "h2former_lite_upernet"
 H2FORMER_LITE_UPERNET_W128 = "h2former_lite_upernet_w128"
+H2FORMER_LITE_UPERNET_W128_PPM1236 = "h2former_lite_upernet_w128_ppm1236"
+PPM1236_ARCHITECTURE = {"fpn_channels": 128, "ppm_scales": (1, 2, 3, 6), "ppm_out_channels": 128}
 PLAIN_CONV_UNET_LITE_UPERNET = "plain_conv_unet_lite_upernet"
 MODEL_NAMES = (
     PLAIN_CONV_UNET,
     H2FORMER,
     H2FORMER_LITE_UPERNET,
     H2FORMER_LITE_UPERNET_W128,
+    H2FORMER_LITE_UPERNET_W128_PPM1236,
     PLAIN_CONV_UNET_LITE_UPERNET,
 )
 DEEP_SUPERVISION = "deep_supervision"
 SINGLE_OUTPUT = "single_output"
 
 _SINGLE_OUTPUT_ONLY_MODELS = frozenset(
-    {H2FORMER, H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128, PLAIN_CONV_UNET_LITE_UPERNET}
+    {H2FORMER, H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128, H2FORMER_LITE_UPERNET_W128_PPM1236, PLAIN_CONV_UNET_LITE_UPERNET}
 )
 _PLAIN_CONV_UNET_MODELS = frozenset({PLAIN_CONV_UNET})
 
@@ -47,7 +50,10 @@ class ModelContract:
     loss_name: str
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        if self.name == H2FORMER_LITE_UPERNET_W128_PPM1236:
+            result.update(PPM1236_ARCHITECTURE)
+        return result
 
 
 _CONTRACTS = {
@@ -85,6 +91,12 @@ _CONTRACTS = {
         image_size=512,
         supervision_mode=SINGLE_OUTPUT,
         deep_supervision=False,
+        loss_name="DiceCrossEntropyLoss",
+    ),
+    H2FORMER_LITE_UPERNET_W128_PPM1236: ModelContract(
+        name=H2FORMER_LITE_UPERNET_W128_PPM1236,
+        in_channels=1, num_classes=2, image_size=512,
+        supervision_mode=SINGLE_OUTPUT, deep_supervision=False,
         loss_name="DiceCrossEntropyLoss",
     ),
     PLAIN_CONV_UNET_LITE_UPERNET: ModelContract(
@@ -167,12 +179,13 @@ def build_model(
             num_classes=contract.num_classes,
             image_size=contract.image_size or 512,
         )
-    if contract.name in {H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128}:
+    if contract.name in {H2FORMER_LITE_UPERNET, H2FORMER_LITE_UPERNET_W128, H2FORMER_LITE_UPERNET_W128_PPM1236}:
         return H2FormerLiteUPerNet(
             in_channels=contract.in_channels,
             num_classes=contract.num_classes,
             image_size=contract.image_size or 512,
-            fpn_channels=128 if contract.name == H2FORMER_LITE_UPERNET_W128 else 64,
+            fpn_channels=128 if contract.name in {H2FORMER_LITE_UPERNET_W128, H2FORMER_LITE_UPERNET_W128_PPM1236} else 64,
+            pool_scales=(1, 2, 3, 6) if contract.name == H2FORMER_LITE_UPERNET_W128_PPM1236 else (1, 2, 4),
         )
     raise AssertionError(f"unhandled model contract: {contract.name}")
 
@@ -186,6 +199,14 @@ def _identity_from_mapping(value: Mapping[str, Any], *, source: str) -> tuple[st
         raise ValueError(f"{source} must contain name and supervision_mode")
     contract = get_model_contract(str(value["name"]), supervision_mode=str(value["supervision_mode"]))
     for key, expected in contract.as_dict().items():
+        if contract.name == H2FORMER_LITE_UPERNET_W128_PPM1236 and key in PPM1236_ARCHITECTURE:
+            if key not in value:
+                raise ValueError(f"{source} is missing required architecture field {key!r}")
+            actual = value[key]
+            if type(actual) is not type(expected) or (
+                isinstance(expected, tuple) and any(type(item) is not int for item in actual)
+            ):
+                raise ValueError(f"{source} field {key!r} has invalid architecture type")
         if key in value and value[key] != expected:
             raise ValueError(f"{source} field {key!r} conflicts with model contract")
     return contract.name, contract.supervision_mode
@@ -199,8 +220,13 @@ def resolve_checkpoint_model_identity(metadata: Mapping[str, Any]) -> tuple[str,
         raise ValueError("checkpoint model identity must contain model_name and supervision_mode")
     top_identity = None
     if present_top == top_keys:
+        architecture = {}
+        if metadata["model_name"] == H2FORMER_LITE_UPERNET_W128_PPM1236:
+            architecture = metadata.get("architecture", {})
+            if not isinstance(architecture, Mapping) or set(architecture) != set(PPM1236_ARCHITECTURE):
+                raise ValueError("checkpoint architecture must contain exactly the B architecture fields")
         top_identity = _identity_from_mapping(
-            {"name": metadata["model_name"], "supervision_mode": metadata["supervision_mode"]},
+            {**architecture, "name": metadata["model_name"], "supervision_mode": metadata["supervision_mode"]},
             source="checkpoint metadata",
         )
 
@@ -233,6 +259,8 @@ __all__ = [
     "H2FORMER",
     "H2FORMER_LITE_UPERNET",
     "H2FORMER_LITE_UPERNET_W128",
+    "H2FORMER_LITE_UPERNET_W128_PPM1236",
+    "PPM1236_ARCHITECTURE",
     "MODEL_NAMES",
     "ModelContract",
     "PLAIN_CONV_UNET",

@@ -18,7 +18,7 @@ from torch.optim import Optimizer
 from standalone_nnunet2d.engine.checkpoint import load_checkpoint, save_checkpoint
 from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
 from standalone_nnunet2d.alignment_evidence import OFFICIAL_ALIGNED, validate_alignment_evidence_record
-from standalone_nnunet2d.models.factory import get_model_contract
+from standalone_nnunet2d.models.factory import get_model_contract, H2FORMER_LITE_UPERNET_W128_PPM1236, PPM1236_ARCHITECTURE, resolve_checkpoint_model_identity
 
 
 @dataclass(frozen=True)
@@ -264,6 +264,9 @@ def save_formal_checkpoint(
     if model_name is not None and supervision_mode is not None:
         metadata["model_name"] = model_name
         metadata["supervision_mode"] = supervision_mode
+        if model_name == H2FORMER_LITE_UPERNET_W128_PPM1236:
+            metadata["architecture"] = dict(PPM1236_ARCHITECTURE)
+    resolve_checkpoint_model_identity(metadata)
     return save_checkpoint(model, optimizer, path, metadata, allowed_root=checkpoint_root)
 
 
