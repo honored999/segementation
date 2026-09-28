@@ -7,7 +7,7 @@ import pytest
 
 from generate_nnunet_result_report import (
     _add_window, _architecture, _diagnostic_feature, _inverse_feature, _channel_ids, _native_slice_index, _confusion_masks, _overlay_rgba, _confusion_legend_handles,
-    _normalize_display, check_geometry, main,
+    _normalize_display, _normalize_native_channel, _native_channel_figure, _summary_figure, check_geometry, main,
     protected_output, read_metrics, require_simpleitk_reader, resolve_external_trainer,
     select_cases, select_slices, verify_full_geometry,
 )
@@ -168,6 +168,71 @@ def test_architecture_png_smoke(tmp_path):
     fig.savefig(target)
     plt.close(fig)
     assert target.stat().st_size > 1000
+
+
+def test_native_channel_display_and_shared_colorbar(tmp_path, monkeypatch):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.figure
+    import matplotlib.image
+    captured = []
+    original = matplotlib.figure.Figure.savefig
+    def inspect(self, path, *args, **kwargs):
+        images = [image for ax in self.axes for image in ax.images]
+        assert len(images) == 2
+        for image in images:
+            assert image.norm.vmin == 0 and image.norm.vmax == 1
+            assert image.get_cmap().name == "coolwarm"
+            assert image.get_interpolation() == "nearest"
+        assert any(ax.get_xlabel() == "Relative activation within each channel"
+                   for ax in self.axes)
+        captured.extend(images)
+        return original(self, path, *args, **kwargs)
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
+    values = np.arange(16, dtype=np.float32).reshape(4, 4) + 10
+    constant = np.full((4, 4), -3, dtype=np.float32)
+    assert _normalize_native_channel(values).min() == 0
+    assert _normalize_native_channel(values).max() == 1
+    assert np.all(_normalize_native_channel(constant) == 0)
+    item = {"cid": "synthetic", "native": {"channel_ids": [0, 7],
+            "channels": np.stack([values, constant]), "original_slice": 0, "window_index": 0}}
+    _native_channel_figure([item], tmp_path / "native.png")
+    assert len(captured) == 2
+
+
+def test_summary_has_separate_top_regions(tmp_path, monkeypatch):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.figure
+    decoder = SimpleNamespace(pool_scales=(1, 2, 4), fpn_channels=128,
+                              classifier=SimpleNamespace(out_channels=2))
+    net = SimpleNamespace(encoder=SimpleNamespace(stages=list(range(8)),
+                          output_channels=(32, 64, 128, 256, 512, 512, 512, 512)),
+                          selected_feature_indices=(1, 3, 5, 7), decoder=decoder)
+    seen = []
+    def inspect(fig, output, **kwargs):
+        top = fig.axes[:6]
+        assert len(top) == 6
+        assert top[0].get_position().y0 > top[1].get_position().y1
+        assert top[1].get_position().y0 > top[2].get_position().y1
+        assert top[2].get_position().y0 > top[3].get_position().y1
+        assert top[3].get_position().y0 > top[4].get_position().y1
+        assert [handle.get_label() for handle in top[1].get_legend().legend_handles] == ["TP", "FP", "FN"]
+        assert top[2].get_xlabel().startswith("Feature magnitude display")
+        labels = [text.get_text() for text in top[0].texts]
+        assert any("P3" in label for label in labels)
+        assert any("P2" in label for label in labels)
+        assert any("P1" in label for label in labels)
+        assert any("P0" in label for label in labels)
+        seen.append(True)
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
+    raw = np.arange(16, dtype=np.float32).reshape(4, 4)
+    zero = np.zeros((4, 4), dtype=bool)
+    items = [{"cid": f"synthetic{i}", "slices": [0],
+              "panels": {0: (raw, zero, zero, raw)}} for i in range(6)]
+    rows = {item["cid"]: {"dice": ".5"} for item in items}
+    _summary_figure(items, rows, net, 7, tmp_path / "summary.png")
+    assert seen
 
 
 def test_cli_check_metadata_only(tmp_path, capsys):

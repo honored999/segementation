@@ -76,6 +76,15 @@ The TXT records window index, preprocessed bounds, actual sliding-window count,
 feature shape and channel IDs. Nonidentity slice-axis transpose or slice-axis
 resampling is rejected for this localization rather than silently mismapped.
 
+Each native 4×4 channel is displayed using its own exact minimum and maximum:
+`(value - min) / (max - min)` in `[0,1]`. A constant channel displays uniformly
+at zero. All channels share the same coolwarm color scale and colorbar; blue/red
+indicate only relative low/high values, not negative/positive values. Native
+colors cannot compare absolute activation between channels or cases and are not
+lesion probabilities. This differs from the summary's DWI and feature-magnitude
+panels, which each use per-slice 1st–99th percentile normalization to `[0,1]`
+and display constant maps at zero.
+
 On the server, first run the command above with --check. Confirm the metrics
 coverage, checkpoint path and a new output directory. Then run the same
 command without --check, adding the provenance declaration shown above.

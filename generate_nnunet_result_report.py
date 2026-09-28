@@ -411,6 +411,16 @@ def _normalize_display(array):
     return np.clip((a-lo)/(hi-lo), 0, 1)
 
 
+def _normalize_native_channel(values):
+    """Scale one native channel for display; constant channels display at zero."""
+    import numpy as np
+    values = np.asarray(values)
+    lo, hi = float(np.min(values)), float(np.max(values))
+    if hi == lo:
+        return np.zeros(values.shape, dtype=np.float32)
+    return (values - lo) / (hi - lo)
+
+
 def _architecture(ax, network, stage):
     from matplotlib.patches import FancyBboxPatch
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
@@ -431,6 +441,10 @@ def _architecture(ax, network, stage):
         ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
                     arrowprops=dict(arrowstyle="->", lw=1, color=color,
                                     shrinkA=1, shrinkB=1))
+    def route(points, color="#456879"):
+        for start, end in zip(points, points[1:]):
+            ax.plot((start[0], end[0]), (start[1], end[1]), color=color, lw=1)
+        arrow(*points[-2], *points[-1], color=color)
     ax.text(.11, .97, "ENCODER", ha="center", fontsize=11, weight="bold")
     ax.text(.59, .97, "DECODER: PPM + FPN", ha="center", fontsize=11, weight="bold")
     ax.text(.93, .97, "OUTPUT", ha="center", fontsize=11, weight="bold")
@@ -460,22 +474,29 @@ def _architecture(ax, network, stage):
         box(.265, y, .14, .05, label, "#dff4eb", 7)
     ppm_y = .24
     for j, scale in enumerate(scales):
-        x = .275+j*.075
-        box(x, ppm_y, .065, .075, f"pool {scale}x{scale}\n1x1 -> {width}ch", "#fcebdc", 6.5)
-        arrow(.335, .37, x+.03, ppm_y+.075)
-        arrow(x+.03, ppm_y, .52, .22)
-    box(.445, .17, .15, .07, f"PPM: bilinear upsample\nconcat + 3x3 bottleneck\n{width}ch", "#fcebdc", 7)
-    arrow(.52, .24, .54, branch_y[2])
+        x = .275+j*.085
+        box(x, ppm_y, .07, .075, f"pool {scale}x{scale}\n1x1 -> {width}ch", "#fcebdc", 6.5)
+        route([(.335, .37), (.335, .335+j*.009), (x+.035, .335+j*.009),
+               (x+.035, ppm_y+.075)])
+        route([(x+.035, ppm_y), (x+.035, .205-j*.025), (.54, .205-j*.025),
+               (.54, .177-j*.022)])
+    box(.54, .11, .09, .085, "resize + concat\nwith deepest", "#fcebdc", 6.5)
+    route([(.405, .395), (.525, .395), (.525, .215), (.585, .215), (.585, .195)])
+    box(.66, .11, .11, .085, f"3x3 bottleneck\n{width}ch = P3", "#fcebdc", 7)
+    arrow(.63, .152, .66, .152)
+    route([(.715, .195), (.715, .225), (.625, .225), (.625, .475), (.58, .475), (.58, .50)])
     for j in range(3):
         y = branch_y[j]
-        box(.48, y, .13, .05, f"add top-down + refine\n3x3 -> {width}ch", "#dff4eb", 7)
+        box(.48, y, .13, .05, f"add + 3x3 refine\nP{j} = {width}ch", "#dff4eb", 7)
         arrow(.405, y+.025, .48, y+.025)
         if j < 2:
-            arrow(.55, branch_y[j+1]+.05, .55, y)
+            route([(.61, branch_y[j+1]+.025), (.635+j*.01, branch_y[j+1]+.025),
+                   (.635+j*.01, y+.025), (.61, y+.025)])
     box(.66, .38, .13, .07, f"FPN: 4 scales upsample\nconcat + 3x3 fusion\n{width}ch", "#dff4eb", 7)
     for j in range(3):
-        arrow(.61, branch_y[j]+.025, .66, .42)
-    arrow(.595, .205, .66, .42)
+        route([(.61, branch_y[j]+.025), (.65+j*.004, branch_y[j]+.025),
+               (.65+j*.004, .44-j*.02), (.66, .44-j*.02)])
+    route([(.77, .152), (.805, .152), (.805, .35), (.725, .35), (.725, .38)])
     box(.82, .40, .075, .05, f"1x1 classifier\n{decoder.classifier.out_channels} logits", "#ece6f8", 7)
     arrow(.79, .425, .82, .425)
     box(.91, .39, .075, .07, "bilinear upsample\nto input HxW", "#ece6f8", 7)
@@ -553,28 +574,68 @@ def _draw_case_panels(fig, subgrid, item, rows):
 
 def _native_channel_figure(items, output):
     import matplotlib.pyplot as plt
-    import numpy as np
-    fig, axes = plt.subplots(len(items), 8, figsize=(16, 2.1*len(items)),
-                             squeeze=False, layout="constrained")
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    fig = plt.figure(figsize=(16, 2.1*len(items)+1.1))
+    grid = fig.add_gridspec(len(items)+2, 8, height_ratios=[.35]+[1]*len(items)+[.4],
+                            left=.06, right=.98, top=.96, bottom=.04, hspace=.48, wspace=.16)
+    title = fig.add_subplot(grid[0, :]); title.axis("off")
+    title.text(.5, .5, "Native final encoder channels | one local preprocessed window per case | nearest pixel display",
+               ha="center", va="center", fontsize=12)
+    norm = Normalize(0, 1)
+    cmap = "coolwarm"
     for row, item in enumerate(items):
         native = item["native"]
-        for col, ax in enumerate(axes[row]):
+        for col in range(8):
+            ax = fig.add_subplot(grid[row+1, col])
             ax.set_xticks([]); ax.set_yticks([])
             if native is None or col >= len(native["channel_ids"]):
                 ax.axis("off")
                 continue
             values = native["channels"][col]
-            ax.imshow(values, cmap="coolwarm", interpolation="nearest",
-                      vmin=float(np.min(values)), vmax=float(np.max(values)) if np.max(values)>np.min(values) else float(np.min(values))+1)
+            ax.imshow(_normalize_native_channel(values), cmap=cmap, norm=norm,
+                      interpolation="nearest")
             ax.set_title(f"ch {native['channel_ids'][col]} | {values.shape[0]}x{values.shape[1]}",
                          fontsize=8)
             if col == 0:
                 ax.set_ylabel(f"{item['cid']}\nslice {native['original_slice']}\nwindow {native['window_index']}",
                               fontsize=8)
-    fig.suptitle("Native final encoder channels | one local preprocessed window per case | nearest pixel display",
-                 fontsize=12)
+    cax = fig.add_subplot(grid[-1, 2:6])
+    bar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation="horizontal")
+    bar.set_label("Relative activation within each channel", fontsize=9)
     try:
         fig.savefig(output, dpi=140)
+    finally:
+        plt.close(fig)
+
+
+def _summary_figure(items, rows, network, stage, output):
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    fig = plt.figure(figsize=(30, 37))
+    grid = fig.add_gridspec(8, 2, height_ratios=[8.2, .5, .5, .48, .55, 7.2, 7.2, 7.2],
+                           hspace=.16, wspace=.04, left=.025, right=.99, bottom=.02, top=.985)
+    _architecture(fig.add_subplot(grid[0, :]), network, stage)
+    legend_ax = fig.add_subplot(grid[1, :]); legend_ax.axis("off")
+    legend_ax.legend(handles=_confusion_legend_handles(), loc="center", ncol=3, fontsize=10)
+    cax = fig.add_subplot(grid[2, :])
+    bar = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap="inferno"),
+                       cax=cax, orientation="horizontal")
+    bar.set_label("Feature magnitude display: per-slice 1st-99th percentile -> [0,1]; overlay alpha 0.48", fontsize=8)
+    note = fig.add_subplot(grid[3, :]); note.axis("off")
+    note.text(.5, .5, "Diagnostic feature magnitude; colors are display-normalized and do not encode lesion probability or absolute cross-case intensity.",
+              ha="center", va="center", fontsize=9)
+    for col, title in enumerate(("HIGH DICE | 3 cases", "LOW DICE | 3 cases")):
+        head = fig.add_subplot(grid[4, col])
+        head.axis("off")
+        head.text(.5, .5, title, ha="center", va="center", fontsize=16, weight="bold")
+    for i, item in enumerate(items):
+        col = 0 if i < 3 else 1
+        row = 5 + i % 3
+        _draw_case_panels(fig, grid[row, col], item, rows)
+    try:
+        fig.savefig(output, dpi=130)
     finally:
         plt.close(fig)
 
@@ -611,29 +672,8 @@ def create_report(info, predictor, declaration):
                               geometry={k: getattr(image, "Get"+k)() for k in
                                         ("Size", "Spacing", "Origin", "Direction")},
                               provenance=provenance))
-    fig = plt.figure(figsize=(30, 31))
-    grid = fig.add_gridspec(5, 2, height_ratios=[5.8, .38, 7.2, 7.2, 7.2],
-                           hspace=.10, wspace=.04, left=.025, right=.99, bottom=.02, top=.98)
-    _architecture(fig.add_subplot(grid[0, :]), predictor.network, stage)
-    for col, title in enumerate(("HIGH DICE | 3 cases", "LOW DICE | 3 cases")):
-        head = fig.add_subplot(grid[1, col])
-        head.axis("off")
-        head.text(.5, .5, title, ha="center", va="center", fontsize=16, weight="bold")
-    for i, item in enumerate(items):
-        col = 0 if i < 3 else 1
-        row = 2 + i % 3
-        _draw_case_panels(fig, grid[row, col], item, info["rows"])
-    fig.legend(handles=_confusion_legend_handles(),
-               loc="upper center", bbox_to_anchor=(.50,.804), ncol=3, fontsize=10)
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import Normalize
-    bar = fig.colorbar(ScalarMappable(norm=Normalize(0,1), cmap="inferno"),
-                       ax=fig.axes[0], orientation="horizontal", fraction=.015, pad=.005)
-    bar.set_label("Feature magnitude display: per-slice 1st-99th percentile -> [0,1]; overlay alpha 0.48", fontsize=8)
-    try:
-        fig.savefig(info["output"] / "summary.png", dpi=130)
-    finally:
-        plt.close(fig)
+    _summary_figure(items, info["rows"], predictor.network, stage,
+                    info["output"] / "summary.png")
     _native_channel_figure(items, info["output"] / "feature_channels.png")
 
     txt = ["Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report",
@@ -646,7 +686,8 @@ def create_report(info, predictor, declaration):
            "Diagnostic features: freshly preprocessed raw DWI, no GT and no TTA; they are not saved prediction features or a replay.",
            "Feature: mean(abs(channel)) at deepest selected encoder stage, bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
            "Native channels: fixed uniformly spaced IDs from the final encoder feature; one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities.",
-           "Display: per-slice 1st-99th percentile normalization; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
+           "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
+           "Native-channel display: each 4x4 channel independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
            "Original-space array axis 0, zero-based index; no anatomical plane claim.",
            "Selection: full-case Dice descending, case_id tie break, top 3; among remaining, Dice ascending, case_id tie break, bottom 3; GT area descending, index tie break, max 3 positive slices.",
            f"Metrics source: {info['metrics']}", "Full validation set summary (source JSON, including units/aggregation/valid_cases/F2):",
