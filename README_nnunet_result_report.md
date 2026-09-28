@@ -27,15 +27,15 @@ The script labels this statement as user-declared provenance; it cannot prove
 the saved mask was produced by that checkpoint. Without it, a full report is
 refused. Use a fresh output directory: existing targets and overlaps with any
 source are refused. The output parent must exist. Complete output appears only
-after both files are written; a failed run removes its private staging folder.
-The outputs are `summary.png` and UTF-8 `report.txt`. Full runs verify image,
+after all three files are written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
+The outputs are `summary.png`, `feature_channels.png`, and UTF-8 `report.txt`. Full runs verify image,
 GT and prediction headers for every metrics-covered case. The TXT records the
 count. Only exact `image_reader_writer=SimpleITKIO` plans are supported.
 
 The report is a **single fold 0 validation report**, not five-fold OOF or a
 clinical conclusion. It reads the existing full-set case and summary metrics;
 it never recomputes or changes them. Empty GT cases have no selected positive
-slices. The PNG feature panels show `mean(abs(deepest encoder stage))` from
+slices. The PNG feature magnitude and DWI overlay panels show `mean(abs(deepest encoder stage))` from
 fresh raw-image preprocessing and no mirror TTA. Each patch is upsampled to
 its own sliding window and fused with the nnU-Net Gaussian weights, then
 mapped through inverse padding, resampling, cropping and transpose. These
@@ -59,3 +59,30 @@ per slice and cannot compare absolute feature strength across cases.
 
 No local real checkpoint, raw patient image, or large model was loaded during
 development. No training or validation prediction is run by this command.
+
+## Visual revision and server review
+
+The summary shows the encoder stages, selected feature connections, PPM, FPN and
+output path from the loaded model attributes. High and low Dice groups each show
+three cases with up to three GT-positive slices. Green is TP, red FP, and blue
+FN in the display overlay. The summary's inferno scale uses per-slice 1st-99th
+percentile normalization; DWI+feature uses alpha 0.48. This scale is for display
+only and is not comparable across cases. The native-channel sheet
+(feature_channels.png) displays up to eight uniformly spaced channel IDs at the
+unaltered low resolution, with nearest pixel display. It represents one local
+preprocessed window selected as the first enumerated window containing the
+first displayed slice center, without GT-dependent channel or window selection.
+The TXT records window index, preprocessed bounds, actual sliding-window count,
+feature shape and channel IDs. Nonidentity slice-axis transpose or slice-axis
+resampling is rejected for this localization rather than silently mismapped.
+
+On the server, first run the command above with --check. Confirm the metrics
+coverage, checkpoint path and a new output directory. Then run the same
+command without --check, adding the provenance declaration shown above.
+Inspect the generated structure against the server's loaded encoder and decoder;
+verify selected stage channels, relative sizes, PPM scales, FPN width and output
+shape. Compare one case's original slice, crop/transpose, preprocessing window
+bounds and native-channel window index. Check DWI, GT, saved prediction and
+feature spatial alignment, plus the saved prediction's separate provenance.
+The existing report directory remains read-only. These server steps have not
+been run locally.

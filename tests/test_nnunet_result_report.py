@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from generate_nnunet_result_report import (
-    _add_window, _architecture, _diagnostic_feature, _inverse_feature,
+    _add_window, _architecture, _diagnostic_feature, _inverse_feature, _channel_ids, _native_slice_index, _confusion_masks, _overlay_rgba, _confusion_legend_handles,
     _normalize_display, check_geometry, main,
     protected_output, read_metrics, require_simpleitk_reader, resolve_external_trainer,
     select_cases, select_slices, verify_full_geometry,
@@ -104,10 +104,10 @@ def test_tiny_hook_two_windows_and_cleanup():
             pass
         def run_case(self, images, seg, plans, config, dataset):
             assert seg is None
-            data = np.array([[[[1, 2, 3], [4, 5, 6]]]], dtype=np.float32)
-            props = {"shape_after_cropping_and_before_resampling": (1, 2, 3),
-                     "shape_before_cropping": (1, 2, 3),
-                     "bbox_used_for_cropping": ((0, 1), (0, 2), (0, 3)),
+            data = np.array([[[[1, 2, 3, 4], [5, 6, 7, 8]]]], dtype=np.float32)
+            props = {"shape_after_cropping_and_before_resampling": (1, 2, 4),
+                     "shape_before_cropping": (1, 2, 4),
+                     "bbox_used_for_cropping": ((0, 1), (0, 2), (0, 4)),
                      "spacing": (1, 1, 1)}
             return data, None, props
     class Config:
@@ -115,7 +115,7 @@ def test_tiny_hook_two_windows_and_cleanup():
         spacing = (1, 1)
         preprocessor_class = Pre
         def resampling_fn_probabilities(self, array, shape, *unused):
-            assert tuple(shape) == (1, 2, 3)
+            assert tuple(shape) == (1, 2, 4)
             return array
     class Net(torch.nn.Module):
         def __init__(self):
@@ -135,11 +135,17 @@ def test_tiny_hook_two_windows_and_cleanup():
         dataset_json={}, network=network, device=torch.device("cpu"),
         _internal_get_sliding_window_slicers=lambda shape: [
             (slice(None), 0, slice(0, 2), slice(0, 2)),
-            (slice(None), 0, slice(0, 2), slice(1, 3))])
-    mapped, provenance = _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 0)
-    assert mapped.shape == (1, 2, 3)
-    assert np.allclose(mapped[0], [[1, 2, 3], [4, 5, 6]])
+            (slice(None), 0, slice(0, 2), slice(2, 4))])
+    mapped, provenance, native = _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 0, 0)
+    assert mapped.shape == (1, 2, 4)
+    assert np.allclose(mapped[0], [[1, 2, 3, 4], [5, 6, 7, 8]])
     assert provenance["module"] == "encoder.stages.0"
+    assert provenance["windows"] == 2
+    assert provenance["covered_preprocessed_voxels"] == 8
+    assert native["channel_ids"] == [0]
+    assert native["channels"].shape == (1, 2, 2)
+    assert native["window_index"] == 1
+    assert native["window_yx_preprocessed"] == [[0, 2], [2, 4]]
     assert not network.encoder.stages[0]._forward_hooks
     network.fail = True
     with pytest.raises(RuntimeError, match="synthetic"):
@@ -237,7 +243,8 @@ def test_full_geometry_rejects_seventh_case(tmp_path):
         verify_full_geometry(info)
 
 
-def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing_channel", [False, True])
+def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, missing_channel):
     import generate_nnunet_result_report as report
     model = tmp_path / "Dataset501_StrokeLesion" / (
         "nnUNetTrainerUPerNetTopK10EarlyStopping__nnUNetPlans__2d")
@@ -266,12 +273,46 @@ def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch):
     def fail_after_png(info, predictor, declaration):
         (info["output"] / "summary.png").write_bytes(b"partial")
         raise RuntimeError("injected write failure")
-    monkeypatch.setattr(report, "create_report", fail_after_png)
+    def omit_channel_png(info, predictor, declaration):
+        (info["output"] / "summary.png").write_bytes(b"synthetic")
+        (info["output"] / "report.txt").write_text("synthetic", encoding="utf-8")
+    monkeypatch.setattr(report, "create_report",
+                        omit_channel_png if missing_channel else fail_after_png)
     target = tmp_path / "new-report"
-    with pytest.raises(RuntimeError, match="injected write failure"):
+    with pytest.raises(SystemExit if missing_channel else RuntimeError,
+                       match=None if missing_channel else "injected write failure"):
         main(["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
               "--labels-dir", str(labels), "--checkpoint", str(checkpoint),
               "--output-dir", str(target),
               "--prediction-checkpoint-declaration", "synthetic declaration"])
+    if missing_channel:
+        assert "report output incomplete" in capsys.readouterr().err
     assert not target.exists()
     assert not list(tmp_path.glob(".new-report-*"))
+
+
+def test_fixed_channel_ids_and_confusion_overlay():
+    assert _channel_ids(512) == [0, 73, 146, 219, 292, 365, 438, 511]
+    gt = np.array([[1, 0], [1, 0]], dtype=bool)
+    pred = np.array([[1, 1], [0, 0]], dtype=bool)
+    tp, fp, fn = _confusion_masks(gt, pred)
+    assert np.array_equal(tp, [[1, 0], [0, 0]])
+    assert np.array_equal(fp, [[0, 1], [0, 0]])
+    assert np.array_equal(fn, [[0, 0], [1, 0]])
+    assert [handle.get_label() for handle in _confusion_legend_handles()] == ["TP", "FP", "FN"]
+    rgba = _overlay_rgba(gt, pred)
+    assert np.allclose(rgba[0, 0, :3], (.12, .82, .30))
+    assert np.allclose(rgba[0, 1, :3], (1., .18, .18))
+    assert np.allclose(rgba[1, 0, :3], (.16, .42, 1.))
+
+
+def test_native_slice_axis_contract_rejects_transpose():
+    props = {"bbox_used_for_cropping": ((1, 3), (0, 2), (0, 3)),
+             "shape_after_cropping_and_before_resampling": (2, 2, 3)}
+    identity = SimpleNamespace(transpose_forward=(0, 1, 2),
+                               transpose_backward=(0, 1, 2))
+    assert _native_slice_index(2, props, identity, (2, 2, 3)) == 1
+    swapped = SimpleNamespace(transpose_forward=(2, 0, 1),
+                              transpose_backward=(1, 2, 0))
+    with pytest.raises(ValueError, match="identity axis transpose"):
+        _native_slice_index(2, props, swapped, (2, 2, 3))
