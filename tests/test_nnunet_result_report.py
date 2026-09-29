@@ -377,10 +377,10 @@ def test_full_geometry_rejects_seventh_case(tmp_path):
 
 
 @pytest.mark.parametrize("missing_channel", [None, "feature_channels.png", "feature_channels_64x64.png"])
-def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, missing_channel):
+@pytest.mark.parametrize("trainer_name", ["nnUNetTrainerUPerNetTopK10EarlyStopping", "nnUNetTrainerTopK10"])
+def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, missing_channel, trainer_name):
     import generate_nnunet_result_report as report
-    model = tmp_path / "Dataset501_StrokeLesion" / (
-        "nnUNetTrainerUPerNetTopK10EarlyStopping__nnUNetPlans__2d")
+    model = tmp_path / "Dataset501_StrokeLesion" / f"{trainer_name}__nnUNetPlans__2d"
     images, labels = tmp_path / "images", tmp_path / "labels"
     prediction, metrics = model / "fold_0" / "validation", model / "fold_0" / "multi_metrics"
     for folder in (images, labels, prediction, metrics):
@@ -420,7 +420,8 @@ def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, miss
         main(["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
               "--labels-dir", str(labels), "--checkpoint", str(checkpoint),
               "--output-dir", str(target),
-              "--prediction-checkpoint-declaration", "synthetic declaration"])
+              *(["--prediction-checkpoint-declaration", "synthetic declaration"]
+                if trainer_name != "nnUNetTrainerTopK10" else [])])
     if missing_channel is not None:
         assert "report output incomplete" in capsys.readouterr().err
     assert not target.exists()
@@ -452,3 +453,196 @@ def test_native_slice_axis_contract_rejects_transpose():
                               transpose_backward=(1, 2, 0))
     with pytest.raises(ValueError, match="identity axis transpose"):
         _native_slice_index(2, props, swapped, (2, 2, 3))
+
+
+def test_original_network_kind_and_stage_selection():
+    import torch
+    from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    from generate_nnunet_result_report import _network_kind, _original_feature_stages, ORIGINAL_TRAINER
+    net = PlainConvUNet(1, 4, (8, 16, 32, 64), torch.nn.Conv2d,
+                        (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
+                        (1, 1, 1), deep_supervision=False)
+    assert _network_kind(net, ORIGINAL_TRAINER) == "plain_unet"
+    assert _original_feature_stages(net, (128, 128)) == (3, 1)
+    with pytest.raises(ValueError, match="native 64x64"):
+        _original_feature_stages(net, (96, 96))
+    with pytest.raises(ValueError, match="unsupported loaded network"):
+        _network_kind(torch.nn.Identity(), ORIGINAL_TRAINER)
+
+
+def test_original_architecture_labels(tmp_path):
+    import torch
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    from generate_nnunet_result_report import ORIGINAL_TRAINER
+    net = PlainConvUNet(1, 4, (8, 16, 32, 64), torch.nn.Conv2d,
+                        (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
+                        (1, 1, 1), deep_supervision=False)
+    fig, ax = plt.subplots(figsize=(20, 8))
+    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1)
+    labels = " ".join(text.get_text() for text in ax.texts)
+    assert "transpose conv" in labels and "concat skip" in labels
+    assert "64x64 capture" in labels and "final capture" in labels
+    assert "PPM" not in labels and "FPN" not in labels
+    target = tmp_path / "original_architecture.png"
+    fig.savefig(target)
+    plt.close(fig)
+    assert target.stat().st_size > 1000
+
+
+@pytest.mark.parametrize("channels", ["missing", None, {}, {"0": "ADC"}, {"0": 1}, {"0": "DWI", "1": "ADC"}])
+def test_dataset501_rejects_non_dwi_channels(tmp_path, channels):
+    from generate_nnunet_result_report import _check_identity, ORIGINAL_TRAINER
+    model = tmp_path / "Dataset501_StrokeLesion" / f"{ORIGINAL_TRAINER}__nnUNetPlans__2d"
+    (model / "fold_0").mkdir(parents=True)
+    (model / "dataset.json").write_text(json.dumps({} if channels == "missing" else {"channel_names": channels}))
+    (model / "plans.json").write_text(json.dumps({"image_reader_writer": "SimpleITKIO", "configurations": {"2d": {}}}))
+    checkpoint = model / "fold_0" / "checkpoint_final.pth"
+    checkpoint.touch()
+    with pytest.raises(ValueError, match="one-channel DWI"):
+        _check_identity(model, checkpoint, 0)
+
+
+def test_plain_unet_main_output_connected():
+    import torch
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    from generate_nnunet_result_report import ORIGINAL_TRAINER
+    net = PlainConvUNet(1, 4, (8, 16, 32, 64), torch.nn.Conv2d,
+                        (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
+                        (1, 1, 1), deep_supervision=True)
+    fig, ax = plt.subplots(figsize=(20, 8))
+    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1)
+    labels = {text.get_text(): text.get_position() for text in ax.texts}
+    head = next(pos for label, pos in labels.items() if "seg_layers[-1]" in label)
+    output = next(pos for label, pos in labels.items() if "inference main output" in label)
+    decoder = next(pos for label, pos in labels.items() if "concat skip 0 + conv 2" in label)
+    segments = [(tuple(line.get_xdata()), tuple(line.get_ydata())) for line in ax.lines]
+    def connected(x1, y1, x2, y2):
+        return any(xs == (x1, x2) and ys == (y1, y2) for xs, ys in segments)
+    assert connected(decoder[0] + .135, decoder[1], head[0] - .055, head[1])
+    assert connected(head[0] + .055, head[1], output[0] - .06, output[1])
+    for j in range(3):
+        transpose = next(pos for label, pos in labels.items() if label.startswith(f"transpose conv {j} "))
+        decoded = next(pos for label, pos in labels.items() if f"concat skip {2-j} + conv {j}" in label)
+        assert connected(transpose[0] + .095, transpose[1], decoded[0] - .135, decoded[1])
+    plt.close(fig)
+
+
+def test_original_trainer_lookup(monkeypatch):
+    from nnunetv2.utilities.find_objects import recursive_find_trainer_class_by_name
+    from generate_nnunet_result_report import ORIGINAL_TRAINER
+    extension = Path(__file__).resolve().parents[1] / "nnunet_ext_trainers"
+    monkeypatch.setenv("nnUNet_extTrainer", str(extension))
+    assert resolve_external_trainer(recursive_find_trainer_class_by_name, ORIGINAL_TRAINER).__name__ == ORIGINAL_TRAINER
+
+
+def test_original_check_unknown_and_metrics_conflict(tmp_path, capsys, monkeypatch):
+    from generate_nnunet_result_report import ORIGINAL_TRAINER
+    model = tmp_path / "Dataset501_StrokeLesion" / f"{ORIGINAL_TRAINER}__nnUNetPlans__2d"
+    images, labels = tmp_path / "images", tmp_path / "labels"
+    prediction = model / "fold_0" / "validation"
+    metrics = model / "fold_0" / "multi_metric_evaluation"
+    for directory in (images, labels, prediction, metrics):
+        directory.mkdir(parents=True)
+    (model / "dataset.json").write_text(json.dumps({"name": "Dataset501_StrokeLesion", "channel_names": {"0": "DWI"}}))
+    (model / "plans.json").write_text(json.dumps({"image_reader_writer": "SimpleITKIO", "configurations": {"2d": {}}}))
+    checkpoint = model / "fold_0" / "checkpoint_final.pth"
+    checkpoint.touch()
+    names = [f"case_{i}" for i in range(6)]
+    for cid in names:
+        (images / f"{cid}_0000.nii.gz").touch()
+        (labels / f"{cid}.nii.gz").touch()
+        (prediction / f"{cid}.nii.gz").touch()
+    cols = "case_id,dice,iou,f2,avd_percent,lcd,recall,hd95_mm\n"
+    (metrics / "case_metrics.csv").write_text(cols + "".join(f"{cid},0.5,0,0,0,0,0,0\n" for cid in names))
+    (metrics / "summary_metrics.json").write_text(json.dumps({"n_cases": 6, "metrics": {
+        key: {"valid_cases": 6} for key in ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")}}))
+    args = ["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
+            "--labels-dir", str(labels), "--prediction-dir", str(prediction),
+            "--metrics-dir", str(metrics), "--checkpoint", str(checkpoint),
+            "--output-dir", str(tmp_path / "new-report"), "--check"]
+    assert main(args) == 0
+    assert "METADATA ONLY" in capsys.readouterr().out
+    (model / "fold_0" / "multi_metrics").mkdir()
+    with pytest.raises(SystemExit):
+        main([x for i, x in enumerate(args) if i not in (10, 11)])
+    assert "one metrics directory" in capsys.readouterr().err
+    import generate_nnunet_result_report as report
+    monkeypatch.setattr(report, "verify_full_geometry", lambda info: 6)
+    monkeypatch.setattr(report, "_predictor", lambda info, args: object())
+    seen = []
+    def fake_report(info, predictor, declaration):
+        seen.append((declaration, info["historical_tta"]))
+        for name in ("summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"):
+            (info["output"] / name).write_text("synthetic", encoding="utf-8")
+    monkeypatch.setattr(report, "create_report", fake_report)
+    full = args[:-1]
+    assert main(full) == 0
+    assert seen == [(None, "unknown")]
+    with pytest.raises(SystemExit):
+        main(full[:-1] + [str(tmp_path / "second-report"),
+             "--prediction-checkpoint-declaration", "I used final"])
+    assert "requires both" in capsys.readouterr().err
+    confirmed = full[:-1] + [str(tmp_path / "confirmed-report"),
+                "--confirm-prediction-checkpoint", "--prediction-checkpoint-declaration",
+                "I used final; TTA disabled", "--historical-tta", "disabled"]
+    assert main(confirmed) == 0
+    assert seen[-1] == ("I used final; TTA disabled", "disabled")
+
+
+def test_checkpoint_source_wording():
+    from generate_nnunet_result_report import _source_statement, ORIGINAL_TRAINER, TRAINER
+    unknown = _source_statement(ORIGINAL_TRAINER, "checkpoint_final.pth", None)
+    assert "UNKNOWN" in unknown and "historical prediction weights are unconfirmed" in unknown
+    confirmed = _source_statement(ORIGINAL_TRAINER, "checkpoint_final.pth", "I used final; TTA unknown")
+    assert "USER CONFIRMED" in confirmed and "not independently verified" in confirmed
+    assert "I used final; TTA unknown" in confirmed
+    assert "USER DECLARED" in _source_statement(TRAINER, "checkpoint_best.pth", "evidence")
+    with pytest.raises(ValueError, match="nonempty"):
+        _source_statement(ORIGINAL_TRAINER, "checkpoint_final.pth", " ")
+
+
+def test_tiny_plain_unet_native_hooks_same_window():
+    import torch
+    from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    from generate_nnunet_result_report import _original_feature_stages
+    class Pre:
+        def __init__(self, verbose=False):
+            pass
+        def run_case(self, images, seg, plans, config, dataset):
+            assert seg is None
+            data = np.ones((1, 1, 128, 128), dtype=np.float32)
+            props = {"shape_after_cropping_and_before_resampling": (1, 128, 128),
+                     "shape_before_cropping": (1, 128, 128),
+                     "bbox_used_for_cropping": ((0, 1), (0, 128), (0, 128)),
+                     "spacing": (1, 1, 1)}
+            return data, None, props
+    class Config:
+        patch_size = (128, 128)
+        spacing = (1, 1)
+        preprocessor_class = Pre
+        def resampling_fn_probabilities(self, array, shape, *unused):
+            return array
+    net = PlainConvUNet(1, 4, (8, 16, 32, 64), torch.nn.Conv2d,
+                        (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
+                        (1, 1, 1), deep_supervision=False)
+    stage, intermediate = _original_feature_stages(net, (128, 128))
+    predictor = SimpleNamespace(configuration_manager=Config(),
+        plans_manager=SimpleNamespace(transpose_forward=(0, 1, 2), transpose_backward=(0, 1, 2)),
+        dataset_json={}, network=net, device=torch.device("cpu"),
+        _internal_get_sliding_window_slicers=lambda shape: [
+            (slice(None), 0, slice(0, 128), slice(0, 128))])
+    mapped, provenance, native, middle = _diagnostic_feature(
+        Path("synthetic.nii.gz"), predictor, stage, 0, intermediate)
+    assert mapped.shape == (1, 128, 128)
+    assert provenance["windows"] == 1
+    assert native["window_index"] == middle["window_index"] == 0
+    assert middle["feature_shape"] == [1, 16, 64, 64]
+    assert native["feature_shape"] == [1, 64, 16, 16]
+    assert not net.encoder.stages[stage]._forward_hooks
+    assert not net.encoder.stages[intermediate]._forward_hooks

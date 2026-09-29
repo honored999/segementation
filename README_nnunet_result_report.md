@@ -103,3 +103,43 @@ channel IDs and common window provenance. Check these facts on the server;
 local synthetic tests do not establish the real intermediate shape. The
 existing V3 report directory remains read-only. These server steps have not
 been run locally.
+
+
+## Original nnUNetTrainerTopK10 (Dataset501 DWI, 2D, fold 0)
+
+This mode keeps the saved prediction checkpoint source **UNKNOWN** by default.
+The explicit `checkpoint_final.pth` is loaded for new GT-free, no-TTA
+diagnostic features only. The saved predictions are not replayed, and their
+weights and historical TTA remain unverified. To record an explicit user
+confirmation, add both `--confirm-prediction-checkpoint` and
+`--prediction-checkpoint-declaration "<ORIGINAL USER STATEMENT
+CONFIRMING FINAL AND TTA IF KNOWN>"`; the report labels it USER CONFIRMED,
+not independently verified. If the statement establishes TTA, also add
+`--historical-tta enabled` or `--historical-tta disabled`; otherwise it remains
+unknown. The existing UPerNet mode still requires its
+source declaration.
+
+Run from this checkout on the server in Windows CMD, replacing the two input
+placeholders and choosing a fresh, separate output directory whose parent
+already exists:
+
+```bat
+conda activate nnunet5090
+set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
+set MODEL=C:\lijialin\models3d\nnUNet\nnUNet_results\Dataset501_StrokeLesion\nnUNetTrainerTopK10__nnUNetPlans__2d
+python generate_nnunet_result_report.py --model-dir "%MODEL%" --fold 0 --images-dir "<ACTUAL_DWI_IMAGES_DIR>" --labels-dir "<ACTUAL_GT_LABELS_DIR>" --prediction-dir "%MODEL%\fold_0\validation" --metrics-dir "%MODEL%\fold_0\multi_metric_evaluation" --checkpoint "%MODEL%\fold_0\checkpoint_final.pth" --output-dir "<NEW_INDEPENDENT_PARENT>\nnunet_topk10_fold0_report_v1" --check
+```
+
+After metadata-only `--check`, run the same command without `--check` on the
+server. The script will verify every metrics-covered case's physical geometry,
+restore the exact Trainer with strict state-dict loading, and inspect the actual
+network. It supports the verified PlainConvUNet path and rejects unknown
+architectures. The native 64x64 encoder stage is derived from patch size and
+strides and confirmed in the actual no-TTA hook output; no resizing substitutes
+for a missing stage. Training deep supervision is disabled by nnU-Net's predictor
+for the inference main output, while checkpoint head parameters remain loaded.
+
+**SERVER VALIDATION PENDING:** actual checkpoint/network compatibility, native
+64x64 stage, geometry and feature alignment, report presentation, and saved
+prediction provenance/TTA. Local small synthetic checks are engineering evidence
+only.

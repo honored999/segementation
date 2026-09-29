@@ -1,4 +1,4 @@
-"""Single-fold Dataset501 UPerNet validation report from existing masks/metrics.
+"""Single-fold Dataset501 nnU-Net validation report from existing masks/metrics.
 
 Feature intensity is a diagnostic recomputation from raw images, never a replay
 claim about the saved validation masks. No labels enter preprocessing or forward.
@@ -17,6 +17,8 @@ from pathlib import Path
 
 
 TRAINER = "nnUNetTrainerUPerNetTopK10EarlyStopping"
+ORIGINAL_TRAINER = "nnUNetTrainerTopK10"
+SUPPORTED_TRAINERS = (TRAINER, ORIGINAL_TRAINER)
 METRICS = ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")
 
 
@@ -128,11 +130,13 @@ def check_geometry(image, other, case_id):
 
 
 def _check_identity(model_dir, checkpoint, fold):
-    if fold != 0 or model_dir.name != f"{TRAINER}__nnUNetPlans__2d":
-        raise ValueError("only Dataset501 official UPerNet TopK10 fold 0 is supported")
+    trainer = model_dir.name.split("__")[0]
+    if fold != 0 or trainer not in SUPPORTED_TRAINERS or model_dir.name != f"{trainer}__nnUNetPlans__2d" or model_dir.parent.name != "Dataset501_StrokeLesion":
+        raise ValueError("only exact Dataset501 official TopK10/UPerNet TopK10 fold 0 2D model directories are supported")
     dataset = json.loads((model_dir / "dataset.json").read_text(encoding="utf-8"))
     plans = json.loads((model_dir / "plans.json").read_text(encoding="utf-8"))
-    if len(dataset.get("channel_names", {})) != 1:
+    channels = dataset.get("channel_names")
+    if not isinstance(channels, dict) or len(channels) != 1 or not isinstance(next(iter(channels.values())), str) or next(iter(channels.values())) != "DWI":
         raise ValueError("only one-channel DWI Dataset501 is supported")
     if "2d" not in plans.get("configurations", {}):
         raise ValueError("2d configuration missing")
@@ -180,7 +184,14 @@ def inspect_sources(args):
     images = resolved(args.images_dir)
     labels = resolved(args.labels_dir)
     preds = resolved(args.prediction_dir or model / "fold_0" / "validation")
-    metrics = resolved(args.metrics_dir or model / "fold_0" / "multi_metrics")
+    if args.metrics_dir is not None:
+        metrics = resolved(args.metrics_dir)
+    else:
+        candidates = [model / "fold_0" / name for name in ("multi_metrics", "multi_metric_evaluation")
+                      if (model / "fold_0" / name).is_dir()]
+        if len(candidates) != 1:
+            raise ValueError(f"expected one metrics directory; found {candidates}; pass --metrics-dir explicitly")
+        metrics = resolved(candidates[0])
     checkpoint = resolved(args.checkpoint)
     output = protected_output(args.output_dir, (model, images, labels, preds, metrics, checkpoint))
     dataset, plans, checkpoint = _check_identity(model, checkpoint, args.fold)
@@ -397,20 +408,27 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None, interme
         captured.clear()
 
 
-def resolve_external_trainer(finder):
+def resolve_external_trainer(finder, trainer_name=TRAINER):
     """Use nnU-Net's temporary external import path and reject namesakes."""
-    discovered = finder(TRAINER)
+    if trainer_name not in SUPPORTED_TRAINERS:
+        raise ValueError("unsupported Trainer")
+    discovered = finder(trainer_name)
     extension = resolved(Path(__file__).parent / "nnunet_ext_trainers")
     paths = os.environ.get("nnUNet_extTrainer", "").split(os.pathsep)
     expected_mixin = extension / "nnUNetTrainerMixins.py"
     architecture = getattr(discovered, "build_network_architecture", None)
-    if (not isinstance(discovered, type) or discovered.__name__ != TRAINER
-            or discovered.__module__ != TRAINER
+    if (not isinstance(discovered, type) or discovered.__name__ != trainer_name
+            or discovered.__module__ != trainer_name
             or len(paths) != 1 or resolved(paths[0]) != extension
             or architecture is None
-            or resolved(architecture.__code__.co_filename) != expected_mixin
-            or [base.__name__ for base in discovered.__bases__[:3]] !=
-            ["EarlyStoppingMixin", "TopK10LossMixin", "UPerNetArchitectureMixin"]):
+            or (trainer_name == TRAINER and (
+                resolved(architecture.__code__.co_filename) != expected_mixin
+                or [base.__name__ for base in discovered.__bases__[:3]] !=
+                ["EarlyStoppingMixin", "TopK10LossMixin", "UPerNetArchitectureMixin"]))
+            or (trainer_name == ORIGINAL_TRAINER and (
+                [base.__name__ for base in discovered.__bases__] != ["TopK10LossMixin", "nnUNetTrainer"]
+                or resolved(discovered.__bases__[0].__dict__["_build_loss"].__code__.co_filename) != expected_mixin
+                or architecture.__qualname__ != "nnUNetTrainer.build_network_architecture"))):
         raise ValueError("external Trainer identity mismatch")
     return discovered
 
@@ -422,10 +440,11 @@ def _predictor(info, args):
     from nnunetv2.utilities.find_objects import recursive_find_trainer_class_by_name
     if version("nnunetv2") != "2.8.1":
         raise ValueError("this feature mapping was audited only against nnunetv2==2.8.1")
-    discovered = resolve_external_trainer(recursive_find_trainer_class_by_name)
+    trainer_name = info["model"].name.split("__")[0]
+    discovered = resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name)
     metadata = torch.load(info["checkpoint"], map_location="cpu", weights_only=False, mmap=True)
     try:
-        if metadata.get("trainer_name") != TRAINER or metadata.get("init_args", {}).get("configuration") != "2d":
+        if metadata.get("trainer_name") != trainer_name or metadata.get("init_args", {}).get("configuration") != "2d":
             raise ValueError("checkpoint Trainer/configuration mismatch")
         fold_value = metadata.get("init_args", {}).get("fold")
         if fold_value is not None and str(fold_value) != "0":
@@ -437,11 +456,49 @@ def _predictor(info, args):
                                 verbose=False, verbose_preprocessing=False, allow_tqdm=False)
     predictor.initialize_from_trained_model_folder(str(info["model"]), use_folds=(0,),
                                                     checkpoint_name=info["checkpoint"].name)
-    if predictor.trainer_name != TRAINER or len(predictor.configuration_manager.patch_size) != 2:
+    if predictor.trainer_name != trainer_name or len(predictor.configuration_manager.patch_size) != 2:
         raise ValueError("loaded Trainer/configuration identity mismatch")
-    if predictor.network.__class__.__name__ != "_PlainConvUNetUPerNet":
-        raise ValueError("loaded network class mismatch")
+    _network_kind(predictor.network, trainer_name)
+    if trainer_name == ORIGINAL_TRAINER:
+        if predictor.network.decoder.deep_supervision is not False:
+            raise ValueError("original U-Net inference must return the main output with deep supervision disabled")
     return predictor
+
+
+def _network_kind(network, trainer_name):
+    if trainer_name == TRAINER and network.__class__.__name__ == "_PlainConvUNetUPerNet":
+        return "upernet"
+    if trainer_name == ORIGINAL_TRAINER:
+        from dynamic_network_architectures.architectures.unet import PlainConvUNet
+        from dynamic_network_architectures.building_blocks.plain_conv_encoder import PlainConvEncoder
+        from dynamic_network_architectures.building_blocks.unet_decoder import UNetDecoder
+        if (type(network) is PlainConvUNet and type(network.encoder) is PlainConvEncoder
+                and type(network.decoder) is UNetDecoder
+                and len(network.encoder.stages) == len(network.encoder.output_channels)
+                and len(network.decoder.transpconvs) == len(network.encoder.stages) - 1
+                and len(network.decoder.stages) == len(network.decoder.transpconvs)
+                and len(network.decoder.seg_layers) == len(network.decoder.stages)):
+            return "plain_unet"
+    raise ValueError(f"unsupported loaded network architecture for {trainer_name}: {type(network).__name__}")
+
+
+def _original_feature_stages(network, patch_size):
+    if len(patch_size) != 2:
+        raise ValueError("expected 2D patch size")
+    if len(network.encoder.strides) != len(network.encoder.stages):
+        raise ValueError("encoder strides/stages mismatch")
+    size = [int(v) for v in patch_size]
+    matches = []
+    for index, stride in enumerate(network.encoder.strides):
+        pair = (stride, stride) if isinstance(stride, int) else stride
+        if len(pair) != 2 or any(int(v) < 1 for v in pair):
+            raise ValueError("invalid encoder stride")
+        size = [int((v + int(st) - 1) // int(st)) for v, st in zip(size, pair)]
+        if size == [64, 64]:
+            matches.append(index)
+    if len(matches) != 1 or matches[0] == len(network.encoder.stages) - 1:
+        raise ValueError(f"expected one native 64x64 intermediate encoder stage; found {matches}")
+    return len(network.encoder.stages) - 1, matches[0]
 
 
 def _normalize_display(array):
@@ -466,7 +523,9 @@ def _normalize_native_channel(values):
     return (values - lo) / (hi - lo)
 
 
-def _architecture(ax, network, stage):
+def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3):
+    if trainer_name == ORIGINAL_TRAINER:
+        return _plain_unet_architecture(ax, network, stage, intermediate_stage)
     from matplotlib.patches import FancyBboxPatch
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
     encoder, decoder = network.encoder, network.decoder
@@ -545,6 +604,58 @@ def _architecture(ax, network, stage):
     arrow(.905, .475, .92, .475)
     ax.text(.71, .035, f"PPM scales {scales}; selected stages {chosen}. TopK10 / early stopping: training only.",
             ha="center", fontsize=8)
+
+
+def _plain_unet_architecture(ax, network, stage, intermediate_stage):
+    from matplotlib.patches import FancyBboxPatch
+    encoder, decoder = network.encoder, network.decoder
+    count = len(encoder.stages)
+    if stage != count - 1 or not 0 <= intermediate_stage < stage:
+        raise ValueError("invalid original U-Net feature stages")
+    ax.set_xlim(0, 1.31); ax.set_ylim(0, 1); ax.axis("off")
+    def box(x, y, width, label, color):
+        ax.add_patch(FancyBboxPatch((x, y), width, .055, boxstyle="round,pad=0.003",
+                                    facecolor=color, edgecolor="#31546a", linewidth=.8))
+        ax.text(x+width/2, y+.027, label, ha="center", va="center", fontsize=7)
+    def line(points, arrow=False):
+        for start, end in zip(points, points[1:]):
+            ax.plot((start[0], end[0]), (start[1], end[1]), color="#456879", lw=.9)
+        if arrow:
+            ax.annotate("", xy=points[-1], xytext=points[-2],
+                        arrowprops=dict(arrowstyle="->", lw=.9, color="#456879"))
+    ax.text(.16, .975, "ENCODER", ha="center", fontsize=11, weight="bold")
+    ax.text(.66, .975, "TRANSPOSE CONV / SKIP CONCAT / DECODER", ha="center", fontsize=11, weight="bold")
+    top, step = .86, .72 / max(count-1, 1)
+    ys = [top-i*step for i in range(count)]
+    for i, y in enumerate(ys):
+        mark = " | 64x64 capture" if i == intermediate_stage else " | final capture" if i == stage else ""
+        box(.025, y, .27, f"encoder {i}: {encoder.output_channels[i]} ch{mark}",
+            "#ffe7bd" if i in (stage, intermediate_stage) else "#e9f3fa")
+        if i:
+            line([(.16, ys[i-1]), (.16, y+.055)], True)
+    for j in range(count-1):
+        skip = count-2-j
+        y = ys[skip]
+        op = decoder.transpconvs[j]
+        box(.405, y, .19, f"transpose conv {j} k{tuple(op.kernel_size)} s{tuple(op.stride)}", "#dff4eb")
+        box(.695, y, .27, f"concat skip {skip} + conv {j}: {encoder.output_channels[skip]} ch", "#e9f3fa")
+        line([(.595, y+.027), (.695, y+.027)], True)
+        # The skip runs above the upsampler and enters the concat from above.
+        lane = y+.083
+        line([(.295, y+.027), (.33, y+.027), (.33, lane), (.83, lane), (.83, y+.055)], True)
+        if j == 0:
+            line([(.295, ys[-1]+.027), (.36, ys[-1]+.027), (.36, y+.027), (.405, y+.027)], True)
+        else:
+            prior = ys[skip+1]
+            line([(.965, prior+.027), (.985, prior+.027), (.985, y-.036),
+                  (.38, y-.036), (.38, y+.027), (.405, y+.027)], True)
+    head = decoder.seg_layers[-1]
+    box(1.03, ys[0], .11, f"seg_layers[-1]\n1x1, {head.out_channels} logits", "#ece6f8")
+    box(1.18, ys[0], .12, "inference main output", "#ece6f8")
+    line([(.965, ys[0]+.027), (1.03, ys[0]+.027)], True)
+    line([(1.14, ys[0]+.027), (1.18, ys[0]+.027)], True)
+    ax.text(.72, .025, "Deep supervision heads / TopK10 loss: training only (not shown)",
+            fontsize=8, ha="center")
 
 
 def _confusion_masks(gt, pred):
@@ -653,14 +764,14 @@ def _native_channel_figure(items, output, *, layer="native"):
         plt.close(fig)
 
 
-def _summary_figure(items, rows, network, stage, output):
+def _summary_figure(items, rows, network, stage, output, trainer_name=TRAINER, intermediate_stage=3, source_note=None):
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize
     fig = plt.figure(figsize=(30, 37))
     grid = fig.add_gridspec(8, 2, height_ratios=[8.2, .5, .5, .48, .55, 7.2, 7.2, 7.2],
                            hspace=.16, wspace=.04, left=.025, right=.99, bottom=.02, top=.985)
-    _architecture(fig.add_subplot(grid[0, :]), network, stage)
+    _architecture(fig.add_subplot(grid[0, :]), network, stage, trainer_name, intermediate_stage)
     legend_ax = fig.add_subplot(grid[1, :]); legend_ax.axis("off")
     legend_ax.legend(handles=_confusion_legend_handles(), loc="center", ncol=3, fontsize=10)
     cax = fig.add_subplot(grid[2, :])
@@ -668,7 +779,7 @@ def _summary_figure(items, rows, network, stage, output):
                        cax=cax, orientation="horizontal")
     bar.set_label("Feature magnitude display: per-slice 1st-99th percentile -> [0,1]; overlay alpha 0.48", fontsize=8)
     note = fig.add_subplot(grid[3, :]); note.axis("off")
-    note.text(.5, .5, "Diagnostic feature magnitude; colors are display-normalized and do not encode lesion probability or absolute cross-case intensity.",
+    note.text(.5, .5, source_note or "Diagnostic feature magnitude; colors are display-normalized and do not encode lesion probability or absolute cross-case intensity.",
               ha="center", va="center", fontsize=9)
     for col, title in enumerate(("HIGH DICE | 3 cases", "LOW DICE | 3 cases")):
         head = fig.add_subplot(grid[4, col])
@@ -684,6 +795,18 @@ def _summary_figure(items, rows, network, stage, output):
         plt.close(fig)
 
 
+def _source_statement(trainer_name, checkpoint_name, declaration):
+    if trainer_name == ORIGINAL_TRAINER:
+        if declaration is None:
+            return (f"Saved-prediction checkpoint provenance: UNKNOWN. Specified {checkpoint_name} "
+                    "extracts diagnostic features; historical prediction weights are unconfirmed.")
+        if not declaration.strip():
+            raise ValueError("user confirmation statement must be nonempty")
+        return ("Saved-prediction checkpoint provenance: USER CONFIRMED, not independently verified. "
+                f"Original user statement: {declaration}")
+    return f"Saved-prediction/checkpoint declaration (USER DECLARED, not independently verified): {declaration}"
+
+
 def create_report(info, predictor, declaration):
     import numpy as np
     import SimpleITK as sitk
@@ -693,7 +816,13 @@ def create_report(info, predictor, declaration):
 
     require_simpleitk_reader(info["plans"])
     high, low = select_cases(info["rows"])
-    stage = predictor.network.selected_feature_indices[-1]
+    trainer_name = info["model"].name.split("__")[0]
+    kind = _network_kind(predictor.network, trainer_name)
+    if kind == "plain_unet":
+        stage, intermediate_stage = _original_feature_stages(
+            predictor.network, predictor.configuration_manager.patch_size)
+    else:
+        stage, intermediate_stage = predictor.network.selected_feature_indices[-1], 3
     items = []
     for group, ids in (("High Dice", high), ("Low Dice", low)):
         for cid in ids:
@@ -706,7 +835,7 @@ def create_report(info, predictor, declaration):
             pred_array = sitk.GetArrayFromImage(pred) > 0
             slices = select_slices(gt_array)
             feature, provenance, native, intermediate_native = _diagnostic_feature(
-                info["images"][cid], predictor, stage, slices[0] if slices else None)
+                info["images"][cid], predictor, stage, slices[0] if slices else None, intermediate_stage)
             if feature.shape != image_array.shape:
                 raise ValueError(f"{cid}: inverse feature shape mismatch")
             panels = {index: (image_array[index].copy(), gt_array[index].copy(),
@@ -716,20 +845,29 @@ def create_report(info, predictor, declaration):
                               geometry={k: getattr(image, "Get"+k)() for k in
                                         ("Size", "Spacing", "Origin", "Direction")},
                               provenance=provenance))
+    source_note = (f"Diagnostic: {info['checkpoint'].name} features; saved prediction weights unknown."
+                   if kind == "plain_unet" and declaration is None else
+                   "Diagnostic features: specified checkpoint; saved prediction source USER CONFIRMED (user statement only)."
+                   if kind == "plain_unet" else None)
     _summary_figure(items, info["rows"], predictor.network, stage,
-                    info["output"] / "summary.png")
+                    info["output"] / "summary.png", trainer_name, intermediate_stage, source_note)
     _native_channel_figure(items, info["output"] / "feature_channels.png")
     _native_channel_figure(items, info["output"] / "feature_channels_64x64.png", layer="intermediate_native")
 
-    txt = ["Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report",
+    title = ("Dataset501 official nnU-Net 2D TopK10 PlainConvUNet: fold 0 single-fold validation report"
+             if kind == "plain_unet" else
+             "Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report")
+    source_line = _source_statement(trainer_name, info["checkpoint"].name, declaration)
+    txt = [title,
            "This is not five-fold OOF or a clinical conclusion.",
            f"Model directory: {info['model']}", f"Checkpoint: {info['checkpoint']}",
            f"Checkpoint SHA256: {_hash_file(info['checkpoint'])}",
            f"Full-set geometry verified: {info['geometry_count']} of {len(info['rows'])} metrics-covered cases (DWI, GT, saved prediction; size, spacing, origin, direction).",
            "Reader/axis contract: plans image_reader_writer=SimpleITKIO; 3D GetArrayFromImage z/y/x.",
-           f"Saved-prediction/checkpoint declaration (USER DECLARED, not independently verified): {declaration}",
+           source_line,
+           f"Historical saved-prediction TTA status (user supplied, not independently verified): {info.get('historical_tta', 'unknown')}; original statement above may contain details.",
            "Diagnostic features: freshly preprocessed raw DWI, no GT and no TTA; they are not saved prediction features or a replay.",
-           "Feature: mean(abs(channel)) at deepest selected encoder stage, bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
+           f"Feature: mean(abs(channel)) at final encoder stage {stage}; native 64x64 stage {intermediate_stage}; bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
            "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
            "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
            "Native-channel display: each channel at its actual native CxHxW independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
@@ -762,7 +900,9 @@ def main(argv=None):
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--check", action="store_true", help="metadata only; no model or real-image loading")
-    parser.add_argument("--prediction-checkpoint-declaration", help="explicit user provenance statement for saved masks")
+    parser.add_argument("--prediction-checkpoint-declaration", help="original user statement about saved-mask checkpoint; required for UPerNet")
+    parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicitly confirm original TopK10 saved masks used the specified checkpoint; requires original statement")
+    parser.add_argument("--historical-tta", choices=("unknown", "enabled", "disabled"), default="unknown", help="user-supplied historical prediction TTA status")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     args = parser.parse_args(argv)
     try:
@@ -772,8 +912,15 @@ def main(argv=None):
                               "cases": len(info["rows"]), "selected": select_cases(info["rows"]),
                               "checkpoint": str(info["checkpoint"]), "output": str(info["output"])}, indent=2))
             return 0
-        if not args.prediction_checkpoint_declaration:
-            raise ValueError("full report requires --prediction-checkpoint-declaration; metadata-only --check is available")
+        if args.confirm_prediction_checkpoint and not args.prediction_checkpoint_declaration:
+            raise ValueError("checkpoint confirmation requires original user statement")
+        if info["model"].name.startswith(ORIGINAL_TRAINER + "__") and bool(args.prediction_checkpoint_declaration) != args.confirm_prediction_checkpoint:
+            raise ValueError("original TopK10 user confirmation requires both --confirm-prediction-checkpoint and --prediction-checkpoint-declaration")
+        if args.historical_tta != "unknown" and not args.prediction_checkpoint_declaration:
+            raise ValueError("known historical TTA requires original user statement")
+        info["historical_tta"] = args.historical_tta
+        if info["model"].name.startswith(TRAINER + "__") and not args.prediction_checkpoint_declaration:
+            raise ValueError("UPerNet full report requires --prediction-checkpoint-declaration; metadata-only --check is available")
         require_simpleitk_reader(info["plans"])
         info["geometry_count"] = verify_full_geometry(info)
         predictor = _predictor(info, args)
