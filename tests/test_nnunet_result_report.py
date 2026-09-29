@@ -120,11 +120,23 @@ def test_tiny_hook_two_windows_and_cleanup():
     class Net(torch.nn.Module):
         def __init__(self):
             super().__init__()
+            class Intermediate(torch.nn.Module):
+                def forward(self, x):
+                    return torch.nn.functional.interpolate(x.repeat(1, 16, 1, 1),
+                        size=(64, 64), mode="nearest")
             self.encoder = torch.nn.Module()
-            self.encoder.stages = torch.nn.ModuleList([torch.nn.Identity()])
+            self.encoder.stages = torch.nn.ModuleList([
+                Intermediate(), torch.nn.Identity()])
+            self.encoder.output_channels = (16, 1)
             self.fail = False
+            self.duplicate = False
+            self.missing = False
         def forward(self, x):
-            value = self.encoder.stages[0](x)
+            if not self.missing:
+                self.encoder.stages[0](x)
+                if self.duplicate:
+                    self.encoder.stages[0](x)
+            value = self.encoder.stages[1](x)
             if self.fail:
                 raise RuntimeError("synthetic forward failure")
             return value
@@ -136,10 +148,16 @@ def test_tiny_hook_two_windows_and_cleanup():
         _internal_get_sliding_window_slicers=lambda shape: [
             (slice(None), 0, slice(0, 2), slice(0, 2)),
             (slice(None), 0, slice(0, 2), slice(2, 4))])
-    mapped, provenance, native = _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 0, 0)
+    mapped, provenance, native, intermediate = _diagnostic_feature(
+        Path("synthetic.nii.gz"), predictor, 1, 0, intermediate_stage=0)
     assert mapped.shape == (1, 2, 4)
     assert np.allclose(mapped[0], [[1, 2, 3, 4], [5, 6, 7, 8]])
-    assert provenance["module"] == "encoder.stages.0"
+    assert provenance["module"] == "encoder.stages.1"
+    assert provenance["intermediate_module"] == "encoder.stages.0"
+    assert intermediate["feature_shape"] == [1, 16, 64, 64]
+    assert intermediate["channel_ids"] == _channel_ids(16)
+    assert intermediate["window_index"] == native["window_index"]
+    assert intermediate["window_yx_padded"] == native["window_yx_padded"]
     assert provenance["windows"] == 2
     assert provenance["covered_preprocessed_voxels"] == 8
     assert native["channel_ids"] == [0]
@@ -147,10 +165,44 @@ def test_tiny_hook_two_windows_and_cleanup():
     assert native["window_index"] == 1
     assert native["window_yx_preprocessed"] == [[0, 2], [2, 4]]
     assert not network.encoder.stages[0]._forward_hooks
+    assert not network.encoder.stages[1]._forward_hooks
     network.fail = True
     with pytest.raises(RuntimeError, match="synthetic"):
-        _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 0)
+        _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 1, intermediate_stage=0)
     assert not network.encoder.stages[0]._forward_hooks
+    assert not network.encoder.stages[1]._forward_hooks
+    network.fail = False
+    original_intermediate = network.encoder.stages[0]
+    for shape in ((2, 16, 64, 64), (1, 8, 64, 64)):
+        class BadIntermediate(torch.nn.Module):
+            def forward(self, x):
+                return torch.zeros(shape)
+        network.encoder.stages[0] = BadIntermediate()
+        with pytest.raises(ValueError, match=r"encoder\.stages\.0.*window 0.*expected.*got.*"):
+            _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 1, 0, intermediate_stage=0)
+        assert not network.encoder.stages[0]._forward_hooks
+        assert not network.encoder.stages[1]._forward_hooks
+    network.encoder.stages[0] = original_intermediate
+    for mode in ("duplicate", "missing"):
+        setattr(network, mode, True)
+        with pytest.raises(ValueError, match=r"encoder\.stages\.0.*window 0.*expected.*got.*"):
+            _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 1, 0, intermediate_stage=0)
+        setattr(network, mode, False)
+        assert not network.encoder.stages[0]._forward_hooks
+        assert not network.encoder.stages[1]._forward_hooks
+    class NotTensor(torch.nn.Module):
+        def forward(self, x):
+            return (x,)
+    network.encoder.stages[0] = NotTensor()
+    with pytest.raises(ValueError, match=r"encoder\.stages\.0 window 0: expected .*got non-Tensor tuple"):
+        _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 1, 0, intermediate_stage=0)
+    assert not network.encoder.stages[0]._forward_hooks
+    assert not network.encoder.stages[1]._forward_hooks
+    network.encoder.stages[0] = torch.nn.Identity()
+    with pytest.raises(ValueError, match=r"encoder\.stages\.0 window 0: expected .*H=W=64, got \(1, 1, 2, 2\)"):
+        _diagnostic_feature(Path("synthetic.nii.gz"), predictor, 1, 0, intermediate_stage=0)
+    assert not network.encoder.stages[0]._forward_hooks
+    assert not network.encoder.stages[1]._forward_hooks
 
 
 def test_architecture_png_smoke(tmp_path):
@@ -162,7 +214,7 @@ def test_architecture_png_smoke(tmp_path):
     net = SimpleNamespace(encoder=SimpleNamespace(stages=[1, 2, 3, 4],
                          output_channels=(32, 64, 128, 256)),
                          selected_feature_indices=(0, 1, 2, 3), decoder=decoder)
-    fig, ax = plt.subplots(figsize=(14, 2))
+    fig, ax = plt.subplots(figsize=(20, 8))
     _architecture(ax, net, 3)
     target = tmp_path / "architecture.png"
     fig.savefig(target)
@@ -184,7 +236,7 @@ def test_native_channel_display_and_shared_colorbar(tmp_path, monkeypatch):
             assert image.norm.vmin == 0 and image.norm.vmax == 1
             assert image.get_cmap().name == "coolwarm"
             assert image.get_interpolation() == "nearest"
-        assert any(ax.get_xlabel() == "Relative activation within each channel"
+        assert any(ax.get_xlabel().startswith("Relative activation within each channel")
                    for ax in self.axes)
         captured.extend(images)
         return original(self, path, *args, **kwargs)
@@ -200,6 +252,20 @@ def test_native_channel_display_and_shared_colorbar(tmp_path, monkeypatch):
     assert len(captured) == 2
 
 
+def test_intermediate_channel_figure(tmp_path):
+    pytest.importorskip("matplotlib").use("Agg")
+    item = {"cid": "synthetic", "intermediate_native": {
+        "channel_ids": _channel_ids(16),
+        "channels": np.zeros((8, 64, 64), dtype=np.float32),
+        "feature_shape": [1, 16, 64, 64], "stage": 3,
+        "module": "encoder.stages.3", "original_slice": 4,
+        "preprocessed_slice": 4, "window_index": 2,
+        "window_yx_padded": [[0, 512], [0, 512]]}}
+    target = tmp_path / "feature_channels_64x64.png"
+    _native_channel_figure([item], target, layer="intermediate_native")
+    assert target.stat().st_size > 1000
+
+
 def test_summary_has_separate_top_regions(tmp_path, monkeypatch):
     matplotlib = pytest.importorskip("matplotlib")
     matplotlib.use("Agg")
@@ -210,6 +276,7 @@ def test_summary_has_separate_top_regions(tmp_path, monkeypatch):
                           output_channels=(32, 64, 128, 256, 512, 512, 512, 512)),
                           selected_feature_indices=(1, 3, 5, 7), decoder=decoder)
     seen = []
+    original_savefig = matplotlib.figure.Figure.savefig
     def inspect(fig, output, **kwargs):
         top = fig.axes[:6]
         assert len(top) == 6
@@ -225,6 +292,7 @@ def test_summary_has_separate_top_regions(tmp_path, monkeypatch):
         assert any("P1" in label for label in labels)
         assert any("P0" in label for label in labels)
         seen.append(True)
+        return original_savefig(fig, output, **kwargs)
     monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
     raw = np.arange(16, dtype=np.float32).reshape(4, 4)
     zero = np.zeros((4, 4), dtype=bool)
@@ -308,7 +376,7 @@ def test_full_geometry_rejects_seventh_case(tmp_path):
         verify_full_geometry(info)
 
 
-@pytest.mark.parametrize("missing_channel", [False, True])
+@pytest.mark.parametrize("missing_channel", [None, "feature_channels.png", "feature_channels_64x64.png"])
 def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, missing_channel):
     import generate_nnunet_result_report as report
     model = tmp_path / "Dataset501_StrokeLesion" / (
@@ -340,17 +408,20 @@ def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, miss
         raise RuntimeError("injected write failure")
     def omit_channel_png(info, predictor, declaration):
         (info["output"] / "summary.png").write_bytes(b"synthetic")
+        for name in ("feature_channels.png", "feature_channels_64x64.png"):
+            if name != missing_channel:
+                (info["output"] / name).write_bytes(b"synthetic")
         (info["output"] / "report.txt").write_text("synthetic", encoding="utf-8")
     monkeypatch.setattr(report, "create_report",
-                        omit_channel_png if missing_channel else fail_after_png)
+                        omit_channel_png if missing_channel is not None else fail_after_png)
     target = tmp_path / "new-report"
-    with pytest.raises(SystemExit if missing_channel else RuntimeError,
-                       match=None if missing_channel else "injected write failure"):
+    with pytest.raises(SystemExit if missing_channel is not None else RuntimeError,
+                       match=None if missing_channel is not None else "injected write failure"):
         main(["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
               "--labels-dir", str(labels), "--checkpoint", str(checkpoint),
               "--output-dir", str(target),
               "--prediction-checkpoint-declaration", "synthetic declaration"])
-    if missing_channel:
+    if missing_channel is not None:
         assert "report output incomplete" in capsys.readouterr().err
     assert not target.exists()
     assert not list(tmp_path.glob(".new-report-*"))

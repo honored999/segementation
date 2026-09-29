@@ -27,8 +27,8 @@ The script labels this statement as user-declared provenance; it cannot prove
 the saved mask was produced by that checkpoint. Without it, a full report is
 refused. Use a fresh output directory: existing targets and overlaps with any
 source are refused. The output parent must exist. Complete output appears only
-after all three files are written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
-The outputs are `summary.png`, `feature_channels.png`, and UTF-8 `report.txt`. Full runs verify image,
+after all four files are written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
+The outputs are `summary.png`, `feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`. Full runs verify image,
 GT and prediction headers for every metrics-covered case. The TXT records the
 count. Only exact `image_reader_writer=SimpleITKIO` plans are supported.
 
@@ -76,12 +76,13 @@ The TXT records window index, preprocessed bounds, actual sliding-window count,
 feature shape and channel IDs. Nonidentity slice-axis transpose or slice-axis
 resampling is rejected for this localization rather than silently mismapped.
 
-Each native 4×4 channel is displayed using its own exact minimum and maximum:
+Each native channel is displayed using its own exact minimum and maximum:
 `(value - min) / (max - min)` in `[0,1]`. A constant channel displays uniformly
 at zero. All channels share the same coolwarm color scale and colorbar; blue/red
 indicate only relative low/high values, not negative/positive values. Native
 colors cannot compare absolute activation between channels or cases and are not
-lesion probabilities. This differs from the summary's DWI and feature-magnitude
+lesion probabilities. Columns across the two layers have no guaranteed shared
+meaning. This differs from the summary's DWI and feature-magnitude
 panels, which each use per-slice 1st–99th percentile normalization to `[0,1]`
 and display constant maps at zero.
 
@@ -93,5 +94,12 @@ verify selected stage channels, relative sizes, PPM scales, FPN width and output
 shape. Compare one case's original slice, crop/transpose, preprocessing window
 bounds and native-channel window index. Check DWI, GT, saved prediction and
 feature spatial alignment, plus the saved prediction's separate provenance.
-The existing report directory remains read-only. These server steps have not
+Use a fresh independent V4 output directory. `feature_channels_64x64.png` shows
+native `encoder.stages.3` channels from the same case, original/preprocessed
+slice, and diagnostic window as `feature_channels.png`. The script verifies the
+actual intermediate BCHW shape is 64x64 during the same no-TTA forward and
+refuses other native sizes. The TXT records both modules, actual sizes, fixed
+channel IDs and common window provenance. Check these facts on the server;
+local synthetic tests do not establish the real intermediate shape. The
+existing V3 report directory remains read-only. These server steps have not
 been run locally.

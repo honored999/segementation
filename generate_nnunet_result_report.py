@@ -253,7 +253,7 @@ def _channel_ids(count, limit=8):
     return np.linspace(0, count-1, min(limit, count), dtype=int).tolist()
 
 
-def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
+def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None, intermediate_stage=3):
     """One GT-free diagnostic pass; native channels come from one local window."""
     import numpy as np
     import torch
@@ -270,12 +270,37 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
     if selected_slice is not None:
         target_z = _native_slice_index(selected_slice, properties, predictor.plans_manager,
                                        data.shape[1:])
-    module = predictor.network.encoder.stages[stage]
-    captured = []
-    def hook(_module, _inputs, output):
-        captured.append(output.detach())
-    handle = module.register_forward_hook(hook)
+    stages = predictor.network.encoder.stages
+    if intermediate_stage == stage or intermediate_stage < 0 or intermediate_stage >= len(stages):
+        raise ValueError(f"intermediate encoder stage {intermediate_stage} unavailable or equals final stage {stage}")
+    captured = {}
+    handles = []
+    window_index = None
+    channels = predictor.network.encoder.output_channels
+    def shape_of(value):
+        return tuple(value.shape) if isinstance(value, torch.Tensor) else f"non-Tensor {type(value).__name__}"
+
+    def expected(index):
+        size = ", H=W=64" if index == intermediate_stage else ", H>0, W>0"
+        return f"Tensor BCHW with B=1, C={channels[index]}{size}"
+
+    def check_feature(index, value):
+        shape = shape_of(value)
+        if (not isinstance(value, torch.Tensor) or value.ndim != 4
+                or value.shape[0] != 1 or value.shape[1] != channels[index]
+                or value.shape[2] < 1 or value.shape[3] < 1
+                or (index == intermediate_stage and tuple(value.shape[-2:]) != (64, 64))):
+            raise ValueError(f"encoder.stages.{index} window {window_index}: expected {expected(index)}, got {shape}")
+
+    def make_hook(index):
+        def hook(_module, _inputs, output):
+            if index in captured:
+                raise ValueError(f"encoder.stages.{index} window {window_index}: expected one output {expected(index)}, got duplicate {shape_of(output)}; first {shape_of(captured[index])}")
+            captured[index] = output.detach() if isinstance(output, torch.Tensor) else output
+        return hook
     try:
+        for index in (intermediate_stage, stage):
+            handles.append(stages[index].register_forward_hook(make_hook(index)))
         predictor.network.eval().to(predictor.device)
         padded, undo = pad_nd_image(torch.from_numpy(np.ascontiguousarray(data)),
                                     predictor.configuration_manager.patch_size,
@@ -289,6 +314,8 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
         shapes = set()
         window_count = 0
         native = None
+        intermediate_native = None
+        intermediate_shapes = set()
         # undo indexes the padded tensor; its start places the original preprocessed data.
         offset_z = int(undo[1].start or 0)
         offset_y = int(undo[2].start or 0)
@@ -304,9 +331,13 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
                 patch = padded[sl][None].to(predictor.device)
                 captured.clear()
                 predictor.network(patch)
-                if len(captured) != 1:
-                    raise ValueError("deepest encoder stage hook did not fire exactly once")
-                feature = captured.pop()
+                for index in (intermediate_stage, stage):
+                    if index not in captured:
+                        raise ValueError(f"encoder.stages.{index} window {window_index}: expected one output {expected(index)}, got missing")
+                    check_feature(index, captured[index])
+                intermediate = captured.pop(intermediate_stage)
+                feature = captured.pop(stage)
+                intermediate_shapes.add(tuple(intermediate.shape))
                 shapes.add(tuple(feature.shape))
                 if (native is None and target_padded_z == sl[1]
                         and sl[2].start <= center_y < sl[2].stop
@@ -324,12 +355,21 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
                                   window_yx_padded=[
                                       [int(sl[2].start), int(sl[2].stop)],
                                       [int(sl[3].start), int(sl[3].stop)]])
+                    intermediate_ids = _channel_ids(int(intermediate.shape[1]))
+                    intermediate_native = {**{k: v for k, v in native.items() if k != "channels"},
+                        "channels": intermediate[0, intermediate_ids].float().cpu().numpy().copy(),
+                        "channel_ids": intermediate_ids,
+                        "feature_shape": list(intermediate.shape),
+                        "stage": intermediate_stage,
+                        "module": f"encoder.stages.{intermediate_stage}"}
+                    native["stage"] = stage
+                    native["module"] = f"encoder.stages.{stage}"
                 intensity = feature.abs().mean(dim=1, keepdim=True)
                 intensity = F.interpolate(intensity, size=tuple(predictor.configuration_manager.patch_size),
                                           mode="bilinear", align_corners=False)[0, 0].float().cpu().numpy()
                 _add_window(total[sl[1]], weights[sl[1]], intensity, gaussian, sl[2:])
-                del feature, intensity, patch
-        if target_z is not None and native is None:
+                del intermediate, feature, intensity, patch
+        if target_z is not None and (native is None or intermediate_native is None):
             raise ValueError("no diagnostic window contains selected preprocessed slice center")
         if np.any(weights <= 0):
             raise ValueError("uncovered preprocessed feature pixel")
@@ -342,13 +382,18 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None):
                           feature_shapes=sorted(shapes), windows=window_count,
                           covered_preprocessed_voxels=int(np.count_nonzero(weights)),
                           native_window={k: v for k, v in native.items() if k != "channels"} if native else None,
+                          intermediate_stage=intermediate_stage,
+                          intermediate_module=f"encoder.stages.{intermediate_stage}",
+                          intermediate_feature_shapes=sorted(intermediate_shapes),
+                          intermediate_native_window={k: v for k, v in intermediate_native.items() if k != "channels"} if intermediate_native else None,
                           transpose_forward=list(predictor.plans_manager.transpose_forward),
                           transpose_backward=list(predictor.plans_manager.transpose_backward),
                           preprocessing_properties={k: properties[k] for k in
                               ("shape_before_cropping", "shape_after_cropping_and_before_resampling", "bbox_used_for_cropping")})
-        return original, provenance, native
+        return original, provenance, native, intermediate_native
     finally:
-        handle.remove()
+        for handle in handles:
+            handle.remove()
         captured.clear()
 
 
@@ -445,10 +490,10 @@ def _architecture(ax, network, stage):
         for start, end in zip(points, points[1:]):
             ax.plot((start[0], end[0]), (start[1], end[1]), color=color, lw=1)
         arrow(*points[-2], *points[-1], color=color)
-    ax.text(.11, .97, "ENCODER", ha="center", fontsize=11, weight="bold")
-    ax.text(.59, .97, "DECODER: PPM + FPN", ha="center", fontsize=11, weight="bold")
-    ax.text(.93, .97, "OUTPUT", ha="center", fontsize=11, weight="bold")
-    box(.025, .88, .17, .055, "DWI input", "#f5f5f5")
+    ax.text(.10, .97, "ENCODER", ha="center", fontsize=11, weight="bold")
+    ax.text(.51, .97, "DECODER: PPM + FPN", ha="center", fontsize=11, weight="bold")
+    ax.text(.87, .97, "FUSION / OUTPUT", ha="center", fontsize=11, weight="bold")
+    box(.015, .88, .18, .055, "DWI input", "#f5f5f5")
     cumulative = [1, 1]
     stage_y = {}
     for i, count in enumerate(channels):
@@ -458,50 +503,47 @@ def _architecture(ax, network, stage):
             resolution = f"1/{cumulative[0]} x 1/{cumulative[1]}"
         else:
             resolution = "relative size unknown"
-        y = .77 - i*.088
+        y = .78 - i*.085
         stage_y[i] = y+.03
         label = f"stage {i}  |  {count} ch  |  {resolution}"
         if i == stage:
             label += "\nfinal encoder / pre-decoder"
-        box(.018, y, .195, .063, label, "#ffe7bd" if i == stage else "#e9f3fa", 7)
-        arrow(.115, .88 if i == 0 else stage_y[i-1]-.03, .115, y+.064)
-    # The four selected branches feed one PPM and three lateral projections.
-    branch_y = [.76, .63, .50, .37]
+        box(.01, y, .20, .064, label, "#ffe7bd" if i == stage else "#e9f3fa", 7)
+        arrow(.11, .88 if i == 0 else stage_y[i-1]-.03, .11, y+.065)
+    # Four scale rows. Each Pj exposes separate top-down and fusion ports.
+    levels = [.78, .61, .44, .27]
     for j, index in enumerate(chosen):
-        y = branch_y[j]
-        arrow(.213, stage_y[index], .265, y+.025)
-        label = f"stage {index} -> {'PPM input' if j == 3 else 'lateral 1x1'}"
-        box(.265, y, .14, .05, label, "#dff4eb", 7)
-    ppm_y = .24
-    for j, scale in enumerate(scales):
-        x = .275+j*.085
-        box(x, ppm_y, .07, .075, f"pool {scale}x{scale}\n1x1 -> {width}ch", "#fcebdc", 6.5)
-        route([(.335, .37), (.335, .335+j*.009), (x+.035, .335+j*.009),
-               (x+.035, ppm_y+.075)])
-        route([(x+.035, ppm_y), (x+.035, .205-j*.025), (.54, .205-j*.025),
-               (.54, .177-j*.022)])
-    box(.54, .11, .09, .085, "resize + concat\nwith deepest", "#fcebdc", 6.5)
-    route([(.405, .395), (.525, .395), (.525, .215), (.585, .215), (.585, .195)])
-    box(.66, .11, .11, .085, f"3x3 bottleneck\n{width}ch = P3", "#fcebdc", 7)
-    arrow(.63, .152, .66, .152)
-    route([(.715, .195), (.715, .225), (.625, .225), (.625, .475), (.58, .475), (.58, .50)])
-    for j in range(3):
-        y = branch_y[j]
-        box(.48, y, .13, .05, f"add + 3x3 refine\nP{j} = {width}ch", "#dff4eb", 7)
-        arrow(.405, y+.025, .48, y+.025)
-        if j < 2:
-            route([(.61, branch_y[j+1]+.025), (.635+j*.01, branch_y[j+1]+.025),
-                   (.635+j*.01, y+.025), (.61, y+.025)])
-    box(.66, .38, .13, .07, f"FPN: 4 scales upsample\nconcat + 3x3 fusion\n{width}ch", "#dff4eb", 7)
-    for j in range(3):
-        route([(.61, branch_y[j]+.025), (.65+j*.004, branch_y[j]+.025),
-               (.65+j*.004, .44-j*.02), (.66, .44-j*.02)])
-    route([(.77, .152), (.805, .152), (.805, .35), (.725, .35), (.725, .38)])
-    box(.82, .40, .075, .05, f"1x1 classifier\n{decoder.classifier.out_channels} logits", "#ece6f8", 7)
-    arrow(.79, .425, .82, .425)
-    box(.91, .39, .075, .07, "bilinear upsample\nto input HxW", "#ece6f8", 7)
-    arrow(.895, .425, .91, .425)
-    ax.text(.51, .055, f"PPM scales {scales}; selected stages {chosen}. TopK10 / early stopping: training only.",
+        y = levels[j]
+        arrow(.21, stage_y[index], .27, y+.025)
+        if j < 3:
+            box(.27, y, .12, .05, f"lateral {j}: 1x1", "#dff4eb", 7)
+            box(.47, y, .14, .05, f"upsample + add\n3x3 refine = P{j}", "#dff4eb", 7)
+            arrow(.39, y+.025, .47, y+.025)
+        else:
+            box(.27, y, .12, .05, "deepest", "#fcebdc", 7)
+            box(.47, y, .14, .05, f"concat + 3x3\nbottleneck = P3", "#fcebdc", 7)
+        # Refined pyramid tensor travels to the next adjacent higher scale.
+        if j > 0:
+            route([(.54, y+.05), (.54, levels[j-1])])
+    # PPM remains local to P3; three branches and the identity input meet at concat.
+    for k, scale in enumerate(scales):
+        x = .30+k*.055
+        box(x, .135, .05, .058, f"pool {scale}²\n1x1", "#fcebdc", 6)
+        route([(.33, .27), (.33, .215), (x+.025, .215), (x+.025, .193)])
+        lane_y = .07 + k*.015
+        port_x = .56 - k*.04
+        route([(x+.025, .135), (x+.025, lane_y), (port_x, lane_y), (port_x, .27)])
+    route([(.39, .295), (.47, .295)])
+    ax.text(.40, .045, "PPM branches resize to deepest before concat", fontsize=7, ha="center")
+    # Dedicated fusion ports keep each scale visible; no shared bus before concat.
+    box(.69, .43, .13, .09, f"resize P0..P3 to P0\nconcat + 3x3 fusion\n{width} ch", "#dff4eb", 7)
+    for j, y in enumerate(levels):
+        route([(.61, y+.025), (.64+j*.012, y+.025), (.64+j*.012, .50-j*.018), (.69, .50-j*.018)])
+    box(.84, .45, .065, .05, f"1x1 classifier\n{decoder.classifier.out_channels} logits", "#ece6f8", 7)
+    arrow(.82, .475, .84, .475)
+    box(.92, .44, .07, .07, "bilinear upsample\nto input HxW", "#ece6f8", 7)
+    arrow(.905, .475, .92, .475)
+    ax.text(.71, .035, f"PPM scales {scales}; selected stages {chosen}. TopK10 / early stopping: training only.",
             ha="center", fontsize=8)
 
 
@@ -572,20 +614,22 @@ def _draw_case_panels(fig, subgrid, item, rows):
                               fontsize=8)
 
 
-def _native_channel_figure(items, output):
+def _native_channel_figure(items, output, *, layer="native"):
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize
-    fig = plt.figure(figsize=(16, 2.1*len(items)+1.1))
+    fig = plt.figure(figsize=(18, 2.3*len(items)+1.6))
     grid = fig.add_gridspec(len(items)+2, 8, height_ratios=[.35]+[1]*len(items)+[.4],
-                            left=.06, right=.98, top=.96, bottom=.04, hspace=.48, wspace=.16)
+                            left=.06, right=.98, top=.96, bottom=.13, hspace=.48, wspace=.16)
     title = fig.add_subplot(grid[0, :]); title.axis("off")
-    title.text(.5, .5, "Native final encoder channels | one local preprocessed window per case | nearest pixel display",
+    heading = ("Intermediate encoder features" if layer == "intermediate_native"
+               else "Final encoder / pre-decoder features")
+    title.text(.5, .5, f"{heading} | native channels | shared local window | nearest",
                ha="center", va="center", fontsize=12)
     norm = Normalize(0, 1)
     cmap = "coolwarm"
     for row, item in enumerate(items):
-        native = item["native"]
+        native = item[layer]
         for col in range(8):
             ax = fig.add_subplot(grid[row+1, col])
             ax.set_xticks([]); ax.set_yticks([])
@@ -595,14 +639,14 @@ def _native_channel_figure(items, output):
             values = native["channels"][col]
             ax.imshow(_normalize_native_channel(values), cmap=cmap, norm=norm,
                       interpolation="nearest")
-            ax.set_title(f"ch {native['channel_ids'][col]} | {values.shape[0]}x{values.shape[1]}",
+            ax.set_title(f"stage {native.get('stage', '?')} | ch {native['channel_ids'][col]}\n{native.get('module', 'encoder stage')} | {native['feature_shape'][1] if 'feature_shape' in native else len(native['channel_ids'])}x{values.shape[0]}x{values.shape[1]}",
                          fontsize=8)
             if col == 0:
-                ax.set_ylabel(f"{item['cid']}\nslice {native['original_slice']}\nwindow {native['window_index']}",
+                ax.set_ylabel(f"{item['cid']}\noriginal slice {native['original_slice']}\npreprocessed slice {native.get('preprocessed_slice', '?')}\nwindow {native['window_index']}\npadded y/x {native.get('window_yx_padded', '?')}",
                               fontsize=8)
     cax = fig.add_subplot(grid[-1, 2:6])
     bar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation="horizontal")
-    bar.set_label("Relative activation within each channel", fontsize=9)
+    bar.set_label("Relative activation within each channel [0,1]; not lesion probability or absolute cross-channel/case intensity", fontsize=9)
     try:
         fig.savefig(output, dpi=140)
     finally:
@@ -661,20 +705,21 @@ def create_report(info, predictor, declaration):
             gt_array = sitk.GetArrayFromImage(gt) > 0
             pred_array = sitk.GetArrayFromImage(pred) > 0
             slices = select_slices(gt_array)
-            feature, provenance, native = _diagnostic_feature(
+            feature, provenance, native, intermediate_native = _diagnostic_feature(
                 info["images"][cid], predictor, stage, slices[0] if slices else None)
             if feature.shape != image_array.shape:
                 raise ValueError(f"{cid}: inverse feature shape mismatch")
             panels = {index: (image_array[index].copy(), gt_array[index].copy(),
                               pred_array[index].copy(), feature[index].copy()) for index in slices}
             items.append(dict(group=group, cid=cid, panels=panels, slices=slices,
-                              native=native,
+                              native=native, intermediate_native=intermediate_native,
                               geometry={k: getattr(image, "Get"+k)() for k in
                                         ("Size", "Spacing", "Origin", "Direction")},
                               provenance=provenance))
     _summary_figure(items, info["rows"], predictor.network, stage,
                     info["output"] / "summary.png")
     _native_channel_figure(items, info["output"] / "feature_channels.png")
+    _native_channel_figure(items, info["output"] / "feature_channels_64x64.png", layer="intermediate_native")
 
     txt = ["Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report",
            "This is not five-fold OOF or a clinical conclusion.",
@@ -685,9 +730,9 @@ def create_report(info, predictor, declaration):
            f"Saved-prediction/checkpoint declaration (USER DECLARED, not independently verified): {declaration}",
            "Diagnostic features: freshly preprocessed raw DWI, no GT and no TTA; they are not saved prediction features or a replay.",
            "Feature: mean(abs(channel)) at deepest selected encoder stage, bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
-           "Native channels: fixed uniformly spaced IDs from the final encoder feature; one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities.",
+           "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
            "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
-           "Native-channel display: each 4x4 channel independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
+           "Native-channel display: each channel at its actual native CxHxW independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
            "Original-space array axis 0, zero-based index; no anatomical plane claim.",
            "Selection: full-case Dice descending, case_id tie break, top 3; among remaining, Dice ascending, case_id tie break, bottom 3; GT area descending, index tie break, max 3 positive slices.",
            f"Metrics source: {info['metrics']}", "Full validation set summary (source JSON, including units/aggregation/valid_cases/F2):",
@@ -741,7 +786,7 @@ def main(argv=None):
             work.mkdir()
             staged_info = dict(info, output=work)
             create_report(staged_info, predictor, args.prediction_checkpoint_declaration)
-            if not all((work / name).is_file() for name in ("summary.png", "feature_channels.png", "report.txt")):
+            if not all((work / name).is_file() for name in ("summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt")):
                 raise ValueError("report output incomplete")
             protected_output(output, (info["model"], *info["images"].values(),
                              *info["labels"].values(), *info["predictions"].values(),
@@ -749,7 +794,7 @@ def main(argv=None):
             os.rename(work, output)
         finally:
             shutil.rmtree(staging)
-        print(f"Wrote {output / 'summary.png'}, {output / 'feature_channels.png'} and {output / 'report.txt'}")
+        print(f"Wrote {output / 'summary.png'}, {output / 'feature_channels.png'}, {output / 'feature_channels_64x64.png'} and {output / 'report.txt'}")
         return 0
     except (ValueError, FileNotFoundError, KeyError) as error:
         parser.error(str(error))
