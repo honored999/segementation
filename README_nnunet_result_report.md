@@ -27,8 +27,8 @@ The script labels this statement as user-declared provenance; it cannot prove
 the saved mask was produced by that checkpoint. Without it, a full report is
 refused. Use a fresh output directory: existing targets and overlaps with any
 source are refused. The output parent must exist. Complete output appears only
-after all four files are written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
-The outputs are `summary.png`, `feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`. Full runs verify image,
+after every mode-specific file is written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
+UPerNet outputs are `summary.png`, `feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`. Full runs verify image,
 GT and prediction headers for every metrics-covered case. The TXT records the
 count. Only exact `image_reader_writer=SimpleITKIO` plans are supported.
 
@@ -127,7 +127,7 @@ already exists:
 conda activate nnunet5090
 set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
 set MODEL=C:\lijialin\models3d\nnUNet\nnUNet_results\Dataset501_StrokeLesion\nnUNetTrainerTopK10__nnUNetPlans__2d
-python generate_nnunet_result_report.py --model-dir "%MODEL%" --fold 0 --images-dir "<ACTUAL_DWI_IMAGES_DIR>" --labels-dir "<ACTUAL_GT_LABELS_DIR>" --prediction-dir "%MODEL%\fold_0\validation" --metrics-dir "%MODEL%\fold_0\multi_metric_evaluation" --checkpoint "%MODEL%\fold_0\checkpoint_final.pth" --output-dir "<NEW_INDEPENDENT_PARENT>\nnunet_topk10_fold0_report_v1" --check
+python generate_nnunet_result_report.py --model-dir "%MODEL%" --fold 0 --images-dir "<ACTUAL_DWI_IMAGES_DIR>" --labels-dir "<ACTUAL_GT_LABELS_DIR>" --prediction-dir "%MODEL%\fold_0\validation" --metrics-dir "%MODEL%\fold_0\multi_metric_evaluation" --checkpoint "%MODEL%\fold_0\checkpoint_final.pth" --output-dir "<NEW_INDEPENDENT_PARENT>\nnunet_topk10_fold0_report_split_arch" --check
 ```
 
 After metadata-only `--check`, run the same command without `--check` on the
@@ -138,6 +138,16 @@ architectures. The native 64x64 encoder stage is derived from patch size and
 strides and confirmed in the actual no-TTA hook output; no resizing substitutes
 for a missing stage. Training deep supervision is disabled by nnU-Net's predictor
 for the inference main output, while checkpoint head parameters remain loaded.
+
+In original TopK10 mode, `summary.png` contains the six case comparisons,
+legend, feature scale and provenance note. `architecture_overview.png` shows
+the module-level eight-stage/seven-step flow and both feature capture positions.
+`architecture_detail.png` separates encoder stages, decoder operations, and
+training versus inference heads into numbered panels. The architecture figures
+read stage channels, strides, patch size and output classes from the restored
+network. Both new PNGs are required for atomic delivery alongside
+`feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`.
+UPerNet report layout and its four-file delivery remain unchanged.
 
 **SERVER VALIDATION PENDING:** actual checkpoint/network compatibility, native
 64x64 stage, geometry and feature alignment, report presentation, and saved

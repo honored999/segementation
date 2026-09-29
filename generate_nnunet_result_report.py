@@ -523,9 +523,12 @@ def _normalize_native_channel(values):
     return (values - lo) / (hi - lo)
 
 
-def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3):
+def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3, patch_size=None):
     if trainer_name == ORIGINAL_TRAINER:
-        return _plain_unet_architecture(ax, network, stage, intermediate_stage)
+        if patch_size is None:
+            raise ValueError("original architecture overview requires patch size")
+        from nnunet_report_architecture import draw_overview
+        return draw_overview(ax, network, patch_size, stage, intermediate_stage)
     from matplotlib.patches import FancyBboxPatch
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
     encoder, decoder = network.encoder, network.decoder
@@ -606,56 +609,21 @@ def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3
             ha="center", fontsize=8)
 
 
-def _plain_unet_architecture(ax, network, stage, intermediate_stage):
-    from matplotlib.patches import FancyBboxPatch
-    encoder, decoder = network.encoder, network.decoder
-    count = len(encoder.stages)
-    if stage != count - 1 or not 0 <= intermediate_stage < stage:
-        raise ValueError("invalid original U-Net feature stages")
-    ax.set_xlim(0, 1.31); ax.set_ylim(0, 1); ax.axis("off")
-    def box(x, y, width, label, color):
-        ax.add_patch(FancyBboxPatch((x, y), width, .055, boxstyle="round,pad=0.003",
-                                    facecolor=color, edgecolor="#31546a", linewidth=.8))
-        ax.text(x+width/2, y+.027, label, ha="center", va="center", fontsize=7)
-    def line(points, arrow=False):
-        for start, end in zip(points, points[1:]):
-            ax.plot((start[0], end[0]), (start[1], end[1]), color="#456879", lw=.9)
-        if arrow:
-            ax.annotate("", xy=points[-1], xytext=points[-2],
-                        arrowprops=dict(arrowstyle="->", lw=.9, color="#456879"))
-    ax.text(.16, .975, "ENCODER", ha="center", fontsize=11, weight="bold")
-    ax.text(.66, .975, "TRANSPOSE CONV / SKIP CONCAT / DECODER", ha="center", fontsize=11, weight="bold")
-    top, step = .86, .72 / max(count-1, 1)
-    ys = [top-i*step for i in range(count)]
-    for i, y in enumerate(ys):
-        mark = " | 64x64 capture" if i == intermediate_stage else " | final capture" if i == stage else ""
-        box(.025, y, .27, f"encoder {i}: {encoder.output_channels[i]} ch{mark}",
-            "#ffe7bd" if i in (stage, intermediate_stage) else "#e9f3fa")
-        if i:
-            line([(.16, ys[i-1]), (.16, y+.055)], True)
-    for j in range(count-1):
-        skip = count-2-j
-        y = ys[skip]
-        op = decoder.transpconvs[j]
-        box(.405, y, .19, f"transpose conv {j} k{tuple(op.kernel_size)} s{tuple(op.stride)}", "#dff4eb")
-        box(.695, y, .27, f"concat skip {skip} + conv {j}: {encoder.output_channels[skip]} ch", "#e9f3fa")
-        line([(.595, y+.027), (.695, y+.027)], True)
-        # The skip runs above the upsampler and enters the concat from above.
-        lane = y+.083
-        line([(.295, y+.027), (.33, y+.027), (.33, lane), (.83, lane), (.83, y+.055)], True)
-        if j == 0:
-            line([(.295, ys[-1]+.027), (.36, ys[-1]+.027), (.36, y+.027), (.405, y+.027)], True)
-        else:
-            prior = ys[skip+1]
-            line([(.965, prior+.027), (.985, prior+.027), (.985, y-.036),
-                  (.38, y-.036), (.38, y+.027), (.405, y+.027)], True)
-    head = decoder.seg_layers[-1]
-    box(1.03, ys[0], .11, f"seg_layers[-1]\n1x1, {head.out_channels} logits", "#ece6f8")
-    box(1.18, ys[0], .12, "inference main output", "#ece6f8")
-    line([(.965, ys[0]+.027), (1.03, ys[0]+.027)], True)
-    line([(1.14, ys[0]+.027), (1.18, ys[0]+.027)], True)
-    ax.text(.72, .025, "Deep supervision heads / TopK10 loss: training only (not shown)",
-            fontsize=8, ha="center")
+def _plain_unet_overview_figure(network, patch_size, stage, intermediate_stage, output):
+    import matplotlib.pyplot as plt
+    count = len(network.encoder.stages)
+    fig, ax = plt.subplots(figsize=(19, 3.8 + 1.16*count), facecolor="#f7f9fc")
+    try:
+        _architecture(ax, network, stage, ORIGINAL_TRAINER, intermediate_stage, patch_size)
+        fig.subplots_adjust(left=.015, right=.995, top=.99, bottom=.015)
+        fig.savefig(output, dpi=160, facecolor=fig.get_facecolor())
+    finally:
+        plt.close(fig)
+
+
+def _plain_unet_detail_figure(network, patch_size, stage, intermediate_stage, output):
+    from nnunet_report_architecture import draw_detail
+    draw_detail(network, patch_size, stage, intermediate_stage, output)
 
 
 def _confusion_masks(gt, pred):
@@ -768,26 +736,35 @@ def _summary_figure(items, rows, network, stage, output, trainer_name=TRAINER, i
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize
-    fig = plt.figure(figsize=(30, 37))
-    grid = fig.add_gridspec(8, 2, height_ratios=[8.2, .5, .5, .48, .55, 7.2, 7.2, 7.2],
-                           hspace=.16, wspace=.04, left=.025, right=.99, bottom=.02, top=.985)
-    _architecture(fig.add_subplot(grid[0, :]), network, stage, trainer_name, intermediate_stage)
-    legend_ax = fig.add_subplot(grid[1, :]); legend_ax.axis("off")
+    if trainer_name == ORIGINAL_TRAINER:
+        # The original network has two standalone architecture PNGs. Keep the
+        # case comparison free of diagram panels while preserving its content.
+        fig = plt.figure(figsize=(30, 29))
+        grid = fig.add_gridspec(7, 2, height_ratios=[.5, .5, .48, .55, 7.2, 7.2, 7.2],
+                               hspace=.16, wspace=.04, left=.025, right=.99, bottom=.02, top=.985)
+        base = 0
+    else:
+        fig = plt.figure(figsize=(30, 37))
+        grid = fig.add_gridspec(8, 2, height_ratios=[8.2, .5, .5, .48, .55, 7.2, 7.2, 7.2],
+                               hspace=.16, wspace=.04, left=.025, right=.99, bottom=.02, top=.985)
+        _architecture(fig.add_subplot(grid[0, :]), network, stage, trainer_name, intermediate_stage)
+        base = 1
+    legend_ax = fig.add_subplot(grid[base, :]); legend_ax.axis("off")
     legend_ax.legend(handles=_confusion_legend_handles(), loc="center", ncol=3, fontsize=10)
-    cax = fig.add_subplot(grid[2, :])
+    cax = fig.add_subplot(grid[base+1, :])
     bar = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap="inferno"),
                        cax=cax, orientation="horizontal")
     bar.set_label("Feature magnitude display: per-slice 1st-99th percentile -> [0,1]; overlay alpha 0.48", fontsize=8)
-    note = fig.add_subplot(grid[3, :]); note.axis("off")
+    note = fig.add_subplot(grid[base+2, :]); note.axis("off")
     note.text(.5, .5, source_note or "Diagnostic feature magnitude; colors are display-normalized and do not encode lesion probability or absolute cross-case intensity.",
               ha="center", va="center", fontsize=9)
     for col, title in enumerate(("HIGH DICE | 3 cases", "LOW DICE | 3 cases")):
-        head = fig.add_subplot(grid[4, col])
+        head = fig.add_subplot(grid[base+3, col])
         head.axis("off")
         head.text(.5, .5, title, ha="center", va="center", fontsize=16, weight="bold")
     for i, item in enumerate(items):
         col = 0 if i < 3 else 1
-        row = 5 + i % 3
+        row = base+4 + i % 3
         _draw_case_panels(fig, grid[row, col], item, rows)
     try:
         fig.savefig(output, dpi=130)
@@ -849,6 +826,12 @@ def create_report(info, predictor, declaration):
                    if kind == "plain_unet" and declaration is None else
                    "Diagnostic features: specified checkpoint; saved prediction source USER CONFIRMED (user statement only)."
                    if kind == "plain_unet" else None)
+    if kind == "plain_unet":
+        patch_size = predictor.configuration_manager.patch_size
+        _plain_unet_overview_figure(predictor.network, patch_size, stage,
+                                    intermediate_stage, info["output"] / "architecture_overview.png")
+        _plain_unet_detail_figure(predictor.network, patch_size, stage,
+                                  intermediate_stage, info["output"] / "architecture_detail.png")
     _summary_figure(items, info["rows"], predictor.network, stage,
                     info["output"] / "summary.png", trainer_name, intermediate_stage, source_note)
     _native_channel_figure(items, info["output"] / "feature_channels.png")
@@ -870,6 +853,7 @@ def create_report(info, predictor, declaration):
            f"Feature: mean(abs(channel)) at final encoder stage {stage}; native 64x64 stage {intermediate_stage}; bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
            "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
            "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
+            *(["Original PlainConvUNet architecture: architecture_overview.png shows the module flow; architecture_detail.png separates encoder, decoder and output-head panels. Both use loaded network metadata; summary.png contains case comparisons only."] if kind == "plain_unet" else []),
            "Native-channel display: each channel at its actual native CxHxW independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
            "Original-space array axis 0, zero-based index; no anatomical plane claim.",
            "Selection: full-case Dice descending, case_id tie break, top 3; among remaining, Dice ascending, case_id tie break, bottom 3; GT area descending, index tie break, max 3 positive slices.",
@@ -933,7 +917,10 @@ def main(argv=None):
             work.mkdir()
             staged_info = dict(info, output=work)
             create_report(staged_info, predictor, args.prediction_checkpoint_declaration)
-            if not all((work / name).is_file() for name in ("summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt")):
+            required = ["summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
+            if info["model"].name.startswith(ORIGINAL_TRAINER + "__"):
+                required.extend(("architecture_overview.png", "architecture_detail.png"))
+            if not all((work / name).is_file() for name in required):
                 raise ValueError("report output incomplete")
             protected_output(output, (info["model"], *info["images"].values(),
                              *info["labels"].values(), *info["predictions"].values(),
@@ -941,7 +928,7 @@ def main(argv=None):
             os.rename(work, output)
         finally:
             shutil.rmtree(staging)
-        print(f"Wrote {output / 'summary.png'}, {output / 'feature_channels.png'}, {output / 'feature_channels_64x64.png'} and {output / 'report.txt'}")
+        print("Wrote " + ", ".join(str(output / name) for name in required))
         return 0
     except (ValueError, FileNotFoundError, KeyError) as error:
         parser.error(str(error))

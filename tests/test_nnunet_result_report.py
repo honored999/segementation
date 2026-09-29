@@ -376,7 +376,8 @@ def test_full_geometry_rejects_seventh_case(tmp_path):
         verify_full_geometry(info)
 
 
-@pytest.mark.parametrize("missing_channel", [None, "feature_channels.png", "feature_channels_64x64.png"])
+@pytest.mark.parametrize("missing_channel", [None, "feature_channels.png", "feature_channels_64x64.png",
+                                             "architecture_overview.png", "architecture_detail.png"])
 @pytest.mark.parametrize("trainer_name", ["nnUNetTrainerUPerNetTopK10EarlyStopping", "nnUNetTrainerTopK10"])
 def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, missing_channel, trainer_name):
     import generate_nnunet_result_report as report
@@ -408,13 +409,18 @@ def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, miss
         raise RuntimeError("injected write failure")
     def omit_channel_png(info, predictor, declaration):
         (info["output"] / "summary.png").write_bytes(b"synthetic")
-        for name in ("feature_channels.png", "feature_channels_64x64.png"):
+        names = ["feature_channels.png", "feature_channels_64x64.png"]
+        if trainer_name == "nnUNetTrainerTopK10":
+            names += ["architecture_overview.png", "architecture_detail.png"]
+        for name in names:
             if name != missing_channel:
                 (info["output"] / name).write_bytes(b"synthetic")
         (info["output"] / "report.txt").write_text("synthetic", encoding="utf-8")
     monkeypatch.setattr(report, "create_report",
                         omit_channel_png if missing_channel is not None else fail_after_png)
     target = tmp_path / "new-report"
+    if trainer_name != "nnUNetTrainerTopK10" and missing_channel in ("architecture_overview.png", "architecture_detail.png"):
+        pytest.skip("standalone architecture PNGs are original-Trainer outputs")
     with pytest.raises(SystemExit if missing_channel is not None else RuntimeError,
                        match=None if missing_channel is not None else "injected write failure"):
         main(["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
@@ -481,10 +487,11 @@ def test_original_architecture_labels(tmp_path):
                         (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
                         (1, 1, 1), deep_supervision=False)
     fig, ax = plt.subplots(figsize=(20, 8))
-    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1)
+    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1, (128, 128))
     labels = " ".join(text.get_text() for text in ax.texts)
-    assert "transpose conv" in labels and "concat skip" in labels
-    assert "64x64 capture" in labels and "final capture" in labels
+    assert "HOOK A" in labels and "HOOK B" in labels
+    assert "transpose conv + skip concat + conv block" in labels
+    assert "seg_layers[-1]" in labels and "Single inference" in labels
     assert "PPM" not in labels and "FPN" not in labels
     target = tmp_path / "original_architecture.png"
     fig.savefig(target)
@@ -510,26 +517,21 @@ def test_plain_unet_main_output_connected():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.text import Annotation
     from dynamic_network_architectures.architectures.unet import PlainConvUNet
     from generate_nnunet_result_report import ORIGINAL_TRAINER
     net = PlainConvUNet(1, 4, (8, 16, 32, 64), torch.nn.Conv2d,
                         (3, 3, 3, 3), (1, 2, 2, 2), (1, 1, 1, 1), 2,
                         (1, 1, 1), deep_supervision=True)
     fig, ax = plt.subplots(figsize=(20, 8))
-    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1)
+    _architecture(ax, net, 3, ORIGINAL_TRAINER, 1, (128, 128))
+    arrows = {(tuple(a.xyann), tuple(a.xy)) for a in ax.texts if isinstance(a, Annotation)}
     labels = {text.get_text(): text.get_position() for text in ax.texts}
-    head = next(pos for label, pos in labels.items() if "seg_layers[-1]" in label)
-    output = next(pos for label, pos in labels.items() if "inference main output" in label)
-    decoder = next(pos for label, pos in labels.items() if "concat skip 0 + conv 2" in label)
-    segments = [(tuple(line.get_xdata()), tuple(line.get_ydata())) for line in ax.lines]
-    def connected(x1, y1, x2, y2):
-        return any(xs == (x1, x2) and ys == (y1, y2) for xs, ys in segments)
-    assert connected(decoder[0] + .135, decoder[1], head[0] - .055, head[1])
-    assert connected(head[0] + .055, head[1], output[0] - .06, output[1])
-    for j in range(3):
-        transpose = next(pos for label, pos in labels.items() if label.startswith(f"transpose conv {j} "))
-        decoded = next(pos for label, pos in labels.items() if f"concat skip {2-j} + conv {j}" in label)
-        assert connected(transpose[0] + .095, transpose[1], decoded[0] - .135, decoded[1])
+    head = next(pos for name,pos in labels.items() if "seg_layers[-1]" in name)
+    output = next(pos for name,pos in labels.items() if "Single inference" in name)
+    assert ((13.10, head[1]), (13.52, head[1])) in arrows
+    assert ((15.47, output[1]), (15.83, output[1])) in arrows
+    assert all(f"skip S{i}" in " ".join(labels) for i in range(3))
     plt.close(fig)
 
 
@@ -578,7 +580,9 @@ def test_original_check_unknown_and_metrics_conflict(tmp_path, capsys, monkeypat
     seen = []
     def fake_report(info, predictor, declaration):
         seen.append((declaration, info["historical_tta"]))
-        for name in ("summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"):
+        names = ["summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt",
+                 "architecture_overview.png", "architecture_detail.png"]
+        for name in names:
             (info["output"] / name).write_text("synthetic", encoding="utf-8")
     monkeypatch.setattr(report, "create_report", fake_report)
     full = args[:-1]
@@ -646,3 +650,43 @@ def test_tiny_plain_unet_native_hooks_same_window():
     assert native["feature_shape"] == [1, 64, 16, 16]
     assert not net.encoder.stages[stage]._forward_hooks
     assert not net.encoder.stages[intermediate]._forward_hooks
+
+
+def test_original_split_architecture_and_comparison_summary(tmp_path, monkeypatch):
+    """Original TopK10 needs two standalone network figures and a case-only summary."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.figure
+    import generate_nnunet_result_report as report
+
+    channels = (32, 64, 128, 256, 512, 512, 512, 512)
+    encoder = SimpleNamespace(stages=list(range(8)), output_channels=channels,
+                              strides=((1, 1),) + ((2, 2),) * 7)
+    decoder = SimpleNamespace(stages=list(range(7)),
+                              transpconvs=[SimpleNamespace(kernel_size=(2, 2), stride=(2, 2)) for _ in range(7)],
+                              seg_layers=[SimpleNamespace(out_channels=2) for _ in range(7)])
+    net = SimpleNamespace(encoder=encoder, decoder=decoder)
+    overview = tmp_path / "architecture_overview.png"
+    detail = tmp_path / "architecture_detail.png"
+    report._plain_unet_overview_figure(net, (512, 512), 7, 3, overview)
+    report._plain_unet_detail_figure(net, (512, 512), 7, 3, detail)
+    assert overview.stat().st_size > 1000 and detail.stat().st_size > 1000
+
+    seen = []
+    save = matplotlib.figure.Figure.savefig
+    def inspect(fig, path, *args, **kwargs):
+        labels = " ".join(text.get_text() for ax in fig.axes for text in ax.texts)
+        assert "ENCODER" not in labels and "PPM" not in labels
+        assert "HIGH DICE" in labels and "LOW DICE" in labels
+        assert len([image for ax in fig.axes for image in ax.images]) == 48
+        seen.append(True)
+        return save(fig, path, *args, **kwargs)
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
+    raw = np.arange(16, dtype=np.float32).reshape(4, 4)
+    zero = np.zeros((4, 4), dtype=bool)
+    items = [{"cid": f"synthetic{i}", "slices": [0],
+              "panels": {0: (raw, zero, zero, raw)}} for i in range(6)]
+    rows = {item["cid"]: {"dice": ".5"} for item in items}
+    report._summary_figure(items, rows, net, 7, tmp_path / "summary.png",
+                           report.ORIGINAL_TRAINER, 3)
+    assert seen
