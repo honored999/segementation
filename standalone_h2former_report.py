@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from report_metrics_table import count_coverage, binary_labels, build_table, export_table
 from pathlib import Path
 
 from generate_nnunet_result_report import (
@@ -333,6 +334,7 @@ def run(args):
     if args.check:
         print(json.dumps({"status":"METADATA ONLY; checkpoint content and geometry PENDING",
                           "cases":len(info["rows"]), "selected":select_cases(info["rows"]),
+                          "count_coverage":count_coverage(info["rows"]),
                           "output":str(info["output"])},indent=2))
         return 0
     _, metadata = _read_checkpoint(info["paths"]["checkpoint"])
@@ -398,8 +400,8 @@ def run(args):
              "Source mapping: full-volume z-score, source axial slices, symmetric minimum-window padding, 0.5-step windows, Gaussian overlap for magnitude; no mirroring or GT inference input. Diagnostic feature is not a replay of saved prediction.",
              "Native: one shared window per case, fixed 8 channels/layer copied to CPU; per-channel min-max color normalization. Summary: per-slice percentile normalization; not absolute cross-case scale.",
              "Selection: full-case Dice high 3 and low 3 distinct cases; max 3 GT-positive slices per case; GT affects display selection only.",
-             f"Metrics: {info['paths']['metrics_dir']}; F2 definition: {info['summary'].get('f2_mode','unknown')}; AVD percent, HD95 mm; missing remains missing.",
-             "Metric definitions from evaluate_segmentation_metrics.py: Dice=2TP/(2TP+FP+FN); IoU=TP/(TP+FP+FN); recall=TP/(TP+FN). F2 paper mode=5TP/(5TP+4FP+FN); standard mode=5TP/(5TP+FP+4FN), selected by source summary f2_mode. AVD=abs(predicted volume-GT volume)/GT volume x 100%, with source empty-GT handling. LCD=absolute lesion-count difference. HD95=95th percentile symmetric surface distance in mm. Existing values are read only; none are recomputed here.",
+             f"Metrics: {info['paths']['metrics_dir']}; Source report f2_mode: {info['summary'].get('f2_mode','unknown')}; mode alone does not establish a formula; AVD percent, HD95 mm; missing remains missing.",
+             "Case metric definitions come from optional source summary metric_definitions (caller-declared, not independently verified). Missing declarations remain unknown. See per-metric definitions and provenance in the appended full evaluation metrics table. Existing metrics are read only; only missing TP/FP/FN are recomputed from saved full-volume masks.",
              "Evidence: local diagnostic generation; real checkpoint, case geometry, provenance and visual approval require server validation.",
              "Summary metrics:",json.dumps(info["summary"],ensure_ascii=False,indent=2),"Model repr:",repr(model)]
         for item in items:
@@ -410,6 +412,16 @@ def run(args):
                         "Native deep mapping: "+json.dumps(_native_mapping(item["native"])),
                         "Native middle mapping: "+json.dumps(_native_mapping(item["intermediate_native"]))])
         (staging/"report.txt").write_text("\n".join(txt)+"\n",encoding="utf-8")
+        table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
+                            label_contract=lambda: binary_labels(info["config"], info["manifest"], standalone=True),
+                            check_geometry=check_geometry, geometry_verified=True)
+        with (staging/"report.txt").open("a",encoding="utf-8") as handle:
+            handle.write(export_table(table, staging))
+        required = ("summary.png", "feature_channels.png", "feature_channels_64x64.png",
+                    "architecture_overview.png", "architecture_detail.png", "report.txt",
+                    "metrics_table.csv", "metrics_table.png")
+        if not all((staging/name).is_file() for name in required):
+            raise ValueError("report output incomplete")
         protected_output(output,(*info["paths"].values(),))
         os.rename(staging,output)
     finally:

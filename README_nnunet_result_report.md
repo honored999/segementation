@@ -34,7 +34,7 @@ count. Only exact `image_reader_writer=SimpleITKIO` plans are supported.
 
 The report is a **single fold 0 validation report**, not five-fold OOF or a
 clinical conclusion. It reads the existing full-set case and summary metrics;
-it never recomputes or changes them. Empty GT cases have no selected positive
+it preserves existing metrics; only missing TP/FP/FN are counted from saved masks. Empty GT cases have no selected positive
 slices. The PNG feature magnitude and DWI overlay panels show `mean(abs(deepest encoder stage))` from
 fresh raw-image preprocessing and no mirror TTA. Each patch is upsampled to
 its own sliding window and fused with the nnU-Net Gaussian weights, then
@@ -147,7 +147,7 @@ training versus inference heads into numbered panels. The architecture figures
 read stage channels, strides, patch size and output classes from the restored
 network. Both new PNGs are required for atomic delivery alongside
 `feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`.
-UPerNet report layout and its four-file delivery remain unchanged.
+The existing UPerNet figures remain; delivery now also requires the shared CSV/PNG metrics table.
 
 **SERVER VALIDATION PENDING:** actual checkpoint/network compatibility, native
 64x64 stage, geometry and feature alignment, report presentation, and saved
@@ -189,3 +189,141 @@ the separate raw-source diagnostic entry. Both native layer mappings include
 slice, window index/count/padded coordinates, padding offsets, source/padded/window
 sizes, stage/module, BCHW shape and channel IDs, without feature arrays. Miniature
 local previews/smoke are synthetic engineering evidence; server validation PENDING.
+
+
+## Shared full-evaluation metrics table
+
+Both official Trainers (`nnUNetTrainerTopK10`,
+`nnUNetTrainerUPerNetTopK10EarlyStopping`) and all three supported standalone
+identities (`h2former`, `h2former_lite_upernet`,
+`h2former_lite_upernet_w128_ppm1236`) now require `metrics_table.csv`,
+`metrics_table.png` and the appended full table in `report.txt` for atomic
+publication. Ordinary `nnUNetTrainer` and a separate W128-only identity remain
+**pending adapters**, not supported by this change.
+
+Every evaluated case is included, sorted by `case_id`, including missing Dice.
+Six finite-Dice cases are still required for diagnostic selection. Existing
+metrics and extra columns retain source values and CSV float precision.
+Dice/IoU/F2/Recall remain 0..1; AVD is already percent, HD95 mm, LCD lesion-count
+difference. Missing/nonfinite metrics: CSV `NA`, PNG/TXT `N/A`; invalid nonnumeric
+metrics fail. Unknown extra columns are preserved and never averaged.
+`row_type=case` distinguishes real cases from `case_macro_mean` (病例平均指标,
+counts blank) and `all_case_voxel_total` (全病例 TP/FP/FN 总计, metrics blank).
+
+Counts accept exact nonnegative integer strings/integers, never float conversion.
+Lowercase `tp/fp/fn` are canonical; uppercase aliases must agree when both exist,
+including missing-vs-present conflicts. Missing is never zero. Complete source
+counts add no voxel reads. Supplied pred_voxels/gt_voxels and known nonzero-denominator
+overlap definitions are checked. Each case with missing counts loads its saved
+prediction/GT pair once, sequentially, requiring matching Size/Spacing/Origin/
+Direction. All three counts are computed to cross-check existing fields; only
+missing fields are filled. No resampling, inference, connected components, HD95
+or full metric evaluation is invoked for counts. The original full-report
+model diagnostic forwards still occur separately. Existing metrics are never
+recomputed; only missing TP/FP/FN are counted from saved original-space masks.
+
+Fallback requires official dataset.json background=0 plus one positive label,
+or the existing validated standalone two-class config/manifest contract (0/1).
+Actual masks must contain only those labels. Ignore, region, multiclass, negative,
+fractional and nonfinite labels/contracts are refused. Source reuse adds no mask
+inspection. Per-count `*_source` records `source_csv` or
+`recomputed_from_saved_masks`; per-case label/geometry notes distinguish source
+claims from fallback validation. Header checks do not prove source count values.
+TP/FP/FN are full-volume voxel counts, with no spacing scaling or slice averaging.
+
+Source aggregation must declare `macro average over cases`. n_cases, finite
+valid_cases, optional case_ids and source means are checked against full rows.
+Verified source means are retained; missing means use finite case-macro fallback,
+with valid N and provenance. Unknown aggregation or contradicting means/coverage
+(including Inf-valid-count disagreement) fail. Unknown f2_mode stays unknown;
+paper/standard are not converted. Empty-overlap missing values are not filled
+with 1. `--check` parses metadata/filenames and pending count coverage only:
+no headers/voxels, checkpoint contents, model or table output. Input files and
+old reports stay read-only; new files join the existing staging/publication guard.
+
+### Server templates (user executed; SERVER VALIDATION PENDING)
+
+Keep server environment `nnunet5090`. Replace every placeholder with verified
+existing paths/statements; select a fresh absent output directory with existing
+parent. First run --check, then remove only --check for full generation.
+The earlier CMD examples also work and now emit the shared table.
+
+CMD official UPerNet (full mode still requires a truthful declaration):
+
+```cmd
+conda activate nnunet5090
+set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
+python generate_nnunet_result_report.py --model-dir "<EXISTING_UPERNET_MODEL_DIR>" --fold 0 --images-dir "<DWI_DIR>" --labels-dir "<GT_DIR>" --prediction-dir "<SAVED_PRED_DIR>" --metrics-dir "<MULTI_METRICS_DIR>" --checkpoint "<MODEL_DIR>\fold_0\checkpoint_best.pth" --prediction-checkpoint-declaration "<ORIGINAL_USER_STATEMENT>" --output-dir "<NEW_PARENT>\upernet_metrics_report" --check
+```
+
+PowerShell original TopK10 (saved weights provenance UNKNOWN by default):
+
+```powershell
+conda activate nnunet5090
+$env:nnUNet_extTrainer = Join-Path $PWD 'nnunet_ext_trainers'
+python generate_nnunet_result_report.py --model-dir '<EXISTING_TOPK10_MODEL_DIR>' --fold 0 --images-dir '<DWI_DIR>' --labels-dir '<GT_DIR>' --prediction-dir '<SAVED_PRED_DIR>' --metrics-dir '<MULTI_METRICS_DIR>' --checkpoint '<MODEL_DIR>\fold_0\checkpoint_final.pth' --output-dir '<NEW_PARENT>\topk10_metrics_report' --check
+```
+
+PowerShell standalone (each supported identity retains its exact pairing):
+
+```powershell
+conda activate nnunet5090
+python generate_nnunet_result_report.py --source standalone-h2former --model-dir '<EXISTING_MODEL_DIR>' --fold 0 --images-dir '<DWI_DIR>' --labels-dir '<GT_DIR>' --prediction-dir '<SAVED_PRED_DIR>' --metrics-dir '<MULTI_METRICS_DIR>' --manifest '<EXISTING_PREDICTION_MANIFEST>' --config '<EXISTING_RESOLVED_CONFIG>' --checkpoint '<EXISTING_DIAGNOSTIC_CHECKPOINT>' --output-dir '<NEW_PARENT>\h2former_metrics_report' --check
+```
+
+Add --allow-pending only when explicitly accepting existing pending alignment.
+UNKNOWN stays UNKNOWN unless both confirmation flag and a truthful original
+statement are supplied. Identity/alignment guards remain mandatory.
+
+SERVER VALIDATION PENDING: real count comparison, full-set geometry/labels,
+source-summary semantics, checkpoint/manifest compatibility, actual all-case
+long-table visual inspection. Local CPU synthetic tests and PNG inspection are
+engineering evidence. No server commands were executed. Independent Level 3
+review remains for user/main-coordinator manual dispatch.
+
+
+### Optional per-case source definition declarations
+
+`summary_metrics.json` aggregation declares only macro aggregation. `f2_mode`
+does not establish case formulas, foreground or zero-denominator semantics.
+Both production entries pass the source summary directly to the shared service.
+Absent optional definitions default to `unknown`; original metrics are retained.
+The report never rewrites source CSV/JSON to obtain evidence. A source producer
+with actual definition evidence may supply these caller declarations:
+
+```json
+{
+  "count_foreground": "positive",
+  "metric_definitions": {
+    "dice": {"formula": "2tp/(2tp+fp+fn)", "zero_denominator": "missing"},
+    "iou": {"formula": "tp/(tp+fp+fn)", "zero_denominator": "missing"},
+    "recall": {"formula": "tp/(tp+fn)", "zero_denominator": "missing"},
+    "f2": {"formula": "5tp/(5tp+4fp+fn)", "zero_denominator": "missing"}
+  }
+}
+```
+
+Only these four metric keys and `formula`/`zero_denominator` fields are supported;
+each metric can be omitted. Supported formulas are the exact strings above or
+`unknown`. F2 also supports standard `5tp/(5tp+fp+4fn)`; its explicit formula
+must agree with an existing paper/standard f2_mode declaration. Zero-denominator
+values are `missing` or `unknown` (default); `missing` requires a known formula.
+Known formulas validate only corresponding source metrics: finite nonzero-ratio
+conflicts fail, and finite zero-denominator values fail when `missing` is declared.
+Unknown empty semantics are never forced to NaN or both_empty=1. Metrics are not
+recomputed or overwritten. `count_foreground` supports `positive` (>0) or
+`unknown` (default), independently of formulas. Existing evaluator summaries lack
+these fields and remain unknown. Declarations are recorded as caller-declared
+source provenance, never independently verified evaluator identity. Saved-mask
+binary label evidence proves mask interpretation only, not source metric formulas
+or source foreground. Do not edit historical sources merely to pass validation.
+Exact integers, aliases, coverage, pred_voxels=TP+FP, gt_voxels=TP+FN and fallback
+conflict checks remain strict; complete source counts add no voxel reads.
+
+Case missing metrics (empty/whitespace strings, None, NA, N/A, NaN, Inf) and macro
+means with no valid values export CSV `NA`, PNG/TXT `N/A`. Structural blanks stay
+blank: mean TP/FP/FN and total metric columns.
+
+SERVER VALIDATION PENDING: real counts, geometry/labels, source summary and
+definition evidence, checkpoint/manifest compatibility and full real-case long
+table visual inspection. Local validation is synthetic CPU engineering evidence.

@@ -378,7 +378,9 @@ def test_six_outputs_and_failure_cleanup(monkeypatch, tmp_path, lite):
             sitk.WriteImage(sitk.GetImageFromArray(array),str(path))
             info[kind][cid]=path.resolve()
         manifest["cases"].append({"case_id":cid,"source_path":str(info["images"][cid]),"prediction_path":str(info["predictions"][cid])})
-        info["rows"][cid]={k:(i+.1)/6 for k in fields}
+        info["rows"][cid]={k: (1 if k in ("dice","iou","f2","recall") else 0) for k in fields}
+    info["summary"]={"n_cases":6,"aggregation":"macro average over cases","f2_mode":"paper",
+                     "metrics":{k:{"valid_cases":6} for k in fields}}
     model=_tiny_model(lite)
     monkeypatch.setattr(predict,"_load_model",lambda *a:(model,metadata))
     # Controlled rendering resolution only; all production plotting executes.
@@ -388,7 +390,7 @@ def test_six_outputs_and_failure_cleanup(monkeypatch, tmp_path, lite):
         return save(fig,*a,**kw)
     monkeypatch.setattr(matplotlib.figure.Figure,"savefig",small)
     assert report.run(args)==0
-    expected={"summary.png","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
+    expected={"metrics_table.csv","metrics_table.png","summary.png","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
     assert {p.name for p in info["output"].iterdir()}==expected
     assert all((info["output"]/p).stat().st_size>0 for p in expected)
     txt=(info["output"]/"report.txt").read_text(encoding="utf-8")

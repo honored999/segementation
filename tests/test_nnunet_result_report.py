@@ -36,8 +36,9 @@ def test_metric_coverage_and_nan(tmp_path):
     with pytest.raises(ValueError, match="coverage mismatch"):
         read_metrics(tmp_path, {"b"})
     (tmp_path / "case_metrics.csv").write_text(headers + rows.replace("0.5", "NaN"), encoding="utf-8")
-    with pytest.raises(ValueError, match="invalid Dice"):
-        read_metrics(tmp_path, {"a"})
+    summary["metrics"]["dice"]["valid_cases"] = 0
+    (tmp_path / "summary_metrics.json").write_text(json.dumps(summary), encoding="utf-8")
+    assert read_metrics(tmp_path, {"a"})[0]["a"]["dice"] == "NaN"
     (tmp_path / "case_metrics.csv").write_text(headers + rows + rows, encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
         read_metrics(tmp_path, {"a"})
@@ -396,10 +397,10 @@ def test_atomic_delivery_removes_partial_png(tmp_path, monkeypatch, capsys, miss
         for path in (images / f"{cid}_0000.nii.gz", labels / f"{cid}.nii.gz",
                      prediction / f"{cid}.nii.gz"):
             path.touch()
-    cols = "case_id,dice,iou,f2,avd_percent,lcd,recall,hd95_mm\n"
+    cols = "case_id,dice,iou,f2,avd_percent,lcd,recall,hd95_mm,tp,fp,fn\n"
     (metrics / "case_metrics.csv").write_text(cols + "".join(
-        f"{cid},0.5,0,0,0,0,0,0\n" for cid in names))
-    (metrics / "summary_metrics.json").write_text(json.dumps({"n_cases": 6,
+        f"{cid},0,0,0,0,0,0,0,0,1,1\n" for cid in names))
+    (metrics / "summary_metrics.json").write_text(json.dumps({"n_cases": 6, "aggregation": "macro average over cases",
         "metrics": {key: {"valid_cases": 6} for key in
         ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")}}))
     monkeypatch.setattr(report, "verify_full_geometry", lambda info: 6)
@@ -560,9 +561,9 @@ def test_original_check_unknown_and_metrics_conflict(tmp_path, capsys, monkeypat
         (images / f"{cid}_0000.nii.gz").touch()
         (labels / f"{cid}.nii.gz").touch()
         (prediction / f"{cid}.nii.gz").touch()
-    cols = "case_id,dice,iou,f2,avd_percent,lcd,recall,hd95_mm\n"
-    (metrics / "case_metrics.csv").write_text(cols + "".join(f"{cid},0.5,0,0,0,0,0,0\n" for cid in names))
-    (metrics / "summary_metrics.json").write_text(json.dumps({"n_cases": 6, "metrics": {
+    cols = "case_id,dice,iou,f2,avd_percent,lcd,recall,hd95_mm,tp,fp,fn\n"
+    (metrics / "case_metrics.csv").write_text(cols + "".join(f"{cid},0,0,0,0,0,0,0,0,1,1\n" for cid in names))
+    (metrics / "summary_metrics.json").write_text(json.dumps({"n_cases": 6, "aggregation": "macro average over cases", "metrics": {
         key: {"valid_cases": 6} for key in ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")}}))
     args = ["--model-dir", str(model), "--fold", "0", "--images-dir", str(images),
             "--labels-dir", str(labels), "--prediction-dir", str(prediction),

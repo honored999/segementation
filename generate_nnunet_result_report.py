@@ -13,6 +13,8 @@ import math
 import os
 import shutil
 import tempfile
+
+from report_metrics_table import (metric_value, count_coverage, binary_labels, build_table, export_table)
 from pathlib import Path
 
 
@@ -63,16 +65,22 @@ def read_metrics(metrics_dir, ids):
         reader = csv.DictReader(handle)
         if not {"case_id", *METRICS}.issubset(reader.fieldnames or []):
             raise ValueError("case metrics columns missing")
+        if len(reader.fieldnames) != len(set(reader.fieldnames)):
+            raise ValueError("duplicate case metrics columns")
         rows = {}
         for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError("malformed case metrics CSV row")
             case_id = row["case_id"]
             if not case_id or case_id in rows:
                 raise ValueError(f"missing or duplicate metric case ID: {case_id!r}")
             try:
-                dice = float(row["dice"])
+                for key in METRICS:
+                    metric_value(row[key])
+                dice = metric_value(row["dice"])
             except (ValueError, TypeError) as error:
-                raise ValueError(f"invalid Dice for {case_id}") from error
-            if not math.isfinite(dice) or not 0 <= dice <= 1:
+                raise ValueError(f"invalid numeric metric for {case_id}: {error}") from error
+            if dice is not None and not 0 <= dice <= 1:
                 raise ValueError(f"invalid Dice for {case_id}: {dice}")
             rows[case_id] = row
     if set(rows) != set(ids):
@@ -87,22 +95,21 @@ def read_metrics(metrics_dir, ids):
         observed = sum(1 for row in rows.values() if _finite_or_missing(row[key]) is not None)
         if item["valid_cases"] != observed:
             raise ValueError(f"summary valid_cases mismatch for {key}: {item['valid_cases']} != {observed}")
+    count_coverage(rows)  # metadata-only strict count parsing; no voxel reads
     return rows, summary
 
 
 def _finite_or_missing(value):
-    if value is None or str(value).strip().lower() in ("", "nan", "none", "null"):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
+    return metric_value(value)
 
 
 def select_cases(rows):
-    if len(rows) < 6:
-        raise ValueError("at least six distinct validation cases are required")
-    high = sorted(rows, key=lambda cid: (-float(rows[cid]["dice"]), cid))[:3]
-    remaining = set(rows) - set(high)
-    low = sorted(remaining, key=lambda cid: (float(rows[cid]["dice"]), cid))[:3]
+    finite = {cid: row for cid, row in rows.items() if metric_value(row["dice"]) is not None}
+    if len(finite) < 6:
+        raise ValueError("at least six distinct validation cases with finite Dice are required")
+    high = sorted(finite, key=lambda cid: (-float(finite[cid]["dice"]), cid))[:3]
+    remaining = set(finite) - set(high)
+    low = sorted(remaining, key=lambda cid: (float(finite[cid]["dice"]), cid))[:3]
     return high, low
 
 
@@ -903,6 +910,7 @@ def main(argv=None):
         if args.check:
             print(json.dumps({"status": "METADATA ONLY; geometry, checkpoint content and provenance not verified",
                               "cases": len(info["rows"]), "selected": select_cases(info["rows"]),
+                              "count_coverage": count_coverage(info["rows"]),
                               "checkpoint": str(info["checkpoint"]), "output": str(info["output"])}, indent=2))
             return 0
         if args.confirm_prediction_checkpoint and not args.prediction_checkpoint_declaration:
@@ -926,7 +934,13 @@ def main(argv=None):
             work.mkdir()
             staged_info = dict(info, output=work)
             create_report(staged_info, predictor, args.prediction_checkpoint_declaration)
-            required = ["summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
+            table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
+                                label_contract=lambda: binary_labels(info["dataset"]),
+                                check_geometry=check_geometry, geometry_verified=True)
+            table_text = export_table(table, work)
+            with (work / "report.txt").open("a", encoding="utf-8") as handle:
+                handle.write(table_text)
+            required = ["metrics_table.csv", "metrics_table.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
             if info["model"].name.startswith(ORIGINAL_TRAINER + "__"):
                 required.extend(("architecture_overview.png", "architecture_detail.png"))
             if not all((work / name).is_file() for name in required):
