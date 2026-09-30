@@ -153,3 +153,39 @@ UPerNet report layout and its four-file delivery remain unchanged.
 64x64 stage, geometry and feature alignment, report presentation, and saved
 prediction provenance/TTA. Local small synthetic checks are engineering evidence
 only.
+# Standalone H2Former diagnostic reports
+
+The same entry point supports `--source standalone-h2former`. Supply existing source-space predictions, their prediction manifest, existing multi-metric output, a resolved config, and the exact diagnostic checkpoint. The checkpoint identity must be `h2former`, `h2former_lite_upernet`, or `h2former_lite_upernet_w128_ppm1236`; the W128_PPM1236 factory checks FPN width 128, PPM scales (1,2,3,6), and PPM output width 128. The saved prediction checkpoint may remain `UNKNOWN`; diagnostic features from the named checkpoint are not a replay of saved predictions. To record a user assertion, supply both `--confirm-prediction-checkpoint` and `--prediction-checkpoint-declaration "..."`.
+
+Windows CMD example for original H2Former **best** (set `RAW`, `OUT`, and verify every path before running):
+
+```cmd
+set ROOT=C:\lijialin\models3d\nnUNet\nnUNet_results\Dataset501_StrokeLesion\H2Former_fold0_bs4_adamw
+python generate_nnunet_result_report.py --source standalone-h2former --model-dir "%ROOT%" --fold 0 --images-dir "%RAW%\imagesTr" --labels-dir "%RAW%\labelsTr" --prediction-dir "%ROOT%\full_volume_predictions_best\predictions" --metrics-dir "%ROOT%\full_volume_metrics_best" --manifest "%ROOT%\full_volume_predictions_best\prediction_manifest.json" --config "%ROOT%\resolved_config.json" --checkpoint "%ROOT%\checkpoint_best.pth" --output-dir "%OUT%\h2former_best_report" --check
+```
+
+For **latest**, pair `checkpoint_latest.pth` with `full_volume_predictions_latest` and `full_volume_metrics_latest`, and select another new output directory. Remove `--check` only after metadata checks and real server paths are verified. `--allow-pending` explicitly permits pending checkpoint and manifest status; the report labels that status.
+
+Windows CMD skeleton for **W128_PPM1236** (fill the prediction, metric, and manifest paths from the actual server output; their existence is not assumed):
+
+```cmd
+set ROOT=C:\lijialin\models3d\nnUNet\nnUNet_results\H2Former_UPerNet_W128_PPM1236\fold_0
+python generate_nnunet_result_report.py --source standalone-h2former --model-dir "%ROOT%" --fold 0 --images-dir "%RAW%\imagesTr" --labels-dir "%RAW%\labelsTr" --prediction-dir "<EXISTING_PREDICTIONS_DIRECTORY>" --metrics-dir "<EXISTING_METRICS_DIRECTORY>" --manifest "<EXISTING_PREDICTION_MANIFEST>" --config "%ROOT%\resolved_config.json" --checkpoint "%ROOT%\checkpoint_best.pth" --output-dir "%OUT%\h2former_w128_ppm1236_report" --check
+```
+
+Missing predictions or multi-metric output cause an error; this command never creates either. Full report generation checks checkpoint contents, source-space geometry for every case, manifest coverage, and model identity before loading the model. The report is a fold-0 diagnostic document, not five-fold evidence. Real server checkpoint, case geometry, provenance, and final figure validation remain pending until executed there.
+
+Manifest checkpoint must be a nonempty object with explicit model identity parsed
+by the strict production factory, matching the diagnostic checkpoint/config and
+complete W128_PPM1236 contract. UNKNOWN weights provenance does not relax identity.
+Manifest alignment uses the production validator: aligned needs valid evidence;
+pending cannot carry evidence and still needs explicit `--allow-pending`.
+
+Numbered architecture panels follow actual CNN/MS/Swin fusion and original skip
+or Lite PPM/FPN routes with current model dimensions/channels/width/scales. Window
+logits and source aggregation/unpadding are separate from diagnostic magnitude.
+TXT records supplied parsed config, training `data_source.type` (or unknown), and
+the separate raw-source diagnostic entry. Both native layer mappings include
+slice, window index/count/padded coordinates, padding offsets, source/padded/window
+sizes, stage/module, BCHW shape and channel IDs, without feature arrays. Miniature
+local previews/smoke are synthetic engineering evidence; server validation PENDING.

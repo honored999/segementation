@@ -875,6 +875,7 @@ def create_report(info, predictor, declaration):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", choices=("official-nnunet", "standalone-h2former"), default="official-nnunet")
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--fold", type=int, required=True)
     parser.add_argument("--images-dir", type=Path, required=True)
@@ -884,12 +885,20 @@ def main(argv=None):
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--check", action="store_true", help="metadata only; no model or real-image loading")
-    parser.add_argument("--prediction-checkpoint-declaration", help="original user statement about saved-mask checkpoint; required for UPerNet")
-    parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicitly confirm original TopK10 saved masks used the specified checkpoint; requires original statement")
+    parser.add_argument("--prediction-checkpoint-declaration", help="user statement about saved-mask checkpoint provenance (official or standalone); required for official UPerNet")
+    parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicit user confirmation for original TopK10 or standalone saved-mask checkpoint provenance; requires declaration")
     parser.add_argument("--historical-tta", choices=("unknown", "enabled", "disabled"), default="unknown", help="user-supplied historical prediction TTA status")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument("--manifest", type=Path, help="standalone existing prediction_manifest.json")
+    parser.add_argument("--config", type=Path, help="standalone resolved_config.json")
+    parser.add_argument("--allow-pending", action="store_true", help="explicitly allow pending standalone checkpoint/manifest")
     args = parser.parse_args(argv)
     try:
+        if args.source == "standalone-h2former":
+            if args.confirm_prediction_checkpoint != bool(args.prediction_checkpoint_declaration):
+                raise ValueError("user confirmation requires both --confirm-prediction-checkpoint and --prediction-checkpoint-declaration")
+            from standalone_h2former_report import run
+            return run(args)
         info = inspect_sources(args)
         if args.check:
             print(json.dumps({"status": "METADATA ONLY; geometry, checkpoint content and provenance not verified",
