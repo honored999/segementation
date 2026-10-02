@@ -125,27 +125,31 @@ def test_capture_fused_decoder_inputs_and_cleanup():
             return deep.mean() + middle.mean()
 
     class Model(torch.nn.Module):
-        image_size = 512
+        image_size = 64
 
         def __init__(self, bad=False):
             super().__init__()
             self.decode4 = Decode()
+            self.decode3 = Decode()
+            self.decode2 = Decode()
             self.bad = bad
 
         def forward(self, tile):
-            deep = torch.arange(32*32, dtype=torch.float32).reshape(1, 1, 32, 32).expand(1, 512, 32, 32)
-            middle = torch.ones(1, 256, 64 if not self.bad else 32, 64)
-            return self.decode4(deep, middle)
+            deep = torch.arange(4*4, dtype=torch.float32).reshape(1, 1, 4, 4).expand(1, 512, 4, 4)
+            middle = torch.ones(1, 256, 8 if not self.bad else 4, 8)
+            result=self.decode4(deep, middle)
+            result=self.decode3(result,torch.ones(1,128,16,16))
+            return self.decode2(result,torch.ones(1,64,32,32))
 
     model = Model()
-    got = _capture(model, torch.zeros(1, 1, 512, 512))
-    assert got["deep"]["channels"].shape == (8, 32, 32)
-    assert got["middle"]["channels"].shape == (8, 64, 64)
+    got = _capture(model, torch.zeros(1, 1, 64, 64))
+    assert got["deep"]["channels"].shape == (8, 4, 4)
+    assert got["middle"]["channels"].shape == (8, 8, 8)
     assert got["deep"]["channels"][0, 0, 1] == 1
     assert len(model.decode4._forward_pre_hooks) == 0
     bad = Model(bad=True)
     with pytest.raises(ValueError, match="BCHW shape"):
-        _capture(bad, torch.zeros(1, 1, 512, 512))
+        _capture(bad, torch.zeros(1, 1, 64, 64))
     assert len(bad.decode4._forward_pre_hooks) == 0
 
 
@@ -310,9 +314,12 @@ def _tiny_model(lite=True):
         def __init__(self):
             super().__init__()
             setattr(self, "decoder" if lite else "decode4", Decoder())
+            if not lite:
+                self.decode3=Decoder(); self.decode2=Decoder()
         def forward(self, tile):
             fs = tuple(torch.ones(1, c, 64//(2**(i+1)), 64//(2**(i+1))) for i,c in enumerate((64,128,256,512)))
-            return self.decoder(fs, output_size=(64,64)) if lite else self.decode4(fs[3],fs[2])
+            if lite: return self.decoder(fs, output_size=(64,64))
+            value=self.decode4(fs[3],fs[2]); value=self.decode3(value,fs[1]); return self.decode2(value,fs[0])
     return Tiny()
 
 
@@ -320,7 +327,12 @@ def _tiny_model(lite=True):
 def test_architecture_semantic_routes_and_dynamic_sizes(monkeypatch, tmp_path, lite):
     import matplotlib.figure
     saved = []
-    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", lambda fig,*a,**k: saved.append(fig))
+    real_save=matplotlib.figure.Figure.savefig
+    def inspect_save(fig,path,*a,**kw):
+        if Path(path).name=='preview.png': saved.append(fig)
+        kw['dpi']=40
+        return real_save(fig,path,*a,**kw)
+    monkeypatch.setattr(matplotlib.figure.Figure,"savefig",inspect_save)
     model = _tiny_model(lite)
     for detail in (False, True):
         _architecture(model, B if lite else H2FORMER, tmp_path / "preview.png", detail=detail)
@@ -390,9 +402,9 @@ def test_six_outputs_and_failure_cleanup(monkeypatch, tmp_path, lite):
         return save(fig,*a,**kw)
     monkeypatch.setattr(matplotlib.figure.Figure,"savefig",small)
     assert report.run(args)==0
-    expected={"metrics_table.csv","metrics_table.png","summary.png","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
+    expected={"metrics_table.csv","metrics_table.png","summary.png","encoder_stages_heatmap.png","ppt","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
     assert {p.name for p in info["output"].iterdir()}==expected
-    assert all((info["output"]/p).stat().st_size>0 for p in expected)
+    assert all((info["output"]/p).stat().st_size>0 for p in expected if p!="ppt")
     txt=(info["output"]/"report.txt").read_text(encoding="utf-8")
     assert "Training data backend: " + ("nnunet_preprocessed_b2nd" if lite else "unknown") in txt
     assert "Diagnostic prediction entry: source NIfTI" in txt

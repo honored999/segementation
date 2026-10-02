@@ -200,12 +200,31 @@ ENTRIES=['nnUNetTrainerTopK10','nnUNetTrainerUPerNetTopK10EarlyStopping','h2form
 
 
 def wire_no_forward(monkeypatch,metadata):
+    """Entry/provenance tests substitute rendering only, keeping publication guards real."""
     import generate_nnunet_result_report as official
+    import report_visuals
+    from PIL import Image
+    def artifact(path,family):
+        path=Path(path); path.parent.mkdir(exist_ok=True,parents=True)
+        Image.new('RGB',(64,36),'white').save(path)
+        ppt=path.parent/'ppt'; ppt.mkdir(exist_ok=True)
+        page=ppt/(family+'_01.png'); preview=ppt/(family+'_01_slide.png')
+        Image.new('RGB',(64,36),'white').save(page)
+        Image.new('RGB',(1920,1080),'white').save(preview)
+        mp=ppt/'layout_manifest.json'
+        data=json.loads(mp.read_text(encoding='utf-8')) if mp.exists() else {'figures':[]}
+        data['figures'].append(dict(path=page.relative_to(path.parent).as_posix(),
+            preview=preview.relative_to(path.parent).as_posix(),family=family,kind='ppt',
+            synthetic_renderer_substitute=True))
+        mp.write_text(json.dumps(data),encoding='utf-8')
+    monkeypatch.setattr(table,'render_table',lambda h,c,n,p: artifact(p,'metrics_table'))
+    monkeypatch.setattr(report_visuals,'stage_figure',lambda i,r,p: artifact(p,'encoder_stages'))
     if metadata is None:
         monkeypatch.setattr(official,'_predictor',lambda *a: object())
         def diagnostic(info,*a):
-            for name in ('summary.png','feature_channels.png','feature_channels_64x64.png','architecture_overview.png','architecture_detail.png','report.txt'):
-                (info['output']/name).write_text('synthetic diagnostic replacement')
+            for family in ('summary','encoder_stages','feature_channels','feature_channels_64x64','architecture_overview','architecture_detail'):
+                artifact(info['output']/(('encoder_stages_heatmap' if family=='encoder_stages' else family)+'.png'),family)
+            (info['output']/'report.txt').write_text('synthetic diagnostic replacement',encoding='utf-8')
         monkeypatch.setattr(official,'create_report',diagnostic)
     else:
         import standalone_h2former_report as report
@@ -215,7 +234,7 @@ def wire_no_forward(monkeypatch,metadata):
         monkeypatch.setattr(report,'_slice_features',lambda *a: ({0:np.zeros((2,2))},None,None))
         def plot(*a,**kw):
             target=next(x for x in reversed(a) if isinstance(x,Path))
-            target.write_bytes(b'synthetic diagnostic replacement')
+            artifact(target,target.stem)
         monkeypatch.setattr(report,'_summary_figure',plot)
         monkeypatch.setattr(report,'_native_channel_figure',plot)
         monkeypatch.setattr(report,'_architecture',plot)

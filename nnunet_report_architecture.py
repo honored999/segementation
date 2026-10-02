@@ -48,6 +48,8 @@ def _box(ax, x, y, w, h, label, color, fs=9, bold=False):
     ax.add_patch(FancyBboxPatch((x, y), w, h,
         boxstyle="round,pad=0.015,rounding_size=.08", edgecolor=INK,
         facecolor=color, linewidth=1.1))
+    from report_visuals import wrap
+    label=wrap(label,24 if w>2.5 else 17 if w>=2.3 else 15)
     ax.text(x + w/2, y + h/2, label, ha="center", va="center", fontsize=fs,
             color=NAVY, weight="bold" if bold else "normal", linespacing=1.08)
 
@@ -71,49 +73,49 @@ def draw_overview(ax, network, patch_size, final_stage, intermediate_stage):
     count = len(channels)
     top = 2.27 + 1.15 * (count - 1)
     ys = [top - i*1.15 for i in range(count)]
-    height = top + 2.35
+    height = top + 2.90
     ax.set_xlim(0, 18.5)
     ax.set_ylim(0, height)
     ax.axis("off")
     ax.set_facecolor(BG)
     ax.text(.25, height-.48, "Original nnUNetTrainerTopK10 | PlainConvUNet",
             fontsize=19, weight="bold", color=NAVY)
-    ax.text(.25, height-.88,
+    ax.text(.25, height-1.00,
             f"RESTORED NETWORK METADATA  |  patch {_shape(patch_size)}  |  {count} encoder stages / {count-1} decoder steps",
             fontsize=9.5, color=INK)
-    ax.text(2.2, top+1.00, "ENCODER", fontsize=11.3, weight="bold", color=NAVY)
-    ax.text(9.9, top+1.00, "DECODER | transpose conv + skip concat + conv block",
+    ax.text(2.2, top+1.35, "ENCODER", fontsize=11.3, weight="bold", color=NAVY)
+    ax.text(9.9, top+1.35, "DECODER | transpose conv + skip concat + conv block",
             fontsize=11.3, weight="bold", color=NAVY)
-    _box(ax, .18, ys[0], 1.18, .68, "DWI input", "#eef1f4", 8.6)
-    _arrow(ax, [(1.36, ys[0]+.34), (1.65, ys[0]+.34)])
+    _box(ax, .18, ys[0], 1.18, .78, "DWI input", "#eef1f4", 8.6)
+    _arrow(ax, [(1.36, ys[0]+.39), (1.65, ys[0]+.39)])
     for index, y in enumerate(ys):
         capture = ("HOOK A · native 64×64" if index == intermediate_stage else
-                   "HOOK B · final pre-decoder" if index == final_stage else "")
+                   "HOOK B · pre-decoder" if index == final_stage else "")
         label = f"S{index} | {_shape(sizes[index])} | {channels[index]} ch"
         if capture:
             label += "\n" + capture
-        _box(ax, 1.65, y, 3.15, .68, label, ORANGE if capture else BLUE,
+        _box(ax, 1.65, y, 3.15, .78, label, ORANGE if capture else BLUE,
              8.3 if capture else 9, bool(capture))
         if index < count-1:
-            _arrow(ax, [(3.225, y), (3.225, ys[index+1]+.68)])
+            _arrow(ax, [(3.225, y), (3.225, ys[index+1]+.78)])
     for index, y in enumerate(ys[:-1]):
-        _box(ax, 10.0, y, 3.10, .68,
+        _box(ax, 10.0, y, 3.10, .78,
              f"D{index} | {_shape(sizes[index])} | {channels[index]} ch",
              GREEN, 9, True)
-        _arrow(ax, [(4.80, y+.34), (10.0, y+.34)])
+        _arrow(ax, [(4.80, y+.39), (10.0, y+.39)])
         ax.text(7.0, y+.43, f"skip S{index}", fontsize=8.2, color=INK,
                 bbox=dict(facecolor=BG, edgecolor="none", pad=.4))
-    _arrow(ax, [(4.80, ys[-1]+.34), (11.55, ys[-1]+.34),
+    _arrow(ax, [(4.80, ys[-1]+.39), (11.55, ys[-1]+.39),
                 (11.55, ys[-2])], color="#946f34", lw=1.5)
     for index in range(count-2, 0, -1):
-        _arrow(ax, [(11.55, ys[index]+.68), (11.55, ys[index-1])],
+        _arrow(ax, [(11.55, ys[index]+.78), (11.55, ys[index-1])],
                color="#368168", lw=1.5)
     n_classes = network.decoder.seg_layers[-1].out_channels
-    _box(ax, 13.52, ys[0], 1.95, .68,
-         f"seg_layers[-1]\n1×1 main head · {n_classes} logits", PURPLE, 8.1, True)
-    _box(ax, 15.83, ys[0], 2.37, .68, "Single inference\nlogit tensor", PURPLE, 8.8, True)
-    _arrow(ax, [(13.10, ys[0]+.34), (13.52, ys[0]+.34)])
-    _arrow(ax, [(15.47, ys[0]+.34), (15.83, ys[0]+.34)])
+    _box(ax, 13.52, ys[0]-.19, 1.95, 1.16,
+         f"seg_layers[-1]\n1×1 head\n{n_classes} logits", PURPLE, 8.1, True)
+    _box(ax, 15.83, ys[0], 2.37, .78, "Single inference\nlogit tensor", PURPLE, 8.8, True)
+    _arrow(ax, [(13.10, ys[0]+.39), (13.52, ys[0]+.39)])
+    _arrow(ax, [(15.47, ys[0]+.39), (15.83, ys[0]+.39)])
     ax.text(.42, 1.39,
             f"S{final_stage} → D{final_stage-1} → … → D0 → main head; S{final_stage-1}..S0 enter matching decoder steps.",
             fontsize=10, color=NAVY, weight="bold")
@@ -139,6 +141,8 @@ def _panel(ax, height, title, note):
 def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
     """Three numbered, independent panels; no wires cross panel boundaries."""
     import matplotlib.pyplot as plt
+    from report_visuals import setup_font,save_figure,panel_pages
+    setup_font()
     channels, sizes = _metadata(network, patch_size, final_stage, intermediate_stage)
     count = len(channels)
     enc_h, dec_h, head_h = 4.55, 2.25 + 1.34*(count-1), 4.35
@@ -175,23 +179,25 @@ def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
     dec = fig.add_subplot(grid[1])
     _panel(dec, dec_h, "② Decoder | one local operation at each skip scale",
            "Each row: ConvTranspose2d → matching encoder skip concat → StackedConvBlocks. Named tensors link rows.")
-    top = dec_h - 2.20
+    # Tall decoder panels need extra heading clearance at the PPT body size.
+    dec.texts[1].set_y(dec_h-1.06)
+    top = dec_h - 2.55
     for step in range(count-1):
         skip = count-2-step
         y = top-step*1.34
         source = f"S{final_stage} bottleneck" if step == 0 else f"D{skip+1}"
         boxes = [(.42, 2.20, source, ORANGE if step == 0 else GREEN),
-                 (2.99, 3.02, f"ConvTranspose2d → {_shape(sizes[skip])}", GREEN),
+                 (2.99, 3.02, f"ConvTranspose2d\n→ {_shape(sizes[skip])}", GREEN),
                  (6.40, 3.13, f"concat [up, S{skip}]", GREEN),
                  (9.96, 3.13, "StackedConvBlocks", GREEN),
                  (13.54, 2.22, f"D{skip} · {channels[skip]} ch", GREEN)]
         for x, w, label, color in boxes:
-            _box(dec, x, y, w, .57, label, color,
+            _box(dec, x, y, w, .72, label, color,
                  8.0 if x in (2.99, 9.96) else 8.7, x == 13.54)
         for first, second in zip(boxes[:-1], boxes[1:]):
-            _arrow(dec, [(first[0]+first[1], y+.285), (second[0], y+.285)], lw=1.05)
-        _box(dec, 6.82, y+.68, 2.28, .34, f"encoder S{skip} skip", BLUE, 7.5)
-        _arrow(dec, [(7.96, y+.68), (7.96, y+.57)], lw=1.0)
+            _arrow(dec, [(first[0]+first[1], y+.36), (second[0], y+.36)], lw=1.05)
+        _box(dec, 6.82, y+.88, 2.28, .40, f"encoder S{skip} skip", BLUE, 7.5)
+        _arrow(dec, [(7.96, y+.88), (7.96, y+.72)], lw=1.0)
         dec.text(16.15, y+.28, f"{_shape(sizes[skip])} · step {step}",
                  va="center", fontsize=8.3, color=INK)
     dec.text(.42, .51,
@@ -219,6 +225,9 @@ def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
                "Historical saved-prediction checkpoint and TTA provenance are separate from fresh diagnostic features.",
                fontsize=8.7, color=INK)
     try:
-        fig.savefig(Path(output), dpi=150, facecolor=BG)
+        from matplotlib.text import Text
+        for text in fig.findobj(Text): text.set_fontsize(text.get_fontsize()*1.25)
+        save_figure(fig,output,family="architecture_detail",coverage={"panels":[1,2,3],"decoder_steps":list(range(count-1))})
+        panel_pages(fig,output,"architecture_detail")
     finally:
         plt.close(fig)

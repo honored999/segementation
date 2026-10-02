@@ -237,9 +237,8 @@ def test_native_channel_display_and_shared_colorbar(tmp_path, monkeypatch):
             assert image.norm.vmin == 0 and image.norm.vmax == 1
             assert image.get_cmap().name == "coolwarm"
             assert image.get_interpolation() == "nearest"
-        assert any(ax.get_xlabel().startswith("Relative activation within each channel")
-                   for ax in self.axes)
-        captured.extend(images)
+        assert any(t.get_text().startswith("Relative activation per channel") for t in self.texts)
+        if Path(path).name=="native.png": captured.extend(images)
         return original(self, path, *args, **kwargs)
     monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
     values = np.arange(16, dtype=np.float32).reshape(4, 4) + 10
@@ -279,19 +278,10 @@ def test_summary_has_separate_top_regions(tmp_path, monkeypatch):
     seen = []
     original_savefig = matplotlib.figure.Figure.savefig
     def inspect(fig, output, **kwargs):
-        top = fig.axes[:6]
-        assert len(top) == 6
-        assert top[0].get_position().y0 > top[1].get_position().y1
-        assert top[1].get_position().y0 > top[2].get_position().y1
-        assert top[2].get_position().y0 > top[3].get_position().y1
-        assert top[3].get_position().y0 > top[4].get_position().y1
-        assert [handle.get_label() for handle in top[1].get_legend().legend_handles] == ["TP", "FP", "FN"]
-        assert top[2].get_xlabel().startswith("Feature magnitude display")
-        labels = [text.get_text() for text in top[0].texts]
-        assert any("P3" in label for label in labels)
-        assert any("P2" in label for label in labels)
-        assert any("P1" in label for label in labels)
-        assert any("P0" in label for label in labels)
+        labels=" ".join(t.get_text() for ax in fig.axes for t in ax.texts)
+        assert "P3" not in labels and "ENCODER" not in labels
+        assert [handle.get_label() for handle in fig.axes[0].get_legend().legend_handles]==["TP","FP","FN"]
+        assert any(ax.get_xlabel().startswith("Feature magnitude display") for ax in fig.axes)
         seen.append(True)
         return original_savefig(fig, output, **kwargs)
     monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)
@@ -530,8 +520,8 @@ def test_plain_unet_main_output_connected():
     labels = {text.get_text(): text.get_position() for text in ax.texts}
     head = next(pos for name,pos in labels.items() if "seg_layers[-1]" in name)
     output = next(pos for name,pos in labels.items() if "Single inference" in name)
-    assert ((13.10, head[1]), (13.52, head[1])) in arrows
-    assert ((15.47, output[1]), (15.83, output[1])) in arrows
+    assert any(np.allclose(a,(13.10,head[1]),atol=1e-12) and np.allclose(b,(13.52,head[1]),atol=1e-12) for a,b in arrows)
+    assert any(np.allclose(a,(15.47,output[1]),atol=1e-12) and np.allclose(b,(15.83,output[1]),atol=1e-12) for a,b in arrows)
     assert all(f"skip S{i}" in " ".join(labels) for i in range(3))
     plt.close(fig)
 
@@ -578,13 +568,13 @@ def test_original_check_unknown_and_metrics_conflict(tmp_path, capsys, monkeypat
     import generate_nnunet_result_report as report
     monkeypatch.setattr(report, "verify_full_geometry", lambda info: 6)
     monkeypatch.setattr(report, "_predictor", lambda info, args: object())
+    from test_report_metrics_table import wire_no_forward
+    wire_no_forward(monkeypatch,None)
+    valid_report=report.create_report
     seen = []
     def fake_report(info, predictor, declaration):
         seen.append((declaration, info["historical_tta"]))
-        names = ["summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt",
-                 "architecture_overview.png", "architecture_detail.png"]
-        for name in names:
-            (info["output"] / name).write_text("synthetic", encoding="utf-8")
+        valid_report(info,predictor,declaration)
     monkeypatch.setattr(report, "create_report", fake_report)
     full = args[:-1]
     assert main(full) == 0
@@ -672,14 +662,24 @@ def test_original_split_architecture_and_comparison_summary(tmp_path, monkeypatc
     report._plain_unet_overview_figure(net, (512, 512), 7, 3, overview)
     report._plain_unet_detail_figure(net, (512, 512), 7, 3, detail)
     assert overview.stat().st_size > 1000 and detail.stat().st_size > 1000
+    # Readability regression: enlarged headings/node labels must remain disjoint.
+    import json
+    manifest=json.loads((tmp_path/'ppt'/'layout_manifest.json').read_text(encoding='utf-8'))
+    for page in (r for r in manifest['figures'] if r['kind']=='ppt'):
+        texts=page['text_measurements']
+        for i,a in enumerate(texts):
+            x,y,w,h=a['bbox']
+            for b in texts[i+1:]:
+                xx,yy,ww,hh=b['bbox']
+                assert min(x+w,xx+ww)-max(x,xx)<=1 or min(y+h,yy+hh)-max(y,yy)<=1, (a['text'],b['text'])
 
     seen = []
     save = matplotlib.figure.Figure.savefig
     def inspect(fig, path, *args, **kwargs):
-        labels = " ".join(text.get_text() for ax in fig.axes for text in ax.texts)
+        labels = " ".join(text.get_text() for ax in fig.axes for text in ax.texts)+" "+" ".join(t.get_text() for t in fig.texts)
         assert "ENCODER" not in labels and "PPM" not in labels
         assert "HIGH DICE" in labels and "LOW DICE" in labels
-        assert len([image for ax in fig.axes for image in ax.images]) == 48
+        if Path(path).name=="summary.png": assert len([image for ax in fig.axes for image in ax.images]) == 48
         seen.append(True)
         return save(fig, path, *args, **kwargs)
     monkeypatch.setattr(matplotlib.figure.Figure, "savefig", inspect)

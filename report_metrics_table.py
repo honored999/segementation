@@ -290,44 +290,50 @@ def export_table(table, output):
 
 
 def render_table(headers, cells, notes, output):
+    """Keep full ordered data; paginate both rows and columns without truncation."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib import font_manager
-    # Windows CJK font makes the two contractual summary labels readable.
-    available = {f.name for f in font_manager.fontManager.ttflist}
-    font = next((f for f in ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans") if f in available), "DejaVu Sans")
-    def wrap(value, width):
-        return "\n".join(textwrap.wrap(value, width=width, break_long_words=True, replace_whitespace=False)) or ""
-    limits = [36 if h in ("case_id", "count_label_definition") else 24 for h in headers]
-    wrapped = [[wrap(v,limits[i]) for i,v in enumerate(row)] for row in [headers,*cells]]
-    # Measure actual glyphs, including CJK and wide Latin text, rather than
-    # assuming every character has the same width.
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
-    probe = Figure(dpi=120)
-    renderer = FigureCanvasAgg(probe).get_renderer()
-    prop = font_manager.FontProperties(family=font, size=9)
-    widths = [max(1.0, max(renderer.get_text_width_height_descent(line, prop, False)[0]
-                          for row in wrapped for line in row[i].split("\n"))/120 + .35)
-              for i in range(len(headers))]
-    heights = [.24*max(max(len(v.split("\n")) for v in row),1)+.20 for row in wrapped]
-    note_lines = [wrap(n,150) for n in notes]
-    footer = .22*sum(len(n.split("\n")) for n in note_lines)+.5
-    width, height = sum(widths), sum(heights)+footer+.6
-    with plt.rc_context({"font.family":font}):
-        fig = plt.figure(figsize=(width,height))
-        try:
-            ax = fig.add_axes((.01,(footer+.2)/height,.98,sum(heights)/height)); ax.axis("off")
-            tab = ax.table(cellText=wrapped[1:], colLabels=wrapped[0], colWidths=[w/width for w in widths],
-                           cellLoc="left", loc="center", bbox=(0,0,1,1))
-            tab.auto_set_font_size(False); tab.set_fontsize(9)
-            for (r,c), cell in tab.get_celld().items():
-                cell.set_height(heights[r]/sum(heights)); cell.PAD=.035
-                cell.set_edgecolor("#c8d2dc")
-                cell.set_facecolor("#dae7f2" if r==0 else "#e6f0e5" if r>=len(cells)-1 else "#f4f7fa" if r%2 else "white")
-            fig.text(.01,1-.22/height,"Full evaluation set | metrics and voxel counts",fontsize=12,va="top")
-            fig.text(.01,.18/height,"\n".join(note_lines),fontsize=9,va="bottom")
-            fig.savefig(output,dpi=120)
-        finally:
-            plt.close(fig)
+    from report_visuals import BODY, TITLE, PPT_SIZE, setup_font, wrap, save_figure
+    setup_font(); output=Path(output)
+    def draw(indices, row_indices, path, page=False, label=""):
+        limits=[28 if headers[i]=='case_id' else 18 for i in indices]
+        wrapped=[[wrap(str(v),limits[j]) for j,v in enumerate(row)] for row in
+            [[headers[i] for i in indices],*[[cells[r][i] for i in indices] for r in row_indices]]]
+        heights=[.27*max(len(v.split('\n')) for v in row)+.18 for row in wrapped]
+        if page: size=PPT_SIZE
+        else: size=(max(18,2.7*len(indices)),sum(heights)+2.2)
+        fig=plt.figure(figsize=size)
+        top=.84; bottom=.12
+        ax=fig.add_axes((.025,bottom,.95,top-bottom)); ax.axis('off')
+        # Case IDs get more room, without suppressing source/provenance columns.
+        widths=[1.8 if headers[i]=='case_id' else 1.1 for i in indices]; total=sum(widths)
+        tab=ax.table(cellText=wrapped[1:],colLabels=wrapped[0],colWidths=[w/total for w in widths],cellLoc='left',bbox=(0,0,1,1))
+        tab.auto_set_font_size(False); tab.set_fontsize(BODY)
+        for (r,c),cell in tab.get_celld().items():
+            cell.set_height(heights[r]/sum(heights)); cell.PAD=.045; cell.set_edgecolor('#c8d2dc')
+            row_type=cells[row_indices[r-1]][headers.index('row_type')] if r and 'row_type' in headers else ''
+            cell.set_facecolor('#dae7f2' if r==0 else '#e6f0e5' if row_type in ('case_macro_mean','voxel_total') else '#f4f7fa' if r%2 else 'white')
+        fig.suptitle('Full evaluation set | metrics and voxel counts',fontsize=TITLE,y=.975)
+        fig.text(.025,.885,label or 'All source columns and cases; ordered macro and voxel summaries retained',fontsize=BODY)
+        fig.text(.025,.04,'Missing: N/A; blank: not applicable. Source definitions, units and full provenance: report.txt / CSV',fontsize=BODY)
+        try: save_figure(fig,path,family='metrics_table',coverage={'column_indices':indices,'columns':[headers[i] for i in indices],
+            'row_indices':row_indices,'case_ids':[cells[r][headers.index('case_id')] for r in row_indices]})
+        finally: plt.close(fig)
+    draw(list(range(len(headers))),list(range(len(cells))),output)
+    repeat=[headers.index(h) for h in ('case_id','row_type') if h in headers]
+    others=[i for i in range(len(headers)) if i not in repeat]
+    number=0
+    for start in range(0,len(others),4):
+        cols=repeat+others[start:start+4]
+        batch=[]; height=.65
+        for r,row in enumerate(cells):
+            rh=.27*max(len(wrap(str(row[c]),28 if headers[c]=='case_id' else 18).split('\n')) for c in cols)+.18
+            if batch and (height+rh>6.1 or len(batch)>=8):
+                number+=1; draw(cols,batch,output.parent/'ppt'/f'metrics_table_{number:02d}.png',True,
+                    f'Column group {start//4+1} | source rows {batch[0]+1}-{batch[-1]+1} of {len(cells)}')
+                batch=[]; height=.65
+            batch.append(r); height+=rh
+        if batch:
+            number+=1; draw(cols,batch,output.parent/'ppt'/f'metrics_table_{number:02d}.png',True,
+                f'Column group {start//4+1} | source rows {batch[0]+1}-{batch[-1]+1} of {len(cells)}')

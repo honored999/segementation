@@ -28,7 +28,7 @@ the saved mask was produced by that checkpoint. Without it, a full report is
 refused. Use a fresh output directory: existing targets and overlaps with any
 source are refused. The output parent must exist. Complete output appears only
 after every mode-specific file is written; an incomplete or failed run removes its private staging folder without leaving a report in the final output directory.
-UPerNet outputs are `summary.png`, `feature_channels.png`, `feature_channels_64x64.png`, and UTF-8 `report.txt`. Full runs verify image,
+UPerNet outputs include `summary.png`, `encoder_stages_heatmap.png`, both native channel sheets, `architecture_overview.png`, the metrics CSV/PNG, UTF-8 `report.txt`, and complete `ppt/` pages with slide previews. UPerNet has no independent detail implementation. Full runs verify image,
 GT and prediction headers for every metrics-covered case. The TXT records the
 count. Only exact `image_reader_writer=SimpleITKIO` plans are supported.
 
@@ -62,8 +62,7 @@ development. No training or validation prediction is run by this command.
 
 ## Visual revision and server review
 
-The summary shows the encoder stages, selected feature connections, PPM, FPN and
-output path from the loaded model attributes. High and low Dice groups each show
+The separate `architecture_overview.png` shows encoder stages, selected feature connections, PPM, FPN and output path from loaded model attributes. `summary.png` contains cases only for every supported identity. High and low Dice groups each show
 three cases with up to three GT-positive slices. Green is TP, red FP, and blue
 FN in the display overlay. The summary's inferno scale uses per-slice 1st-99th
 percentile normalization; DWI+feature uses alpha 0.48. This scale is for display
@@ -327,3 +326,117 @@ blank: mean TP/FP/FN and total metric columns.
 SERVER VALIDATION PENDING: real counts, geometry/labels, source summary and
 definition evidence, checkpoint/manifest compatibility and full real-case long
 table visual inspection. Local validation is synthetic CPU engineering evidence.
+
+
+## All encoder stages and readable PPT pages (2026-09-30)
+
+The five integrated identities are exactly:
+
+| Entry | Encoder capture | Separate architecture |
+| --- | --- | --- |
+| nnUNetTrainerTopK10 | every actual encoder.stages output | overview + numbered detail |
+| nnUNetTrainerUPerNetTopK10EarlyStopping | every encoder.stages output, including stages omitted by selected_feature_indices | overview + named encoder/PPM/FPN overview pages; no detail implementation |
+| h2former | E0=decode2 input[1], E1=decode3 input[1], E2=decode4 input[1], E3=decode4 input[0] | overview + numbered detail |
+| h2former_lite_upernet | decoder input[0][0..3] | overview + numbered detail |
+| h2former_lite_upernet_w128_ppm1236 | decoder input[0][0..3] | overview + numbered detail |
+
+`encoder_stages_heatmap.png` is titled **各级编码器特征强度** and shows
+`mean(abs(channel))`, the actual padded model-input window and measured C×H×W.
+Encoder numbering is **0-based**, distinct from diagram S1..S4 names.
+Lite stage metadata distinguishes argument `input_index=0` from
+`feature_index=stage`; captions read `decoder input[0][stage]`. Historical
+native `input_index` remains a list index for compatibility, explicitly labeled
+with `input_index_semantics` and `module_input_index=0`.
+H2Former captures the fused CNN/MS features after Swin, directly as BCHW; no
+CNN-only layer, decoder output, PPM feature or token reordering is substituted.
+The original six selected cases and `slices[0]` are retained. Empty GT/native
+rows explain the absence rather than substitute another case.
+
+Every row's input/stages/native channels share one forward and one tile.
+Official nnU-Net keeps the first enumerated window containing the preprocessed
+slice center. H2Former keeps the first enumerated tile on its first displayed
+slice. GT only chooses display slices, never model input, channel IDs or tile
+positions. TXT records source/preprocessed slice, window bounds, padding,
+crop/transpose/resampling, input normalization and stage modules/shapes.
+
+Model-input normalization remains the nnU-Net plans preprocessor or H2Former
+full-volume z-score. Stage/input **display** independently uses finite-only
+1st-99th percentiles. Constants and all-invalid grids display zero; nonfinite
+pixels display zero and metadata records invalid counts/status. Stable scaled
+arithmetic handles extreme finite ranges. Nearest display of native grids does
+not establish original-space alignment. This is neither attention, Grad-CAM,
+lesion probability, saved prediction replay nor every channel's full content.
+Independent scales cannot compare absolute strength across stages/cases.
+
+Hooks reduce channels immediately. Only the representative window retains all
+stage 2D grids, its input and at most eight channels from each of the two
+existing native layers. Other windows retain only reduced deepest maps needed
+by the original summary. There is no per-stage forward or extra full-volume
+stage cache. Hooks are removed on success and exceptions; inference_mode/eval
+is used, and model outputs are unchanged. Original deepest bilinear/Gaussian
+fusion and inverse mapping remain in use.
+
+Main sheets preserve all content with larger text and adjusted spacing. For
+PPT use `ppt/`, rather than shrinking a complete long sheet onto one slide:
+
+- `summary_high_01.png`, `summary_low_01.png`, etc.: one case, up to three slices, all six columns.
+- `encoder_stages_high_01.png`, `encoder_stages_low_01.png`, etc.: up to two cases and four stage columns, repeating input for additional stage groups.
+- `feature_channels_high_01.png`, `feature_channels_low_01.png`, and matching `feature_channels_64x64_*`: one case, all selected channels in a 2×4 layout. The historical 64x64 filename is retained; H2Former titles use measured sizes.
+- `architecture_overview_01.png` and `architecture_detail_01.png`, etc.: complete numbered panels with named tensor connections; official UPerNet overview splits its encoder, PPM and FPN substructures.
+- `metrics_table_01.png`, etc.: adaptive row pages and four-column groups, repeating case_id and row_type. Every original column, case, macro summary and voxel summary remains covered. CSV/TXT ordered records and formulas are unchanged.
+
+Every main/page PNG has a corresponding `ppt/*_slide.png`: a real 1920×1080
+preview, proportional fitting within an 1800×960 rectangle, without cropping or
+stretching. `ppt/layout_manifest.json` records original dimensions, placement,
+scale, renderer text bounds, effective pixel font sizes and content coverage.
+The simple preset is 16×9 inches, 100 dpi, 14pt body / 22pt titles; effective
+sizes depend on actual placement, not just nominal points. Complete main sheets
+can be too dense for one slide and are **not** claimed to pass the PPT body-text
+threshold. Pages target at least about 18px body and 28px titles. Full provenance
+stays in TXT. A CJK font already installed on the host is required; no font or
+PPTX dependency is installed automatically.
+
+All new stage/main/page/preview files participate in private staging and
+completeness validation before atomic publication. Existing targets and source
+paths cannot be reused. --check stays metadata-only and creates no images.
+No training/model/optimizer/seed/checkpoint selection, Dataset501 DWI-only data,
+fixed patient five-fold splits, source-space formal metric contract or historical
+UNKNOWN/USER CONFIRMED/USER DECLARED/pending status changes.
+
+### Fresh-directory server commands (user runs these)
+
+These are parameter templates, not claims about actual server paths or mask
+provenance. Use an output parent that already exists and a new report directory.
+For either exact official Trainer, set MODEL to its existing
+Dataset501_StrokeLesion/<TRAINER>__nnUNetPlans__2d directory:
+
+```bat
+set MODEL=<ACTUAL_OFFICIAL_MODEL_DIR>
+set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
+python generate_nnunet_result_report.py --model-dir "%MODEL%" --fold 0 --images-dir "<ACTUAL_DWI_IMAGES_DIR>" --labels-dir "<ACTUAL_GT_LABELS_DIR>" --prediction-dir "<ACTUAL_SAVED_PREDICTION_DIR>" --metrics-dir "<ACTUAL_METRICS_DIR>" --checkpoint "<ACTUAL_CHECKPOINT>" --output-dir "<NEW_ENCODER_STAGES_REPORT_DIR>" --check
+```
+
+Full official command: reuse these same parameters, remove --check and add
+--device cuda. For official UPerNet add
+`--prediction-checkpoint-declaration "<ACTUAL USER DECLARATION WITH EVIDENCE>"`.
+Original TopK10 may remain UNKNOWN. Only if the user actually confirms its
+prediction checkpoint add both --confirm-prediction-checkpoint and the actual
+--prediction-checkpoint-declaration. Never invent a source declaration.
+
+For any of the three supported standalone identities:
+
+```bat
+python generate_nnunet_result_report.py --source standalone-h2former --model-dir "<ACTUAL_STANDALONE_RUN_DIR>" --fold 0 --images-dir "<ACTUAL_DWI_IMAGES_DIR>" --labels-dir "<ACTUAL_GT_LABELS_DIR>" --prediction-dir "<ACTUAL_SAVED_PREDICTION_DIR>" --metrics-dir "<ACTUAL_METRICS_DIR>" --checkpoint "<ACTUAL_CHECKPOINT>" --config "<ACTUAL_RESOLVED_CONFIG_JSON>" --manifest "<ACTUAL_PREDICTION_MANIFEST_JSON>" --output-dir "<NEW_STANDALONE_ENCODER_STAGES_REPORT_DIR>" --check
+```
+
+Full standalone command: remove --check, add --device cuda, and use
+--allow-pending only for a deliberately allowed pending checkpoint/manifest.
+UNKNOWN remains UNKNOWN unless both explicit confirmation and an actual source
+declaration are supplied. Generate on the server when no feature cache exists;
+old PNGs cannot reconstruct the new encoder tensors.
+
+**SERVER VALIDATION PENDING:** real checkpoint compatibility, feature source,
+case geometry/window localization and real text layouts have not been verified
+locally. Local evidence is tiny CPU synthetic engineering validation only.
+Independent Level 3 review is a separate manual next step, bound to the final
+uncommitted diff; implementation completion does not imply review PASS.
