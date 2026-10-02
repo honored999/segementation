@@ -24,8 +24,12 @@ conda run -n newconda python .\convert_isles2022_to_nnunet.py --source-root 'C:\
 - derivatives/sub-strokecase0001/ses-0001/sub-strokecase0001_ses-0001_msk.nii.gz
 
 DWI 与标签病例集合必须相同且数量正确；其他位置出现 DWI/标签或非预期命名会报错。
-仅接受三维标量影像、有限像素值和 0/1 标签。size、spacing、origin、direction
-必须精确一致；Nibabel 检查 NIfTI 像素（避免 SimpleITK 将 NaN/Inf 读取为 0 导致漏检），SimpleITK 检查几何；不设容差、不自动修正。目录递归扫描拒绝越界链接和重复目录别名/循环。
+仅接受三维标量影像和有限像素值；先检查有限性，再对 Nibabel 应用 NIfTI
+slope/inter 后的标签像素检查接近 0 或 1：绝对容差 atol=1e-6，rtol=0。
+0.5、2、NaN、Inf 及超出容差的近 0/近 1 值仍拒绝。容差仅用于标签值验证，
+不二值化、不重存标签。size、spacing、origin、direction 必须精确一致，几何不设容差。
+Nibabel 检查 NIfTI 像素（避免 SimpleITK 将 NaN/Inf 读取为 0 导致漏检），
+SimpleITK 检查几何；不自动修正。目录递归扫描拒绝越界链接和重复目录别名/循环。
 其他模态不用于转换。全部病例验证且源 SHA256 稳定后才创建输出。
 
 解析后的目标目录 basename 必须精确为 Dataset508_ISLES2022DWI（区分大小写）。
@@ -62,3 +66,10 @@ CLI 成功时退出码为 0；错误为非零，中断也不会报告成功。
 运行测试前检查 CPU、RAM、GPU、VRAM，任何达到 80% 时按资源策略降级。
 本地合成测试不是服务器真实 250 例数据验证，也不是正式实验或临床结果。
 独立 Level3 审查由主代理另行安排；服务器应先运行完整 --check 再转换。
+
+缩放回归使用真实保存并重载的 int16 NIfTI：底层值 -32768/32767，
+slope=1.5259021893143654e-05，inter=0.5000076293945312，
+缩放值为 0/0.9999999997671694；覆盖 --check、转换字节与 SHA256 保持，
+并通过已安装 nnU-Net SimpleITKIO.read_seg 检查背景、前景及体素位置。
+该微型样例的读取结果不能替代服务器全部病例的预检；如读取路径丢失前景，
+必须报告证据并停止协议变更，不自行改写原始 mask。

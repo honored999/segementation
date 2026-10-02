@@ -272,3 +272,89 @@ def test_identical_bytes_independent_files_accepted(dataset, check):
     else:
         assert (output / 'imagesTr/ISLES_0001_0000.nii.gz').read_bytes() == before[0]
         assert (output / 'labelsTr/ISLES_0001.nii.gz').read_bytes() == before[1]
+
+
+@pytest.fixture
+def scaled_dataset(dataset):
+    import nibabel as nib
+
+    source, output, dwi, mask = dataset
+    raw = np.full((4, 3, 2), -32768, dtype=np.int16)
+    raw[1, 2, 0] = 32767
+    raw[3, 0, 1] = 32767
+    img = nib.Nifti1Image(raw, nib.load(str(dwi)).affine)
+    img.header.set_slope_inter(1.5259021893143654e-05, 0.5000076293945312)
+    nib.save(img, str(mask))
+    loaded = nib.load(str(mask))
+    assert loaded.header.get_data_dtype() == np.dtype('int16')
+    np.testing.assert_array_equal(loaded.dataobj.get_unscaled(), raw)
+    assert loaded.dataobj.slope == 1.5259021893143654e-05
+    assert loaded.dataobj.inter == 0.5000076293945312
+    np.testing.assert_array_equal(np.unique(np.asanyarray(loaded.dataobj)),
+                                  [0, 0.9999999997671694])
+    print('SCALED_NIFTI raw_dtype=int16 raw_unique=[-32768, 32767] '
+          f'slope={loaded.dataobj.slope!r} inter={loaded.dataobj.inter!r} '
+          f'scaled_unique={np.unique(np.asanyarray(loaded.dataobj)).tolist()}')
+    return dataset
+
+
+def test_scaled_label_check_and_conversion(scaled_dataset):
+    source, output, dwi, mask = scaled_dataset
+    before = [p.read_bytes() for p in (dwi, mask)]
+    hashes = [m.sha256(p) for p in (dwi, mask)]
+    args = ['--source-root', str(source), '--output-dir', str(output),
+            '--expected-cases', '1']
+    assert m.main(args + ['--check']) == 0
+    assert not output.parent.exists()
+    assert [p.read_bytes() for p in (dwi, mask)] == before
+    assert m.main(args) == 0
+    for i, target in enumerate((output / 'imagesTr/ISLES_0001_0000.nii.gz',
+                                output / 'labelsTr/ISLES_0001.nii.gz')):
+        assert target.read_bytes() == before[i]
+        assert m.sha256(target) == hashes[i]
+    assert [p.read_bytes() for p in (dwi, mask)] == before
+    assert [m.sha256(p) for p in (dwi, mask)] == hashes
+    manifest = json.loads((output / 'conversion_manifest.json').read_text())
+    for i, kind in enumerate(('dwi', 'label')):
+        row = manifest['cases'][0]
+        assert row[f'source_{kind}_sha256'] == row[f'output_{kind}_sha256'] == hashes[i]
+
+
+@pytest.mark.parametrize('value,accepted', [
+    (0, True), (1, True), (-0.5e-6, True), (0.5e-6, True),
+    (1 - 0.5e-6, True), (1 + 0.5e-6, True),
+    (-1.1e-6, False), (1.1e-6, False),
+    (1 - 1.1e-6, False), (1 + 1.1e-6, False),
+    (0.5, False), (2, False), (np.nan, False), (np.inf, False)])
+@pytest.mark.parametrize('check', [True, False])
+def test_label_absolute_tolerance(dataset, value, accepted, check):
+    import nibabel as nib
+
+    source, output, dwi, mask = dataset
+    pixels = np.full((4, 3, 2), value, dtype=np.float64)
+    nib.save(nib.Nifti1Image(pixels, nib.load(str(dwi)).affine), str(mask))
+    loaded = np.asanyarray(nib.load(str(mask)).dataobj)
+    np.testing.assert_array_equal(loaded, pixels)
+    if accepted:
+        assert m.convert(source, output, 1, check=check)['status'] == (
+            'checked' if check else 'complete')
+    else:
+        message = 'Non-finite pixel' if not np.isfinite(value) else 'atol=1e-6, rtol=0'
+        with pytest.raises(m.ConversionError, match=message):
+            m.convert(source, output, 1, check=check)
+        assert not output.parent.exists()
+
+
+def test_scaled_label_nnunet_reader(scaled_dataset):
+    from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
+
+    _, _, _, mask = scaled_dataset
+    before = mask.read_bytes()
+    seg, _ = SimpleITKIO().read_seg(str(mask))
+    expected = np.zeros((1, 2, 3, 4), dtype=seg.dtype)
+    expected[0, 0, 2, 1] = 1
+    expected[0, 1, 0, 3] = 1
+    print(f'SimpleITKIO dtype={seg.dtype} unique={np.unique(seg).tolist()} '
+          f'foreground_positions={np.argwhere(seg == 1).tolist()}')
+    np.testing.assert_array_equal(seg, expected)
+    assert mask.read_bytes() == before

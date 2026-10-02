@@ -122,8 +122,11 @@ def validate_pair(dwi, mask):
         pixels = np.asanyarray(raw.dataobj)
         if not np.isfinite(pixels).all():
             raise ConversionError(f'Non-finite pixel values: {path}')
-        if is_mask and not np.isin(pixels, (0, 1)).all():
-            raise ConversionError(f'Label values must be only 0/1: {path}')
+        if is_mask and not (np.isclose(pixels, 0, rtol=0, atol=1e-6) |
+                            np.isclose(pixels, 1, rtol=0, atol=1e-6)).all():
+            raise ConversionError(
+                f'Label values must be 0/1 within scaled-pixel tolerance '
+                f'(atol=1e-6, rtol=0): {path}')
         images.append(img)
     for getter in ('GetSize', 'GetSpacing', 'GetOrigin', 'GetDirection'):
         if getattr(images[0], getter)() != getattr(images[1], getter)():
