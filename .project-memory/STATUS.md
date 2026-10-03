@@ -1,35 +1,19 @@
 # Status
 
-Updated: 2026-09-21
+Updated: 2026-10-03
+Scope: branch-local codex/upernet-no-stage7, baseline 8a41ce3b0d4e2c980c9e9063a60b055b0a841d89. Not merged into master; this is not canonical integration memory.
 
-## Current state
+## Current verified engineering state
 
-- The active feature branch contains standalone 2D PlainConvUNet and H2Former
-  model families with explicit model/supervision checkpoint identities.
-- Existing H2Former uses single-output supervision; PlainConvUNet supports its
-  default deep supervision and a matched single-output mode.
-- Independent `h2former_lite_upernet` and `plain_conv_unet_lite_upernet`
-  single-output variants are implemented at `53472ae`. Both use the shared
-  lightweight PPM/FPN decoder while preserving the baseline model identities.
+- Added external nnUNetTrainerUPerNetNoStage7TopK10EarlyStopping, inheriting the existing official-framework UPerNet/TopK10/early-stopping Trainer with an architecture-only override.
+- Returned encoder contains stages 0..6, preserving their supplied configuration and initial weights; stage7 and corresponding metadata removed. UPerNet inputs fixed at (1,3,5,6), with native sizes 256,64,16,8 for 512x512 input; PPM (1,2,4) and FPN128 unchanged.
+- Original plans/configuration, loss, early stopping, optimizer, scheduler, batch size, augmentation, split and inference/checkpoint policy remain unchanged. Distinct Trainer output identity; fresh initial training, same-Trainer continuation only.
+- newconda nnunetv2==2.8.1: focused 10 passed, affected original UPerNet 25 passed. CPU synthetic only, including fresh official discovery, current builder signature, strict reconstruction and exact convolution accounting.
+- Independent read-only Level3 review PASS on exact source/test/doc hashes recorded in .task-notes/validation-evidence.md. Reviewer did not implement or rerun tests.
+- Main agent made coordination/memory edits only; implementation/tests delegated. User authorized branch commit/push; no master integration.
 
-## Verified capabilities/results
+## Scientific boundaries and next work
 
-- Fresh main-agent validation: standalone suite `424 passed in 47.67s`; root
-  `tests/` suite `26 passed in 6.67s`.
-- Independent Level 3 review of `bbe65b5..53472ae` returned PASS with no
-  blocking findings.
-- Synthetic complexity evidence shows both new decoders have fewer parameters
-  than their corresponding baseline decoders. This is engineering evidence,
-  not medical-performance evidence.
-
-## Verified constraints
-
-- Dataset501 remains the established DWI-only baseline.
-- Preserve the existing patient-level five-fold split and original full-volume
-  formal-evaluation semantics.
-- Synthetic validation is engineering evidence only.
-
-## Active work
-
-- Lite-UPerNet implementation is accepted. No real-data training, preflight,
-  fold evaluation, or formal five-fold OOF evaluation has been run.
+- Dataset501 fixed patient-level five-fold split and original full-volume metrics remain protected; real source data read-only.
+- No real checkpoint/data/CUDA validation, server training, fold evaluation or formal performance evidence produced by this task. 512x512 native geometry checked from strides; synthetic forward used 128x128 tiny channels.
+- Deploy matching extension source to training host, verify actual plans/runtime/resources, and run a fresh fold0 development screen with final-checkpoint/full-volume comparison. Formal conclusions require controlled five-fold OOF evidence.

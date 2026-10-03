@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-03 - NoStage7 UPerNet branch-local engineering acceptance
+
+- Changed: separate external Trainer removes only returned encoder stage7 and fixes decoder inputs(1,3,5,6),preserving baseline policy and plans. Existing Trainer source untouched.
+- Validation: newconda CPU synthetic10passed; affected original UPerNet25passed; independent exact-snapshot read-only Level3 PASS. Per-command resource preflight below80percent.
+- Result: local engineering accepted; no real-data/checkpoint/CUDA validation,training or formal evaluation. Production/test implementation delegated; main edited coordination and branch-local memory only. Local engineering stage had no commit,push or master merge; user subsequently authorized committing and pushing this branch.
+- Next: training-host compatibility/resource checks and fresh fold0 final-checkpoint/full-volume development comparison; five-fold OOF required for formal conclusions.
+
 ## 2026-09-21 - Lite UPerNet variants accepted
 
 - Changed: added isolated H2Former and PlainConvUNet Lite-UPerNet single-output
