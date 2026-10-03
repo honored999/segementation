@@ -33,6 +33,8 @@ Notes
 3) LCD uses full-connectivity connected components:
    26-connectivity in 3D, 8-connectivity in 2D.
 4) HD95 is computed from bidirectional surface distances in physical mm.
+5) The seven metrics are macro averages over cases; TP/FP/FN are integer voxel
+   count totals over evaluated cases, not inputs to those macro averages.
 """
 
 from __future__ import annotations
@@ -231,6 +233,11 @@ def build_summary(df: pd.DataFrame, f2_mode: str) -> dict:
         "lcd_connectivity": "26-connectivity for 3D / 8-connectivity for 2D",
         "hd95": "95th percentile of bidirectional surface distances in physical mm",
         "metrics": metrics,
+        "voxel_counts": {
+            "aggregation": "sum over evaluated cases",
+            "unit": "voxels",
+            **{key: sum(int(value) for value in df[key]) for key in ("tp", "fp", "fn")},
+        },
     }
 
 
@@ -306,6 +313,9 @@ def main() -> None:
         "LCD": summary["metrics"]["lcd"]["mean"],
         "Rec (%)": 100.0 * summary["metrics"]["recall"]["mean"],
         "HD95 (mm)": summary["metrics"]["hd95_mm"]["mean"],
+        "TP (total)": summary["voxel_counts"]["tp"],
+        "FP (total)": summary["voxel_counts"]["fp"],
+        "FN (total)": summary["voxel_counts"]["fn"],
     }
     summary_csv = args.output_dir / "summary_metrics.csv"
     pd.DataFrame([paper_row]).to_csv(summary_csv, index=False)
