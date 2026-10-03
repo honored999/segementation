@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import numpy as np
 
-from standalone_nnunet2d.data.dataset import SplitName, StrokeSliceDataset, load_fold_cases
+from standalone_nnunet2d.data.dataset import SplitName, StrokeSliceDataset, load_fold_cases, read_splits
 
 
 DataSourceName = Literal["raw_nifti_online", "nnunet_preprocessed_b2nd"]
@@ -43,13 +45,21 @@ def resolve_data_source_root(
     return source, Path(preprocessed_root)
 
 
+def split_content_hash(splits_file: Path | None) -> str:
+    folds = [{k: sorted(f[k]) for k in ("train", "val")} for f in read_splits(splits_file)]
+    return hashlib.sha256(json.dumps(folds, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _validate_case_ids(
     fold: int,
     split: SplitName,
     case_ids: tuple[str, ...] | None,
+    splits_file: Path | None = None,
 ) -> tuple[str, ...]:
-    allowed_case_ids = load_fold_cases(fold, split)
+    allowed_case_ids = load_fold_cases(fold, split, splits_file=splits_file)
     resolved_case_ids = case_ids if case_ids is not None else allowed_case_ids
+    if len(set(resolved_case_ids)) != len(resolved_case_ids):
+        raise ValueError("duplicate case IDs")
     if not resolved_case_ids:
         raise ValueError("case_ids must not be empty")
     outside_split = set(resolved_case_ids) - set(allowed_case_ids)
@@ -109,6 +119,7 @@ class RawNiftiCaseSource:
         fold: int,
         split: SplitName,
         case_ids: tuple[str, ...] | None = None,
+        splits_file: Path | None = None,
     ) -> None:
         self.dataset = StrokeSliceDataset(
             raw_root,
@@ -116,8 +127,12 @@ class RawNiftiCaseSource:
             split=split,
             case_ids=case_ids,
             foreground_probability=0.0,
+            splits_file=splits_file,
         )
         self.case_ids = self.dataset.case_ids
+        self.splits_file = splits_file
+        self.split_sha256 = split_content_hash(splits_file)
+        self.fold, self.split = fold, split
 
     def prepare_case(self, case_id: str) -> PreparedCase:
         image, label = self.dataset.load_case(case_id)
@@ -193,11 +208,15 @@ class PreprocessedB2ndCaseSource:
         fold: int,
         split: SplitName,
         case_ids: tuple[str, ...] | None = None,
+        splits_file: Path | None = None,
     ) -> None:
         self.root = Path(preprocessed_root).expanduser().resolve()
         if not self.root.is_dir():
             raise FileNotFoundError(f"preprocessed root does not exist: {self.root}")
-        self.case_ids = _validate_case_ids(fold, split, case_ids)
+        self.case_ids = _validate_case_ids(fold, split, case_ids, splits_file)
+        self.splits_file = splits_file
+        self.split_sha256 = split_content_hash(splits_file)
+        self.fold, self.split = fold, split
         try:
             self._blosc2 = importlib.import_module("blosc2")
         except ModuleNotFoundError as error:
@@ -245,12 +264,13 @@ def make_formal_case_source(
     fold: int,
     split: SplitName,
     case_ids: tuple[str, ...] | None = None,
+    splits_file: Path | None = None,
 ) -> FormalCaseSource:
     source = validate_data_source(data_source)
     if source == RAW_NIFTI_ONLINE:
         return RawNiftiCaseSource(
-            data_root, fold=fold, split=split, case_ids=case_ids
+            data_root, fold=fold, split=split, case_ids=case_ids, splits_file=splits_file
         )
     return PreprocessedB2ndCaseSource(
-        data_root, fold=fold, split=split, case_ids=case_ids
+        data_root, fold=fold, split=split, case_ids=case_ids, splits_file=splits_file
     )

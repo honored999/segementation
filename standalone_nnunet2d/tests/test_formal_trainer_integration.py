@@ -268,3 +268,12 @@ def test_formal_trainer_deterministically_continues_after_checkpoint() -> None:
 
  assert actual.mean_loss==pytest.approx(expected.mean_loss,abs=0.0,rel=0.0)
  assert all(torch.equal(expected_parameter,actual_parameter) for expected_parameter,actual_parameter in zip(expected_parameters,restored_model.parameters()))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_checkpoint_output(tmp_path, monkeypatch):
+    # Preserve the default-root guard while isolating synthetic artifacts on D:.
+    from standalone_nnunet2d.engine import checkpoint as engine_checkpoint
+    root = tmp_path / "default-checkpoint-output"
+    monkeypatch.setattr(engine_checkpoint, "PROJECT_OUTPUTS_DIRECTORY", root)
+    monkeypatch.setitem(globals(), "PROJECT_OUTPUTS_DIRECTORY", root)

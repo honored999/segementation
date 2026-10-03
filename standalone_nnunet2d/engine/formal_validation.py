@@ -34,6 +34,7 @@ def select_fold(
     fold: int,
     device: torch.device,
     case_source: FormalCaseSource | None = None,
+    splits_file: Path | None = None,
 ) -> dict[str, Any]:
     """Score every validation case and slice deterministically in memory."""
     previous_benchmark = torch.backends.cudnn.benchmark
@@ -43,7 +44,17 @@ def select_fold(
             data_source=data_source,
             fold=fold,
             split="val",
+            **({"splits_file": splits_file} if splits_file is not None else {}),
         )
+        if splits_file is not None:
+            from standalone_nnunet2d.data.dataset import load_fold_cases
+            from standalone_nnunet2d.data.data_source import split_content_hash
+            if getattr(source, "split_sha256", None) != split_content_hash(splits_file):
+                raise ValueError("selection source conflicts with complete split contract")
+            if tuple(source.case_ids) != load_fold_cases(fold, "val", splits_file=splits_file):
+                raise ValueError("selection source conflicts with explicit split")
+            if getattr(source, "fold", fold) != fold or getattr(source, "split", "val") != "val":
+                raise ValueError("selection source fold/split conflicts")
         records: list[dict[str, str | float | int]] = []
         for case_id in source.case_ids:
             try:

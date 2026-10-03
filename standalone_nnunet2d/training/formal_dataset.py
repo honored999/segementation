@@ -31,6 +31,7 @@ class FormalPatchDataset(Dataset[tuple[Tensor, Tensor]]):
         fold: int,
         split: SplitName,
         case_ids: tuple[str, ...] | None = None,
+        splits_file: Path | None = None,
         patch_size: tuple[int, int] = (512, 512),
         use_mask_for_norm: tuple[bool, ...] = (False,),
         oversample_foreground_percent: float = 0.33,
@@ -59,6 +60,7 @@ class FormalPatchDataset(Dataset[tuple[Tensor, Tensor]]):
             fold=fold,
             split=split,
             case_ids=case_ids,
+            splits_file=splits_file,
         )
         self.case_ids = self._case_source.case_ids
         self.fold = fold

@@ -22,20 +22,47 @@ SPLITS_PATH = PROJECT_ROOT / "reference" / "splits_final.json"
 SplitName = Literal["train", "val"]
 
 
-def load_fold_cases(fold: int, split: SplitName) -> tuple[str, ...]:
-    """Read case IDs from the supplied split file without random re-splitting."""
-    if not 0 <= fold < 5:
-        raise ValueError(f"fold must be in [0, 5), got {fold}")
-    if split not in ("train", "val"):
-        raise ValueError(f"split must be 'train' or 'val', got {split!r}")
-    with SPLITS_PATH.open(encoding="utf-8") as handle:
-        folds = json.load(handle)
-    if len(folds) != 5:
+def read_splits(splits_file: Path | None = None, *, patient_map: dict[str, str] | None = None) -> list[dict[str, list[str]]]:
+    """Validate all folds before exposing any membership; never create a split."""
+    path = SPLITS_PATH if splits_file is None else Path(splits_file)
+    folds = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(folds, list) or not folds:
+        raise ValueError("splits must be a non-empty list")
+    if splits_file is None and len(folds) != 5:
         raise ValueError(f"expected 5 supplied folds, found {len(folds)}")
-    cases = folds[fold][split]
-    if not isinstance(cases, list) or not all(isinstance(case_id, str) for case_id in cases):
-        raise ValueError(f"fold {fold} has invalid {split} case IDs")
-    return tuple(cases)
+    for fold in folds:
+        if not isinstance(fold, dict) or set(fold) != {"train", "val"}:
+            raise ValueError("each fold must contain exactly train and val")
+        for split in ("train", "val"):
+            cases = fold[split]
+            if not isinstance(cases, list) or not cases:
+                raise ValueError("split case_ids must not be empty")
+            for case in cases:
+                if (not isinstance(case, str) or not case or case != case.strip()
+                    or case in {".", ".."} or any(c in case for c in '/\\:<>"|?*')
+                    or any(c.isspace() or ord(c) < 32 for c in case) or case.endswith('.')
+                    or case.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1,10)), *(f'LPT{i}' for i in range(1,10))}):
+                    raise ValueError("illegal case ID")
+            if len(set(cases)) != len(cases):
+                raise ValueError("duplicate case IDs")
+        if set(fold["train"]) & set(fold["val"]):
+            raise ValueError("train/val overlap")
+        if patient_map is not None:
+            cases = fold["train"] + fold["val"]
+            if any(c not in patient_map or not isinstance(patient_map[c], str) or not patient_map[c] for c in cases):
+                raise ValueError("patient mapping must cover every selected case")
+            if {patient_map[c] for c in fold["train"]} & {patient_map[c] for c in fold["val"]}:
+                raise ValueError("patient crosses train/val")
+    return folds
+
+
+def load_fold_cases(fold: int, split: SplitName, *, splits_file: Path | None = None) -> tuple[str, ...]:
+    folds = read_splits(splits_file)
+    if isinstance(fold, bool) or not isinstance(fold, int) or not 0 <= fold < len(folds):
+        raise ValueError(f"fold must be in [0, {len(folds)}), got {fold}")
+    if split not in ("train", "val"):
+        raise ValueError("split must be train or val")
+    return tuple(folds[fold][split])
 
 
 def validate_raw_root(raw_root: Path) -> Path:
@@ -66,14 +93,17 @@ class StrokeSliceDataset(Dataset[tuple[Tensor, Tensor]]):
         fold: int,
         split: SplitName,
         case_ids: tuple[str, ...] | None = None,
+        splits_file: Path | None = None,
         target_spacing_xy: tuple[float, float] = (0.4892368018627167, 0.4892368018627167),
         rng: np.random.Generator | None = None,
         foreground_probability: float = 0.0,
         augmentation_config: AugmentationConfig | None = None,
     ) -> None:
         self.raw_root = validate_raw_root(raw_root)
-        allowed_case_ids = load_fold_cases(fold, split)
+        allowed_case_ids = load_fold_cases(fold, split, splits_file=splits_file)
         self.case_ids = case_ids if case_ids is not None else allowed_case_ids
+        if len(set(self.case_ids)) != len(self.case_ids):
+            raise ValueError("duplicate case IDs")
         if not self.case_ids:
             raise ValueError("case_ids must not be empty")
         outside_split = set(self.case_ids) - set(allowed_case_ids)

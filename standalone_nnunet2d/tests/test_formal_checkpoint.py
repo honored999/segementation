@@ -690,3 +690,279 @@ def test_checkpoint_identity_is_canonical_and_preload_safe(
         with pytest.raises(ValueError):
             load_checkpoint(restored, None, path, expected)
         assert load_state_dict.call_count == 0
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_checkpoint_output(tmp_path, monkeypatch):
+    # Preserve the default-root guard while isolating synthetic artifacts on D:.
+    from standalone_nnunet2d.engine import checkpoint as engine_checkpoint
+    root = tmp_path / "default-checkpoint-output"
+    monkeypatch.setattr(engine_checkpoint, "PROJECT_OUTPUTS_DIRECTORY", root)
+    monkeypatch.setitem(globals(), "PROJECT_OUTPUTS_DIRECTORY", root)
+
+
+class _OptimizerContractModel(nn.Module):
+    def __init__(self, value=1.0, scalar=False):
+        super().__init__()
+        self.weight = nn.Parameter(torch.full(() if scalar else (2, 3), value))
+        self.other = nn.Parameter(torch.full((2,), value))
+        self.register_buffer('running', torch.full((2,), value))
+
+
+def _optimizer_contract_objects(kind, value=1.0, *, scalar=False, initialized=True, momentum=.9, amsgrad=False):
+    model = _OptimizerContractModel(value, scalar)
+    groups = [{'params': [model.weight], 'lr': .01}, {'params': [model.other], 'lr': .02}]
+    optimizer = (torch.optim.AdamW(groups, amsgrad=amsgrad) if kind == 'adamw'
+                 else torch.optim.SGD(groups, momentum=momentum, nesterov=momentum > 0))
+    if initialized:
+        (model.weight.sum() + model.other.sum()).backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    scheduler = PolyLRScheduler(optimizer, 1000)
+    scheduler.step(7)
+    return model, optimizer, scheduler
+
+
+def _optimizer_contract_snapshot(model, optimizer, scheduler):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    return deepcopy((model.state_dict(), optimizer.state_dict(),
+                     {k: v for k, v in scheduler.__dict__.items() if k != 'optimizer'}, ck.capture_rng_state()))
+
+
+def _assert_optimizer_contract_equal(actual, expected):
+    if isinstance(expected, torch.Tensor):
+        assert actual.dtype == expected.dtype and torch.equal(actual, expected)
+    elif isinstance(expected, np.ndarray):
+        assert np.array_equal(actual, expected)
+    elif isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            _assert_optimizer_contract_equal(actual[key], expected[key])
+    elif isinstance(expected, (tuple, list)):
+        assert len(actual) == len(expected)
+        for a, e in zip(actual, expected):
+            _assert_optimizer_contract_equal(a, e)
+    else:
+        assert actual == expected
+
+
+@pytest.mark.parametrize('kind,bad', [
+    ('adamw', 'missing_exp_avg'), ('adamw', 'scalar_exp_avg'), ('adamw', 'bad_betas'),
+    ('adamw', 'missing_step'), ('adamw', 'bad_step'), ('adamw', 'bad_eps'),
+    ('adamw', 'missing_max'), ('adamw', 'bad_max'), ('adamw', 'bad_sq'),
+    ('adamw', 'bad_flag'), ('adamw', 'bad_combo'),
+    ('sgd', 'bad_buffer'), ('sgd', 'bad_momentum'), ('sgd', 'bad_dampening'),
+    ('sgd', 'bad_nesterov'), ('sgd', 'bad_nesterov_combo'),
+    ('sgd', 'bad_lr'), ('sgd', 'bad_weight_decay'),
+    ('adamw', 'duplicate_ref'), ('sgd', 'unknown_ref'), ('adamw', 'unknown_field'),
+    ('sgd', 'missing_lr'), ('adamw', 'wrong_state_type'),
+    ('adamw', 'beta_range'), ('adamw', 'beta_length'), ('adamw', 'eps_nan'),
+    ('adamw', 'step_vector'), ('adamw', 'step_negative'), ('adamw', 'moment_dtype'),
+    ('adamw', 'missing_sq'), ('adamw', 'missing_betas'), ('adamw', 'bad_foreach'),
+    ('adamw', 'capturable'), ('adamw', 'differentiable'),
+    ('sgd', 'momentum_negative'), ('sgd', 'dampening_negative'), ('sgd', 'lr_boolean'),
+    ('sgd', 'bad_maximize'), ('sgd', 'bad_fused'), ('sgd', 'unknown_sgd_field'),
+    ('sgd', 'group_length'), ('adamw', 'state_boolean_ref'), ('adamw', 'group_boolean_ref'),
+])
+def test_optimizer_schema_rejects_before_any_restore(tmp_path, kind, bad):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    source, opt, sched = _optimizer_contract_objects(kind, 7.0, amsgrad=bad in ('missing_max', 'bad_max'))
+    path = tmp_path / 'optimizer-schema.pth'
+    save_formal_checkpoint(source, opt, sched, path, FormalTrainerState(8, 2000, .8, 0), {}, checkpoint_root=tmp_path)
+    payload, _ = ck.read_formal_payload(path)
+    state = payload['optimizer_state_dict']
+    values = state['state'][0]
+    group = state['param_groups'][0]
+    if bad == 'missing_exp_avg': del values['exp_avg']
+    elif bad == 'scalar_exp_avg': values['exp_avg'] = torch.tensor(0.)
+    elif bad == 'bad_betas': group['betas'] = ('invalid', .999)
+    elif bad == 'missing_step': del values['step']
+    elif bad == 'bad_step': values['step'] = torch.tensor(float('nan'))
+    elif bad == 'bad_eps': group['eps'] = -1.
+    elif bad == 'missing_max': del values['max_exp_avg_sq']
+    elif bad == 'bad_max': values['max_exp_avg_sq'] = torch.tensor(0.)
+    elif bad == 'bad_sq': values['exp_avg_sq'].fill_(-1)
+    elif bad == 'bad_flag': group['amsgrad'] = 'false'
+    elif bad == 'bad_combo': group.update(foreach=True, fused=True)
+    elif bad == 'bad_buffer': values['momentum_buffer'] = torch.tensor(0.)
+    elif bad == 'bad_momentum': group['momentum'] = 'invalid'
+    elif bad == 'bad_dampening': group['dampening'] = float('inf')
+    elif bad == 'bad_nesterov': group['nesterov'] = 'false'
+    elif bad == 'bad_nesterov_combo': group['momentum'] = 0.
+    elif bad == 'bad_lr': group['lr'] = float('nan')
+    elif bad == 'bad_weight_decay': group['weight_decay'] = -1.
+    elif bad == 'duplicate_ref': state['param_groups'][1]['params'] = [0]
+    elif bad == 'unknown_ref': state['state'][99] = {}
+    elif bad == 'unknown_field': values['unexpected'] = torch.tensor(0.)
+    elif bad == 'missing_lr': del group['lr']
+    elif bad == 'wrong_state_type': state['state'][0] = []
+    elif bad == 'beta_range': group['betas'] = (1., .999)
+    elif bad == 'beta_length': group['betas'] = (.9,)
+    elif bad == 'eps_nan': group['eps'] = float('nan')
+    elif bad == 'step_vector': values['step'] = torch.ones(2)
+    elif bad == 'step_negative': values['step'] = -1.
+    elif bad == 'moment_dtype': values['exp_avg'] = values['exp_avg'].to(torch.int64)
+    elif bad == 'missing_sq': del values['exp_avg_sq']
+    elif bad == 'missing_betas': del group['betas']
+    elif bad == 'bad_foreach': group['foreach'] = 'invalid'
+    elif bad == 'capturable': group['capturable'] = True
+    elif bad == 'differentiable': group['differentiable'] = True
+    elif bad == 'momentum_negative': group['momentum'] = -1.
+    elif bad == 'dampening_negative': group['dampening'] = -1.
+    elif bad == 'lr_boolean': group['lr'] = True
+    elif bad == 'bad_maximize': group['maximize'] = 1
+    elif bad == 'bad_fused': group['fused'] = 'invalid'
+    elif bad == 'unknown_sgd_field': values['unexpected'] = torch.zeros(())
+    elif bad == 'group_length': group['params'] = []
+    elif bad == 'state_boolean_ref': state['state'] = {False: values}
+    elif bad == 'group_boolean_ref': group['params'] = [False]
+    torch.save(payload, path)
+    model, optimizer, scheduler = _optimizer_contract_objects(kind)
+    before = _optimizer_contract_snapshot(model, optimizer, scheduler)
+    refs = [list(g['params']) for g in optimizer.param_groups]
+    calls = []
+    handle = model.register_load_state_dict_pre_hook(lambda *args: calls.append('model'))
+    try:
+        with pytest.raises(ValueError, match='optimizer'):
+            load_formal_checkpoint(model, optimizer, scheduler, path, fold=0, checkpoint_root=tmp_path)
+    finally:
+        handle.remove()
+    assert calls == []
+    assert scheduler.optimizer is optimizer
+    assert all(a is b for g, old in zip(optimizer.param_groups, refs) for a, b in zip(g['params'], old))
+    _assert_optimizer_contract_equal(_optimizer_contract_snapshot(model, optimizer, scheduler), before)
+
+
+@pytest.mark.parametrize('kind,scalar,initialized,historical,momentum,amsgrad', [
+    ('adamw', False, True, False, .9, False), ('adamw', True, True, False, .9, False),
+    ('adamw', False, False, False, .9, False), ('adamw', False, True, True, .9, False),
+    ('adamw', False, True, False, .9, True),
+    ('sgd', False, True, False, .9, False), ('sgd', True, True, False, .9, False),
+    ('sgd', False, False, False, .9, False), ('sgd', False, True, True, .9, False),
+    ('sgd', False, True, False, 0., False), ('sgd', False, True, True, 0., False),
+])
+def test_optimizer_schema_valid_resume_and_synthetic_step(tmp_path, kind, scalar, initialized, historical, momentum, amsgrad):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    source, opt, sched = _optimizer_contract_objects(kind, 7.0, scalar=scalar, initialized=initialized, momentum=momentum, amsgrad=amsgrad)
+    path = tmp_path / 'optimizer-valid.pth'
+    save_formal_checkpoint(source, opt, sched, path, FormalTrainerState(8, 2000, .8, 0), {}, checkpoint_root=tmp_path)
+    if historical:
+        payload, _ = ck.read_formal_payload(path)
+        for group in payload['optimizer_state_dict']['param_groups']:
+            for key in ('maximize', 'foreach', 'capturable', 'differentiable', 'fused', 'decoupled_weight_decay'):
+                group.pop(key, None)
+            if kind == 'adamw': group.pop('amsgrad', None)
+            elif momentum == 0: group.pop('nesterov', None)
+        if kind == 'adamw':
+            for values in payload['optimizer_state_dict']['state'].values(): values['step'] = values['step'].item()
+        torch.save(payload, path)
+    model, optimizer, scheduler = _optimizer_contract_objects(kind, scalar=scalar, momentum=momentum, amsgrad=amsgrad)
+    load_formal_checkpoint(model, optimizer, scheduler, path, fold=0, checkpoint_root=tmp_path)
+    _assert_optimizer_contract_equal(model.state_dict(), source.state_dict())
+    assert scheduler.optimizer is optimizer and scheduler.ctr == 8
+    assert optimizer.param_groups[0]['lr'] != optimizer.param_groups[1]['lr']
+    (model.weight.sum() + model.other.sum()).backward()
+    (source.weight.sum() + source.other.sum()).backward()
+    optimizer.step(); opt.step()
+    _assert_optimizer_contract_equal(model.state_dict(), source.state_dict())
+    for a, b in zip(optimizer.state.values(), opt.state.values()):
+        for key in b: _assert_optimizer_contract_equal(a[key], b[key])
+
+
+@pytest.mark.parametrize('kind', ['adamw', 'sgd'])
+@pytest.mark.parametrize('empty_entry', [False, True])
+def test_optimizer_schema_partial_lazy_state(tmp_path, kind, empty_entry, monkeypatch):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    source, opt, sched = _optimizer_contract_objects(kind, 7.0)
+    # Only the first parameter has been initialized in this valid checkpoint.
+    if empty_entry: opt.state[source.other] = {}
+    else: del opt.state[source.other]
+    path = tmp_path / 'partial.pth'
+    save_formal_checkpoint(source, opt, sched, path, FormalTrainerState(8, 2000, .8, 0), {}, checkpoint_root=tmp_path)
+    model, optimizer, scheduler = _optimizer_contract_objects(kind)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('restore preflight must never execute optimizer.step')
+    with monkeypatch.context() as scoped:
+        scoped.setattr(type(optimizer), 'step', forbidden)
+        load_formal_checkpoint(model, optimizer, scheduler, path, fold=0, checkpoint_root=tmp_path)
+    (model.weight.sum() + model.other.sum()).backward()
+    (source.weight.sum() + source.other.sum()).backward()
+    optimizer.step(); opt.step()
+    _assert_optimizer_contract_equal(model.state_dict(), source.state_dict())
+    _assert_optimizer_contract_equal(optimizer.state_dict(), opt.state_dict())
+
+
+@pytest.mark.parametrize('kind,field', [
+    ('adamw', 'exp_avg'), ('adamw', 'exp_avg_sq'),
+    ('adamw', 'max_exp_avg_sq'), ('sgd', 'momentum_buffer'),
+])
+@pytest.mark.parametrize('layout', ['expanded', 'positive_overlap'])
+def test_optimizer_internal_overlap_rejected_atomically(tmp_path, monkeypatch, kind, field, layout):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    source, opt, sched = _optimizer_contract_objects(kind, 7.0, amsgrad=field == 'max_exp_avg_sq')
+    path = tmp_path / 'overlap.pth'
+    save_formal_checkpoint(source, opt, sched, path, FormalTrainerState(8, 2000, .8, 0), {}, checkpoint_root=tmp_path)
+    payload, _ = ck.read_formal_payload(path)
+    damaged = (torch.tensor(1.).expand(2, 3) if layout == 'expanded'
+               else torch.ones(4).as_strided((2, 3), (1, 1)))
+    payload['optimizer_state_dict']['state'][0][field] = damaged
+    torch.save(payload, path)
+    loaded, _ = ck.read_formal_payload(path)
+    assert loaded['optimizer_state_dict']['state'][0][field].stride() == damaged.stride()
+    model, optimizer, scheduler = _optimizer_contract_objects(kind, amsgrad=field == 'max_exp_avg_sq')
+    before = _optimizer_contract_snapshot(model, optimizer, scheduler)
+    refs = [list(g['params']) for g in optimizer.param_groups]
+    calls = []
+    handle = model.register_load_state_dict_pre_hook(lambda *args: calls.append('model'))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('preflight must not step')
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(type(optimizer), 'step', forbidden)
+            with pytest.raises(ValueError, match='optimizer.*overlap'):
+                load_formal_checkpoint(model, optimizer, scheduler, path, fold=0, checkpoint_root=tmp_path)
+    finally:
+        handle.remove()
+    assert calls == []
+    assert scheduler.optimizer is optimizer
+    assert all(a is b for g, old in zip(optimizer.param_groups, refs) for a, b in zip(g['params'], old))
+    _assert_optimizer_contract_equal(_optimizer_contract_snapshot(model, optimizer, scheduler), before)
+
+
+@pytest.mark.parametrize('kind,amsgrad', [('adamw', False), ('adamw', True), ('sgd', False)])
+@pytest.mark.parametrize('layout', ['transpose', 'slice', 'interleaved'])
+def test_optimizer_noncontiguous_resume_and_step(tmp_path, monkeypatch, kind, amsgrad, layout):
+    from standalone_nnunet2d.training import formal_checkpoint as ck
+    source, opt, sched = _optimizer_contract_objects(kind, 7.0, amsgrad=amsgrad)
+    path = tmp_path / 'noncontiguous.pth'
+    save_formal_checkpoint(source, opt, sched, path, FormalTrainerState(8, 2000, .8, 0), {}, checkpoint_root=tmp_path)
+    payload, _ = ck.read_formal_payload(path)
+    values = payload['optimizer_state_dict']['state'][0]
+    for field, value in list(values.items()):
+        if field == 'step': continue
+        if layout == 'transpose': replacement = torch.empty(3, 2).t()
+        elif layout == 'slice': replacement = torch.empty(2, 6)[:, ::2]
+        else: replacement = torch.empty(8).as_strided((2, 3), (3, 2))
+        replacement.copy_(value)
+        values[field] = replacement
+    torch.save(payload, path)
+    loaded, _ = ck.read_formal_payload(path)
+    for field, value in values.items():
+        if field != 'step':
+            assert not value.is_contiguous()
+            assert loaded['optimizer_state_dict']['state'][0][field].stride() == value.stride()
+    model, optimizer, scheduler = _optimizer_contract_objects(kind, amsgrad=amsgrad)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('preflight must not step')
+    with monkeypatch.context() as scoped:
+        scoped.setattr(type(optimizer), 'step', forbidden)
+        load_formal_checkpoint(model, optimizer, scheduler, path, fold=0, checkpoint_root=tmp_path)
+    for field, value in values.items():
+        if field != 'step': assert optimizer.state[model.weight][field].stride() == value.stride()
+    _assert_optimizer_contract_equal(model.state_dict(), source.state_dict())
+    (model.weight.sum() + model.other.sum()).backward()
+    (source.weight.sum() + source.other.sum()).backward()
+    optimizer.step()
+    opt.step()
+    _assert_optimizer_contract_equal(model.state_dict(), source.state_dict())
+    _assert_optimizer_contract_equal(optimizer.state_dict(), opt.state_dict())
