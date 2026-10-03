@@ -402,7 +402,7 @@ def test_six_outputs_and_failure_cleanup(monkeypatch, tmp_path, lite):
         return save(fig,*a,**kw)
     monkeypatch.setattr(matplotlib.figure.Figure,"savefig",small)
     assert report.run(args)==0
-    expected={"metrics_table.csv","metrics_table.png","summary.png","encoder_stages_heatmap.png","ppt","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
+    expected={"metrics_table.csv","metrics_table.png","summary.png","encoder_stages_heatmap.png","architecture_overview.png","architecture_detail.png","feature_channels.png","feature_channels_64x64.png","report.txt"}
     assert {p.name for p in info["output"].iterdir()}==expected
     assert all((info["output"]/p).stat().st_size>0 for p in expected if p!="ppt")
     txt=(info["output"]/"report.txt").read_text(encoding="utf-8")

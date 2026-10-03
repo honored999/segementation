@@ -1,12 +1,10 @@
-"""Small shared diagnostic display/PPT helpers; no inference or model changes."""
+"""Small shared diagnostic display helpers; no inference or model changes."""
 from pathlib import Path
-import json
 import textwrap
 
 DPI = 100
 BODY = 14
 TITLE = 22
-PPT_SIZE = (16, 9)
 DISPLAY_NOTE = ('Independent 1-99% display scale per layer/window; absolute strength is not comparable. '
                 'Native grids / nearest; metadata and invalid counts: report.txt')
 
@@ -47,6 +45,12 @@ def normalize_intensity(values):
     return result,dict(meta,status='finite_with_invalid' if count else 'finite')
 
 
+def dice_label(value):
+    from report_metrics_table import metric_value
+    number = metric_value(value)
+    return 'N/A' if number is None else f'{number:.3f}'
+
+
 def stage_sample(value, stage, module, input_index=None):
     """Reduce immediately; the returned object owns no tensor/graph."""
     # Real fp16/bfloat16/fp32/fp64, including finite dtype extremes. Scale
@@ -81,67 +85,28 @@ def metadata_only(value):
 
 
 def save_figure(fig, output, *, family, coverage=None, kind=None):
-    """Save PNG plus a real aspect-preserving slide and renderer font evidence."""
-    from matplotlib.text import Text
-    from PIL import Image
-    output=Path(output); output.parent.mkdir(parents=True,exist_ok=True)
-    root=output.parent.parent if output.parent.name=='ppt' else output.parent
-    ppt=root/'ppt'; ppt.mkdir(exist_ok=True)
-    fig.set_dpi(DPI); fig.canvas.draw()
-    renderer=fig.canvas.get_renderer()
-    # Only artists actually rendered: hidden axes and axis-off ticks are absent.
-    texts=list(fig.texts)
-    for ax in fig.axes:
-        if not ax.get_visible(): continue
-        texts.extend(ax.texts)
-        texts.extend((ax.title,ax._left_title,ax._right_title))
-        legend=ax.get_legend()
-        if legend is not None: texts.extend(legend.get_texts())
-        for table in ax.tables: texts.extend(cell.get_text() for cell in table.get_celld().values())
-        if ax.axison:
-            texts.extend((ax.xaxis.label,ax.yaxis.label))
-            texts.extend(ax.get_xticklabels()); texts.extend(ax.get_yticklabels())
-    texts=[t for t in texts if t.get_visible() and t.get_text().strip()]
-    measurements=[dict(text=t.get_text(),font_pt=float(t.get_fontsize()),
-        bbox=list(map(float,t.get_window_extent(renderer).bounds))) for t in texts]
-    fig.savefig(output,dpi=DPI,facecolor=fig.get_facecolor())
-    with Image.open(output) as source:
-        w,h=source.size; factor=min(1800/w,960/h)
-        rw,rh=round(w*factor),round(h*factor)
-        x,y=(1920-rw)//2,(1080-rh)//2
-        slide=Image.new('RGB',(1920,1080),'#eef2f6')
-        slide.paste(source.convert('RGB').resize((rw,rh),Image.Resampling.LANCZOS),(x,y))
-        preview=ppt/(output.stem+'_slide.png')
-        slide.save(preview)
-    # actual source resolution matters, including a controlled test savefig override.
-    actual_dpi=w/fig.get_figwidth()
-    for t in measurements: t['effective_px']=t['font_pt']*actual_dpi/72*factor
-    manifest=ppt/'layout_manifest.json'
-    data=json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {'figures':[]}
-    record=dict(path=output.relative_to(root).as_posix(),preview=preview.relative_to(root).as_posix(),
-        family=family,kind=kind or ('ppt' if output.parent.name=='ppt' else 'main'),
-        original_size=[w,h],preview_size=[1920,1080],placement=[x,y,rw,rh],scale=factor,
-        dpi=actual_dpi, min_text_px=min((t['effective_px'] for t in measurements),default=0),
-        text_measurements=measurements,coverage=coverage or {})
-    data['figures']=[r for r in data['figures'] if r['path']!=record['path']]+[record]
-    manifest.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
-    return record
+    """Save only the requested main PNG, without implicit previews."""
+    output = Path(output)
+    if 'ppt' in output.parts:
+        raise ValueError('PPT output is disabled')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.set_dpi(DPI)
+    fig.canvas.draw()
+    fig.savefig(output, dpi=DPI, facecolor=fig.get_facecolor())
 
 
 def validate_visual_outputs(output, required_families):
-    output=Path(output); manifest=output/'ppt'/'layout_manifest.json'
-    if not manifest.is_file(): raise ValueError('report output incomplete: PPT manifest missing')
-    data=json.loads(manifest.read_text(encoding='utf-8'))
-    records=data.get('figures',[])
+    from PIL import Image
+    output = Path(output)
+    if (output/'ppt').exists() or (output/'layout_manifest.json').exists():
+        raise ValueError('report must not contain PPT output')
     for family in required_families:
-        if not any(r['family']==family and r['kind']=='ppt' for r in records):
-            raise ValueError('report output incomplete: PPT family '+family)
-    for r in records:
-        for key in ('path','preview'):
-            path=(output/r[key]).resolve()
-            if output.resolve() not in path.parents or not path.is_file() or path.stat().st_size==0:
-                raise ValueError('report output incomplete: '+r[key])
-    return data
+        name = 'encoder_stages_heatmap' if family == 'encoder_stages' else family
+        path = output/(name + '.png')
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError('report output incomplete: ' + name)
+        with Image.open(path) as image:
+            image.verify()
 
 
 def stage_figure(items, rows, output):
@@ -151,8 +116,8 @@ def stage_figure(items, rows, output):
     setup_font(); output=Path(output)
     packets=[i.get('native',{}).get('encoder_stages') if i.get('native') else None for i in items]
     count=max((len(p['stages']) for p in packets if p),default=0)
-    def draw(subset, indices, path, page=False):
-        fig=plt.figure(figsize=PPT_SIZE if page else (max(18,3*(len(indices)+1)),3.0*len(subset)+2.8))
+    def draw(subset, indices, path):
+        fig=plt.figure(figsize=(max(18,3*(len(indices)+1)),3.0*len(subset)+2.8))
         grid=fig.add_gridspec(3*len(subset),len(indices)+1,left=.055,right=.95,
             top=.83,bottom=.18,height_ratios=[r for _ in subset for r in (.48,.62,1)],hspace=.18,wspace=.16)
         fig.suptitle('各级编码器特征强度',fontsize=TITLE,y=.975)
@@ -160,9 +125,9 @@ def stage_figure(items, rows, output):
         for j,item in enumerate(subset):
             header=fig.add_subplot(grid[3*j,:]); header.axis('off')
             native=item.get('native'); packet=native.get('encoder_stages') if native else None
-            label=f"{item['cid']} | {item.get('group','?')} | Dice {float(rows[item['cid']]['dice']):.3f}"
+            label=f"{item['cid']} | {item.get('group','?')} | current Dice {dice_label(rows[item['cid']]['dice'])}"
             label+=f" | original slice {native['original_slice']} | window {native['window_index']}" if native else ' | No GT-positive slice / no native window'
-            header.text(0,.5,wrap(label,95 if page else 130),fontsize=BODY,va='center')
+            header.text(0,.5,wrap(label,130),fontsize=BODY,va='center')
             for col,index in enumerate([None,*indices]):
                 label_ax=fig.add_subplot(grid[3*j+1,col]); label_ax.axis('off')
                 ax=fig.add_subplot(grid[3*j+2,col]); ax.set_xticks([]); ax.set_yticks([])
@@ -187,43 +152,3 @@ def stage_figure(items, rows, output):
         try: save_figure(fig,path,family='encoder_stages',coverage={'cases':[i['cid'] for i in subset],'stages':indices})
         finally: plt.close(fig)
     draw(items,list(range(count)),output)
-    for group in ('high','low'):
-        subset=[i for i in items if i.get('group','High Dice').lower().startswith(group)]
-        number=0
-        for start in range(0,len(subset),2):
-            for first in range(0,max(count,1),4):
-                number+=1
-                draw(subset[start:start+2],list(range(first,min(first+4,count))),
-                    output.parent/'ppt'/f'encoder_stages_{group}_{number:02d}.png',True)
-
-
-def panel_pages(fig, output, family, *, font_scale=1.0):
-    """Reposition whole existing numbered panels; no cropped wires or hidden artists."""
-    import matplotlib.pyplot as plt
-    from matplotlib.text import Text
-    output=Path(output)
-    axes=list(fig.axes); size=fig.get_size_inches().copy()
-    positions=[ax.get_position().frozen() for ax in axes]
-    visibility=[ax.get_visible() for ax in axes]
-    figure_text=[t for t in fig.texts]
-    for t in figure_text: t.set_visible(False)
-    for i,ax in enumerate(axes):
-        for other in axes: other.set_visible(other is ax)
-        fig.set_size_inches(*PPT_SIZE); ax.set_position((.04,.08,.92,.77))
-        old=[(t,t.get_fontsize()) for t in ax.findobj(Text)]
-        for t,fs in old: t.set_fontsize(max(BODY,fs*font_scale))
-        title=ax.get_title(loc='left') or ax.get_title()
-        old_titles=(ax.get_title(),ax.get_title(loc='left'),ax.get_title(loc='right'))
-        if title:
-            ax.set_title(''); ax.set_title(wrap(title,75),loc='left',fontsize=TITLE,pad=12)
-        elif ax.texts:
-            ax.texts[0].set_fontsize(20)
-        save_figure(fig,output.parent/'ppt'/f'{family}_{i+1:02d}.png',family=family,
-                    coverage={'panel':i+1,'complete_named_panel':True})
-        for t,fs in old: t.set_fontsize(fs)
-        ax.set_title(old_titles[0]); ax.set_title(old_titles[1],loc='left'); ax.set_title(old_titles[2],loc='right')
-        ax.set_position(positions[i]); ax.set_visible(True)
-    fig.set_size_inches(*size)
-    for ax,pos,visible in zip(axes,positions,visibility):
-        ax.set_position(pos); ax.set_visible(visible)
-    for t in figure_text: t.set_visible(True)

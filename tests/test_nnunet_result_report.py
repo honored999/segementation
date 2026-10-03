@@ -247,7 +247,7 @@ def test_native_channel_display_and_shared_colorbar(tmp_path, monkeypatch):
     assert _normalize_native_channel(values).max() == 1
     assert np.all(_normalize_native_channel(constant) == 0)
     item = {"cid": "synthetic", "native": {"channel_ids": [0, 7],
-            "channels": np.stack([values, constant]), "original_slice": 0, "window_index": 0}}
+            "channels": np.stack([values, constant]), "feature_shape": [1, 8, 4, 4], "stage": 3, "module": "encoder.stages.3", "original_slice": 0, "window_index": 0}}
     _native_channel_figure([item], tmp_path / "native.png")
     assert len(captured) == 2
 
@@ -662,16 +662,7 @@ def test_original_split_architecture_and_comparison_summary(tmp_path, monkeypatc
     report._plain_unet_overview_figure(net, (512, 512), 7, 3, overview)
     report._plain_unet_detail_figure(net, (512, 512), 7, 3, detail)
     assert overview.stat().st_size > 1000 and detail.stat().st_size > 1000
-    # Readability regression: enlarged headings/node labels must remain disjoint.
-    import json
-    manifest=json.loads((tmp_path/'ppt'/'layout_manifest.json').read_text(encoding='utf-8'))
-    for page in (r for r in manifest['figures'] if r['kind']=='ppt'):
-        texts=page['text_measurements']
-        for i,a in enumerate(texts):
-            x,y,w,h=a['bbox']
-            for b in texts[i+1:]:
-                xx,yy,ww,hh=b['bbox']
-                assert min(x+w,xx+ww)-max(x,xx)<=1 or min(y+h,yy+hh)-max(y,yy)<=1, (a['text'],b['text'])
+    assert not (tmp_path/'ppt').exists()
 
     seen = []
     save = matplotlib.figure.Figure.savefig

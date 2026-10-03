@@ -20,7 +20,9 @@ from pathlib import Path
 
 TRAINER = "nnUNetTrainerUPerNetTopK10EarlyStopping"
 ORIGINAL_TRAINER = "nnUNetTrainerTopK10"
-SUPPORTED_TRAINERS = (TRAINER, ORIGINAL_TRAINER)
+STANDARD_TRAINER = "nnUNetTrainer"
+SUPPORTED_TRAINERS = (TRAINER, ORIGINAL_TRAINER, STANDARD_TRAINER)
+from report_comparison_selection import (load_selection, verify_selection, report_groups, selected_slices, save_selection, check_selection_output)
 METRICS = ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")
 
 
@@ -139,7 +141,7 @@ def check_geometry(image, other, case_id):
 def _check_identity(model_dir, checkpoint, fold):
     trainer = model_dir.name.split("__")[0]
     if fold != 0 or trainer not in SUPPORTED_TRAINERS or model_dir.name != f"{trainer}__nnUNetPlans__2d" or model_dir.parent.name != "Dataset501_StrokeLesion":
-        raise ValueError("only exact Dataset501 official TopK10/UPerNet TopK10 fold 0 2D model directories are supported")
+        raise ValueError("only exact Dataset501 standard nnUNetTrainer / TopK10 / UPerNet fold 0 2D model directories are supported")
     dataset = json.loads((model_dir / "dataset.json").read_text(encoding="utf-8"))
     plans = json.loads((model_dir / "plans.json").read_text(encoding="utf-8"))
     channels = dataset.get("channel_names")
@@ -148,6 +150,10 @@ def _check_identity(model_dir, checkpoint, fold):
     if "2d" not in plans.get("configurations", {}):
         raise ValueError("2d configuration missing")
     require_simpleitk_reader(plans)
+    if trainer == STANDARD_TRAINER:
+        architecture = plans["configurations"]["2d"].get("architecture", {})
+        if not isinstance(architecture, dict) or architecture.get("network_class_name") != "dynamic_network_architectures.architectures.unet.PlainConvUNet":
+            raise ValueError("standard Trainer requires exact plans PlainConvUNet architecture")
     cp = resolved(checkpoint)
     if cp.parent != resolved(model_dir / "fold_0") or cp.name not in ("checkpoint_best.pth", "checkpoint_final.pth") or not cp.is_file():
         raise ValueError("checkpoint must explicitly identify existing fold_0 best/final file")
@@ -207,12 +213,21 @@ def inspect_sources(args):
     image_map = collect(images, input_channel=True)
     label_map = collect(labels)
     pred_map = collect(preds)
+    if getattr(args, "selection_json", None):
+        protected_output(output, (args.selection_json,))
+        if not set(pred_map) <= set(image_map) or not set(pred_map) <= set(label_map):
+            raise ValueError("frozen population missing source image/GT")
+        image_map = {cid:image_map[cid] for cid in pred_map}
+        label_map = {cid:label_map[cid] for cid in pred_map}
     if set(image_map) != set(label_map) or set(pred_map) != set(label_map):
         raise ValueError(f"case coverage mismatch: images={sorted(image_map)}, labels={sorted(label_map)}, predictions={sorted(pred_map)}")
     rows, summary = read_metrics(metrics, pred_map)
-    return dict(model=model, images=image_map, labels=label_map, predictions=pred_map,
+    info = dict(model=model, images=image_map, labels=label_map, predictions=pred_map,
                 metrics=metrics, checkpoint=checkpoint, output=output, dataset=dataset,
                 plans=plans, rows=rows, summary=summary)
+    if getattr(args, "selection_json", None):
+        load_selection(args.selection_json, info)
+    return info
 
 
 def _add_window(sum_map, weight_map, value, weight, sl):
@@ -434,6 +449,11 @@ def resolve_external_trainer(finder, trainer_name=TRAINER):
     if trainer_name not in SUPPORTED_TRAINERS:
         raise ValueError("unsupported Trainer")
     discovered = finder(trainer_name)
+    if trainer_name == STANDARD_TRAINER:
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+        if discovered is not nnUNetTrainer or discovered.__module__ != "nnunetv2.training.nnUNetTrainer.nnUNetTrainer":
+            raise ValueError("official nnUNetTrainer identity mismatch")
+        return discovered
     extension = resolved(Path(__file__).parent / "nnunet_ext_trainers")
     paths = os.environ.get("nnUNet_extTrainer", "").split(os.pathsep)
     expected_mixin = extension / "nnUNetTrainerMixins.py"
@@ -462,6 +482,10 @@ def _predictor(info, args):
     if version("nnunetv2") != "2.8.1":
         raise ValueError("this feature mapping was audited only against nnunetv2==2.8.1")
     trainer_name = info["model"].name.split("__")[0]
+    if trainer_name == STANDARD_TRAINER:
+        architecture = info["plans"]["configurations"]["2d"].get("architecture", {})
+        if architecture.get("network_class_name") != "dynamic_network_architectures.architectures.unet.PlainConvUNet":
+            raise ValueError("standard Trainer requires exact plans PlainConvUNet architecture")
     discovered = resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name)
     metadata = torch.load(info["checkpoint"], map_location="cpu", weights_only=False, mmap=True)
     try:
@@ -480,7 +504,7 @@ def _predictor(info, args):
     if predictor.trainer_name != trainer_name or len(predictor.configuration_manager.patch_size) != 2:
         raise ValueError("loaded Trainer/configuration identity mismatch")
     _network_kind(predictor.network, trainer_name)
-    if trainer_name == ORIGINAL_TRAINER:
+    if trainer_name in (ORIGINAL_TRAINER, STANDARD_TRAINER):
         if predictor.network.decoder.deep_supervision is not False:
             raise ValueError("original U-Net inference must return the main output with deep supervision disabled")
     return predictor
@@ -489,7 +513,7 @@ def _predictor(info, args):
 def _network_kind(network, trainer_name):
     if trainer_name == TRAINER and network.__class__.__name__ == "_PlainConvUNetUPerNet":
         return "upernet"
-    if trainer_name == ORIGINAL_TRAINER:
+    if trainer_name in (ORIGINAL_TRAINER, STANDARD_TRAINER):
         from dynamic_network_architectures.architectures.unet import PlainConvUNet
         from dynamic_network_architectures.building_blocks.plain_conv_encoder import PlainConvEncoder
         from dynamic_network_architectures.building_blocks.unet_decoder import UNetDecoder
@@ -545,7 +569,7 @@ def _normalize_native_channel(values):
 
 
 def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3, patch_size=None):
-    if trainer_name == ORIGINAL_TRAINER:
+    if trainer_name in (ORIGINAL_TRAINER, STANDARD_TRAINER):
         if patch_size is None:
             raise ValueError("original architecture overview requires patch size")
         from nnunet_report_architecture import draw_overview
@@ -622,101 +646,39 @@ def _architecture(ax, network, stage, trainer_name=TRAINER, intermediate_stage=3
     box(.69, .43, .13, .09, f"resize P0..P3 to P0\nconcat + 3x3 fusion\n{width} ch", "#dff4eb", 7)
     for j, y in enumerate(levels):
         route([(.61, y+.025), (.64+j*.012, y+.025), (.64+j*.012, .50-j*.018), (.69, .50-j*.018)])
-    box(.84, .45, .065, .05, f"1x1 classifier\n{decoder.classifier.out_channels} logits", "#ece6f8", 7)
+    box(.84, .45, .065, .05, f"1x1 head\n{decoder.classifier.out_channels} logits", "#ece6f8", 7)
     arrow(.82, .475, .84, .475)
-    box(.92, .44, .07, .07, "bilinear upsample\nto input HxW", "#ece6f8", 7)
+    box(.92, .44, .07, .07, "bilinear\nto H x W", "#ece6f8", 7)
     arrow(.905, .475, .92, .475)
     ax.text(.71, .035, f"PPM scales {scales}; selected stages {chosen}. TopK10 / early stopping: training only.",
             ha="center", fontsize=8)
 
 
 def _upernet_overview_figure(network,stage,intermediate_stage,output):
-    """Retain the existing overview; readable pages follow its named substructures."""
+    """Retain the existing overview with enlarged labels and no pagination."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import FancyBboxPatch
-    from report_visuals import setup_font,save_figure,BODY,TITLE,PPT_SIZE,wrap
+    from report_visuals import setup_font,save_figure,BODY,TITLE,wrap
     setup_font(); output=Path(output)
     fig,ax=plt.subplots(figsize=(28,16))
     try:
         _architecture(ax,network,stage,TRAINER,intermediate_stage)
-        for text in ax.texts: text.set_fontsize(text.get_fontsize()*1.25)
+        for text in ax.texts: text.set_fontsize(text.get_fontsize()*1.625)
         fig.subplots_adjust(left=.015,right=.985,top=.97,bottom=.02)
         save_figure(fig,output,family='architecture_overview',coverage={'all_existing_connections':True})
     finally: plt.close(fig)
-    encoder,decoder=network.encoder,network.decoder
-    chosen=list(network.selected_feature_indices); number=0
-    def page(title):
-        nonlocal number
-        number+=1; fig,ax=plt.subplots(figsize=PPT_SIZE)
-        ax.set(xlim=(0,18),ylim=(0,9)); ax.axis('off')
-        fig.subplots_adjust(left=.02,right=.98,top=.87,bottom=.06)
-        fig.suptitle(title,fontsize=TITLE,y=.98)
-        return fig,ax
-    def box(ax,x,y,label,w=3.5,h=1):
-        ax.add_patch(FancyBboxPatch((x-w/2,y-h/2),w,h,boxstyle='round,pad=.05',facecolor='#e5f0fa',edgecolor='#476b84'))
-        ax.text(x,y,wrap(label,70 if w>3.7 else 28),ha='center',va='center',fontsize=BODY)
-    def arrow(ax,x,y,xx,yy):
-        ax.annotate('',xy=(xx,yy),xytext=(x,y),arrowprops={'arrowstyle':'-|>','lw':1.4})
-    def save(fig,coverage):
-        try: save_figure(fig,output.parent/'ppt'/f'architecture_overview_{number:02d}.png',family='architecture_overview',coverage=coverage)
-        finally: plt.close(fig)
-    count=len(encoder.stages)
-    for first in range(0,count,4):
-        last=min(first+4,count)
-        fig,ax=page(f'Official UPerNet | encoder stages {first}-{last-1} (0-based)')
-        ax.text(.5,8.4,'DWI input' if first==0 else f'Continues from encoder stage {first-1} on preceding page',fontsize=BODY)
-        for j,i in enumerate(range(first,last)):
-            x=2.2+4.4*j
-            box(ax,x,5.5,f'encoder.stages.{i}\n{encoder.output_channels[i]} channels',w=3.6,h=1.4)
-            if j: arrow(ax,x-2.6,5.5,x-1.8,5.5)
-            if i in chosen:
-                k=chosen.index(i); label=f'selected C{k} -> '+(f'lateral {k}' if k<3 else 'PPM input')
-                box(ax,x,2.5,label,w=3.6,h=1.3); arrow(ax,x,4.8,x,3.15)
-            else: ax.text(x,2.5,'Encoder output retained\nnot selected by decoder',ha='center',fontsize=BODY)
-        ax.text(.5,.8,f'Continues to stage {last}' if last<count else f'Deepest selected stage {chosen[-1]} -> PPM; source UNKNOWN/pending unchanged.',fontsize=BODY)
-        save(fig,{'encoder_stages':list(range(first,last)),'selected_indices':chosen})
-    fig,ax=page('Official UPerNet | PPM branches -> P3')
-    scales=list(decoder.pool_scales)
-    box(ax,9,8,'Deepest selected encoder -> PPM',w=7)
-    for k,scale in enumerate(scales):
-        x=2.5+k*(13/max(len(scales)-1,1))
-        box(ax,x,5.5,f'pool {scale} × {scale}\n1×1 projection',w=3.5,h=1.3)
-        arrow(ax,9,7.5,x,6.15)
-        box(ax,x,3.2,'resize to deepest H×W',w=3.5); arrow(ax,x,4.85,x,3.7)
-        arrow(ax,x,2.7,9,1.8)
-    box(ax,9,1.3,f'concat identity + pooled branches\n3×3 bottleneck -> P3 ({decoder.fpn_channels} ch)',w=9,h=1)
-    # Identity bypass stays outside branch boxes.
-    ax.plot([12.5,17.6,17.6,13.5],[8,8,1.3,1.3],color='#476b84'); arrow(ax,17.6,1.3,13.5,1.3)
-    save(fig,{'pool_scales':scales,'identity_bypass':'deepest -> concat','output':'P3'})
-    fig,ax=page('Official UPerNet | top-down FPN and four-level fusion')
-    xs=[2.2+4.4*i for i in range(4)]
-    for i,x in enumerate(xs):
-        box(ax,x,7.8,f'C{i}: encoder stage {chosen[i]}',w=3.7)
-        box(ax,x,5.9,f'lateral {i}: 1×1' if i<3 else 'PPM -> P3',w=3.7)
-        arrow(ax,x,7.3,x,6.4)
-        box(ax,x,3.8,f'P{i}: upsample + add\n3×3 refinement' if i<3 else 'P3: bottleneck',w=3.7,h=1.2)
-        arrow(ax,x,5.4,x,4.4)
-        if i>0: arrow(ax,x-1.85,3.8,xs[i-1]+1.85,3.8)
-        arrow(ax,x,3.2,x,2.65)
-    box(ax,8.8,2.1,f'resize P0..P3 to P0; concat + 3×3 fusion ({decoder.fpn_channels} ch)',w=16,h=1.1)
-    box(ax,8.8,.5,f'1×1 classifier ({decoder.classifier.out_channels} logits) -> bilinear to input H×W',w=16,h=.8)
-    arrow(ax,8.8,1.55,8.8,.9)
-    save(fig,{'pyramid_levels':[0,1,2,3],'top_down':['P3->P2','P2->P1','P1->P0'],
-              'fusion_inputs':['P0','P1','P2','P3'],'detail_implementation':'none'})
-
 
 def _plain_unet_overview_figure(network, patch_size, stage, intermediate_stage, output):
     import matplotlib.pyplot as plt
-    from report_visuals import setup_font,save_figure,panel_pages
+    from report_visuals import setup_font,save_figure
     setup_font()
     count = len(network.encoder.stages)
     fig, ax = plt.subplots(figsize=(19, 3.8 + 1.16*count), facecolor="#f7f9fc")
     try:
         _architecture(ax, network, stage, ORIGINAL_TRAINER, intermediate_stage, patch_size)
         fig.subplots_adjust(left=.015, right=.995, top=.99, bottom=.015)
-        for text in ax.texts: text.set_fontsize(text.get_fontsize()*1.25)
+        for text in ax.texts: text.set_fontsize(text.get_fontsize()*1.625)
         save_figure(fig,output,family="architecture_overview",coverage={"encoder_stages":list(range(count)),"all_existing_connections":True})
-        panel_pages(fig,output,"architecture_overview")
     finally:
         plt.close(fig)
 
@@ -753,10 +715,10 @@ def _confusion_legend_handles():
 
 
 def _draw_case_panels(fig, subgrid, item, rows):
-    from report_visuals import BODY, wrap
+    from report_visuals import BODY, wrap, dice_label
     outer = subgrid.subgridspec(4, 6, height_ratios=[.35,1,1,1],hspace=.23,wspace=.09)
     header=fig.add_subplot(outer[0,:]); header.axis("off")
-    header.text(0,.5,wrap(f"{item['cid']} | {item.get('group','')} | Dice {float(rows[item['cid']]['dice']):.3f}",85),
+    header.text(0,.5,wrap(f"{item['cid']} | {item.get('group','')} | current Dice {dice_label(rows[item['cid']]['dice'])}",85),
                 fontsize=BODY,weight="bold",va="center")
     names=("DWI","GT","Saved pred.","TP / FP / FN","Feature magnitude","DWI + feature")
     for row,index in enumerate(item["slices"] or [None]):
@@ -784,35 +746,36 @@ def _native_channel_figure(items, output, *, layer="native"):
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize
-    from report_visuals import BODY, TITLE, PPT_SIZE, setup_font, save_figure, wrap
+    from report_visuals import BODY, TITLE, setup_font, save_figure, wrap, dice_label
     setup_font(); output=Path(output)
     family="feature_channels_64x64" if layer=="intermediate_native" else "feature_channels"
-    def draw(subset,path,page=False):
+    def draw(subset,path):
         descriptions=[]
         for item in subset:
             native=item.get(layer)
             desc=f"{item['cid']} | {item.get('group','')}"
+            if "current_dice" in item:
+                desc += " | current Dice " + dice_label(item["current_dice"])
             desc+=f" | original slice {native['original_slice']} | window {native['window_index']}" if native else " | No GT-positive slice / no native"
-            descriptions.append(wrap(desc,100 if page else 140))
+            if native:
+                desc += f"\n{native.get('module','encoder')} | C x H x W: {' x '.join(map(str,native['feature_shape'][1:]))}"
+            descriptions.append(wrap(desc,140))
         heights=[max(.8,.38*(desc.count('\n')+1)) for desc in descriptions]
-        fig=plt.figure(figsize=PPT_SIZE if page else (24,sum(heights)+3.3*len(subset)+3))
-        if page:
-            grid=fig.add_gridspec(2,4,left=.065,right=.98,top=.70,bottom=.19,hspace=.53,wspace=.20)
-        else:
-            ratios=[v for height in heights for v in (height,.7,2.6)]
-            grid=fig.add_gridspec(3*len(subset),8,left=.065,right=.98,top=.85,bottom=.16,
-                height_ratios=ratios,hspace=.12,wspace=.20)
+        fig=plt.figure(figsize=(24,sum(heights)+3.3*len(subset)+3))
+        ratios=[v for height in heights for v in (height,1.0,2.6)]
+        grid=fig.add_gridspec(3*len(subset),8,left=.065,right=.98,top=.85,bottom=.16,
+            height_ratios=ratios,hspace=.12,wspace=.20)
         heading="Intermediate encoder features" if layer=="intermediate_native" else "Final encoder / pre-decoder features"
         fig.suptitle(heading,fontsize=TITLE,y=.975)
         fig.text(.5,.91,"Native channels | one local window | nearest | independently normalized",ha="center",fontsize=BODY)
         for row,item in enumerate(subset):
             native=item.get(layer)
-            header=fig.add_axes((.065,.785,.915,.105)) if page else fig.add_subplot(grid[3*row,:])
+            header=fig.add_subplot(grid[3*row,:])
             header.axis('off')
             label=header.text(0,.5,descriptions[row],ha="left",va="center",fontsize=BODY)
             label.set_gid(f"case-header:{row}")
             for col in range(8):
-                ax=fig.add_subplot(grid[col//4,col%4] if page else grid[3*row+2,col])
+                ax=fig.add_subplot(grid[3*row+2,col])
                 ax.set_xticks([]); ax.set_yticks([])
                 if native is None:
                     ax.axis("off")
@@ -821,8 +784,7 @@ def _native_channel_figure(items, output, *, layer="native"):
                 if col>=len(native["channel_ids"]): ax.axis("off"); continue
                 values=native["channels"][col]
                 ax.imshow(_normalize_native_channel(values),cmap="coolwarm",vmin=0,vmax=1,interpolation="nearest")
-                shape=native.get("feature_shape",[1,len(native['channel_ids']),*values.shape])[1:]
-                ax.set_title(f"stage {native.get('stage','?')} | ch {native['channel_ids'][col]}\n{native.get('module','encoder stage')} | {'×'.join(map(str,shape))}",fontsize=BODY,pad=7)
+                ax.set_title(f"Stage {native.get('stage','?')} | Ch {native['channel_ids'][col]}\n{values.shape[-2]} x {values.shape[-1]}",fontsize=BODY,pad=10)
         cax=fig.add_axes((.33,.105,.34,.025))
         bar=fig.colorbar(ScalarMappable(norm=Normalize(0,1),cmap="coolwarm"),cax=cax,orientation="horizontal")
         bar.ax.tick_params(labelsize=BODY)
@@ -831,33 +793,26 @@ def _native_channel_figure(items, output, *, layer="native"):
               "channels":{i['cid']:i[layer]['channel_ids'] if i.get(layer) else [] for i in subset}})
         finally: plt.close(fig)
     draw(items,output)
-    for group in ("high","low"):
-        for number,item in enumerate([i for i in items if i.get('group','High Dice').lower().startswith(group)],1):
-            draw([item],output.parent/'ppt'/f'{family}_{group}_{number:02d}.png',True)
-
 
 def _summary_figure(items, rows, network, stage, output, trainer_name=TRAINER, intermediate_stage=3, source_note=None):
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import Normalize
-    from report_visuals import BODY, TITLE, PPT_SIZE, setup_font, save_figure
+    from report_visuals import BODY, TITLE, setup_font, save_figure
     setup_font(); output=Path(output)
-    def draw(subset,path,page=False):
-        fig=plt.figure(figsize=PPT_SIZE if page else (30,24))
-        if page:
-            grid=fig.add_gridspec(1,1,left=.055,right=.985,top=.78,bottom=.12)
-        else:
-            grid=fig.add_gridspec(3,2,left=.035,right=.985,top=.85,bottom=.10,hspace=.18,wspace=.06)
-        fig.suptitle("HIGH DICE / LOW DICE | saved masks and diagnostic features",fontsize=TITLE,y=.98)
-        legend_ax=fig.add_axes((.2,.90 if page else .92,.6,.045)); legend_ax.axis('off')
+    def draw(subset,path):
+        fig=plt.figure(figsize=(30,24))
+        grid=fig.add_gridspec(3,2,left=.035,right=.985,top=.85,bottom=.10,hspace=.18,wspace=.06)
+        fig.suptitle("Large / medium / small | baseline-good / baseline-bad" if any("baseline-" in i.get("group", "") for i in items) else "HIGH DICE / LOW DICE | saved masks and diagnostic features",fontsize=TITLE,y=.98)
+        legend_ax=fig.add_axes((.2,.92,.6,.045)); legend_ax.axis('off')
         legend_ax.legend(handles=_confusion_legend_handles(),loc='center',ncol=3,fontsize=BODY)
         # Full source statements stay in TXT; never upgrade historical source status.
         short="Diagnostic checkpoint features; saved prediction provenance: see report.txt"
         if source_note and "unknown" in source_note.lower(): short="Diagnostic checkpoint features; saved prediction weights UNKNOWN"
-        fig.text(.5,.84 if page else .89,short,ha='center',fontsize=BODY)
+        fig.text(.5,.89,short,ha='center',fontsize=BODY)
         for i,item in enumerate(subset):
-            _draw_case_panels(fig,grid[0,0] if page else grid[i%3,0 if i<3 else 1],item,rows)
-        cax=fig.add_axes((.33,.065 if page else .04,.34,.015))
+            _draw_case_panels(fig,(grid[i//2,i%2] if "baseline-" in item.get("group", "") else grid[i%3,0 if i<3 else 1]),item,rows)
+        cax=fig.add_axes((.33,.04,.34,.015))
         bar=fig.colorbar(ScalarMappable(norm=Normalize(0,1),cmap='inferno'),cax=cax,orientation='horizontal')
         bar.ax.tick_params(labelsize=BODY)
         bar.set_label("Feature magnitude display: per-slice 1-99% -> [0,1]; overlay alpha 0.48",fontsize=BODY)
@@ -865,13 +820,9 @@ def _summary_figure(items, rows, network, stage, output, trainer_name=TRAINER, i
             'slices':{i['cid']:i['slices'] for i in subset},'columns':['DWI','GT','Saved pred.','TP / FP / FN','Feature magnitude','DWI + feature']})
         finally: plt.close(fig)
     draw(items,output)
-    for group in ('high','low'):
-        for n,item in enumerate([i for i in items if i.get('group','High Dice').lower().startswith(group)],1):
-            draw([item],output.parent/'ppt'/f'summary_{group}_{n:02d}.png',True)
-
 
 def _source_statement(trainer_name, checkpoint_name, declaration):
-    if trainer_name == ORIGINAL_TRAINER:
+    if trainer_name in (ORIGINAL_TRAINER, STANDARD_TRAINER):
         if declaration is None:
             return (f"Saved-prediction checkpoint provenance: UNKNOWN. Specified {checkpoint_name} "
                     "extracts diagnostic features; historical prediction weights are unconfirmed.")
@@ -890,7 +841,6 @@ def create_report(info, predictor, declaration):
     import matplotlib.pyplot as plt
 
     require_simpleitk_reader(info["plans"])
-    high, low = select_cases(info["rows"])
     trainer_name = info["model"].name.split("__")[0]
     kind = _network_kind(predictor.network, trainer_name)
     if kind == "plain_unet":
@@ -899,7 +849,7 @@ def create_report(info, predictor, declaration):
     else:
         stage, intermediate_stage = predictor.network.selected_feature_indices[-1], 3
     items = []
-    for group, ids in (("High Dice", high), ("Low Dice", low)):
+    for group, ids in report_groups(info, select_cases):
         for cid in ids:
             image = sitk.ReadImage(str(info["images"][cid]))
             gt = sitk.ReadImage(str(info["labels"][cid]))
@@ -908,14 +858,14 @@ def create_report(info, predictor, declaration):
             image_array = sitk.GetArrayFromImage(image)
             gt_array = sitk.GetArrayFromImage(gt) > 0
             pred_array = sitk.GetArrayFromImage(pred) > 0
-            slices = select_slices(gt_array)
+            slices, representative = selected_slices(info, cid, gt_array, select_slices)
             feature, provenance, native, intermediate_native = _diagnostic_feature(
-                info["images"][cid], predictor, stage, slices[0] if slices else None, intermediate_stage)
+                info["images"][cid], predictor, stage, representative, intermediate_stage)
             if feature.shape != image_array.shape:
                 raise ValueError(f"{cid}: inverse feature shape mismatch")
             panels = {index: (image_array[index].copy(), gt_array[index].copy(),
                               pred_array[index].copy(), feature[index].copy()) for index in slices}
-            items.append(dict(group=group, cid=cid, panels=panels, slices=slices,
+            items.append(dict(group=group, cid=cid, current_dice=info["rows"][cid]["dice"], panels=panels, slices=slices,
                               native=native, intermediate_native=intermediate_native,
                               geometry={k: getattr(image, "Get"+k)() for k in
                                         ("Size", "Spacing", "Origin", "Direction")},
@@ -939,11 +889,11 @@ def create_report(info, predictor, declaration):
     _native_channel_figure(items, info["output"] / "feature_channels.png")
     _native_channel_figure(items, info["output"] / "feature_channels_64x64.png", layer="intermediate_native")
 
-    title = ("Dataset501 official nnU-Net 2D TopK10 PlainConvUNet: fold 0 single-fold validation report"
+    title = ("Dataset501 official nnU-Net 2D PlainConvUNet: fold 0 single-fold validation report"
              if kind == "plain_unet" else
              "Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report")
     source_line = _source_statement(trainer_name, info["checkpoint"].name, declaration)
-    txt = [title,
+    txt = [title, "Trainer: " + trainer_name,
            "This is not five-fold OOF or a clinical conclusion.",
            f"Model directory: {info['model']}", f"Checkpoint: {info['checkpoint']}",
            f"Checkpoint SHA256: {_hash_file(info['checkpoint'])}",
@@ -953,12 +903,12 @@ def create_report(info, predictor, declaration):
            f"Historical saved-prediction TTA status (user supplied, not independently verified): {info.get('historical_tta', 'unknown')}; original statement above may contain details.",
            "Diagnostic features: freshly preprocessed raw DWI, no GT and no TTA; they are not saved prediction features or a replay.",
            f"Feature: mean(abs(channel)) at final encoder stage {stage}; native 64x64 stage {intermediate_stage}; bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
-           "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the first displayed slice center; nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
+           "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the fixed representative original slice center (first displayed slice in legacy mode); nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
            "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
             *(["Original PlainConvUNet architecture: architecture_overview.png shows the module flow; architecture_detail.png separates encoder, decoder and output-head panels. Both use loaded network metadata; summary.png contains case comparisons only."] if kind == "plain_unet" else []),
            "Native-channel display: each channel at its actual native CxHxW independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
            "Encoder stages: all actual encoder.stages outputs; 0-based; same forward/slice/window as both native samples. Mean(abs(channel)), immediate 2D reduction. Input is the real padded model-input window. Model normalization: nnU-Net plans preprocessor; display normalization: finite-only 1st-99th percentiles per layer/window. Invalid values display zero with counts/status; constant/all-invalid maps display zero. Native grids/nearest are not original-space alignment, attention, Grad-CAM, saved prediction replay or lesion probability. Independent display normalization prevents absolute layer/case intensity comparison.",
-           "PPT: complete main sheets plus readable case/channel/stage/architecture/metrics pages under ppt/. layout_manifest.json records coverage, dimensions, proportional slide placement and renderer font evidence. Long provenance stays here. Official UPerNet has no independent architecture detail implementation; overview pages show its existing structures.",
+           "Output: main PNGs only; no PPT directory, slide preview, layout_manifest or pagination.",
            "SERVER VALIDATION PENDING: real checkpoint, case geometry, feature source/location and real text layout require server validation. Source UNKNOWN/USER DECLARED/USER CONFIRMED status is unchanged.",
            "Original-space array axis 0, zero-based index; no anatomical plane claim.",
            "Selection: full-case Dice descending, case_id tie break, top 3; among remaining, Dice ascending, case_id tie break, bottom 3; GT area descending, index tie break, max 3 positive slices.",
@@ -975,6 +925,8 @@ def create_report(info, predictor, declaration):
                     "Metrics: " + json.dumps(info["rows"][item["cid"]], ensure_ascii=False),
                     "Geometry: " + json.dumps(item["geometry"]),
                     "Feature mapping: " + json.dumps(item["provenance"], default=lambda x: x.tolist() if hasattr(x, "tolist") else str(x))])
+    if info.get("selection"):
+        txt = [line for line in txt if not line.startswith("Selection:")]
     (info["output"] / "report.txt").write_text("\n".join(txt)+"\n", encoding="utf-8")
 
 
@@ -989,9 +941,10 @@ def main(argv=None):
     parser.add_argument("--metrics-dir", type=Path)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--selection-json", type=Path, help="shared frozen comparison manifest")
     parser.add_argument("--check", action="store_true", help="metadata only; no model or real-image loading")
     parser.add_argument("--prediction-checkpoint-declaration", help="user statement about saved-mask checkpoint provenance (official or standalone); required for official UPerNet")
-    parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicit user confirmation for original TopK10 or standalone saved-mask checkpoint provenance; requires declaration")
+    parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicit user confirmation for standard/original official Trainer or standalone saved-mask checkpoint provenance; requires declaration")
     parser.add_argument("--historical-tta", choices=("unknown", "enabled", "disabled"), default="unknown", help="user-supplied historical prediction TTA status")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument("--manifest", type=Path, help="standalone existing prediction_manifest.json")
@@ -1007,14 +960,16 @@ def main(argv=None):
         info = inspect_sources(args)
         if args.check:
             print(json.dumps({"status": "METADATA ONLY; geometry, checkpoint content and provenance not verified",
-                              "cases": len(info["rows"]), "selected": select_cases(info["rows"]),
+                              "cases": len(info["rows"]), "selected": report_groups(info, select_cases),
+                              "selection_id": info.get("selection", {}).get("selection_id"),
+                              "selection_identity": "PENDING full content/geometry verification",
                               "count_coverage": count_coverage(info["rows"]),
                               "checkpoint": str(info["checkpoint"]), "output": str(info["output"])}, indent=2))
             return 0
         if args.confirm_prediction_checkpoint and not args.prediction_checkpoint_declaration:
             raise ValueError("checkpoint confirmation requires original user statement")
-        if info["model"].name.startswith(ORIGINAL_TRAINER + "__") and bool(args.prediction_checkpoint_declaration) != args.confirm_prediction_checkpoint:
-            raise ValueError("original TopK10 user confirmation requires both --confirm-prediction-checkpoint and --prediction-checkpoint-declaration")
+        if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)) and bool(args.prediction_checkpoint_declaration) != args.confirm_prediction_checkpoint:
+            raise ValueError("standard/original official Trainer user confirmation requires both --confirm-prediction-checkpoint and --prediction-checkpoint-declaration")
         if args.historical_tta != "unknown" and not args.prediction_checkpoint_declaration:
             raise ValueError("known historical TTA requires original user statement")
         info["historical_tta"] = args.historical_tta
@@ -1022,6 +977,7 @@ def main(argv=None):
             raise ValueError("UPerNet full report requires --prediction-checkpoint-declaration; metadata-only --check is available")
         require_simpleitk_reader(info["plans"])
         info["geometry_count"] = verify_full_geometry(info)
+        verify_selection(info)
         predictor = _predictor(info, args)
         output = info["output"]
         if not output.parent.is_dir():
@@ -1032,21 +988,24 @@ def main(argv=None):
             work.mkdir()
             staged_info = dict(info, output=work)
             create_report(staged_info, predictor, args.prediction_checkpoint_declaration)
+            with (work / "report.txt").open("a", encoding="utf-8") as handle:
+                handle.write(save_selection(info, work))
             table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
                                 label_contract=lambda: binary_labels(info["dataset"]),
                                 check_geometry=check_geometry, geometry_verified=True)
             table_text = export_table(table, work)
             with (work / "report.txt").open("a", encoding="utf-8") as handle:
                 handle.write(table_text)
-            required = ["encoder_stages_heatmap.png", "architecture_overview.png", "ppt/layout_manifest.json", "metrics_table.csv", "metrics_table.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
-            if info["model"].name.startswith(ORIGINAL_TRAINER + "__"):
+            required = ["encoder_stages_heatmap.png", "architecture_overview.png", "metrics_table.csv", "metrics_table.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
+            if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)):
                 required.extend(("architecture_overview.png", "architecture_detail.png"))
             if not all((work / name).is_file() for name in required):
                 raise ValueError("report output incomplete")
             from report_visuals import validate_visual_outputs
             families=["summary","encoder_stages","feature_channels","feature_channels_64x64","architecture_overview","metrics_table"]
-            if info["model"].name.startswith(ORIGINAL_TRAINER + "__"): families.append("architecture_detail")
+            if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)): families.append("architecture_detail")
             validate_visual_outputs(work,families)
+            check_selection_output(info, work)
             protected_output(output, (info["model"], *info["images"].values(),
                              *info["labels"].values(), *info["predictions"].values(),
                              info["metrics"], info["checkpoint"]))

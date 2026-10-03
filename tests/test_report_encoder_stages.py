@@ -163,17 +163,9 @@ def test_stage_render_and_preview_metadata(tmp_path):
     items=[dict(cid='合成长病例_0123456789_abcdefghijklmnopqrstuvwxyz', group='High Dice',
         slices=[0],native=native,intermediate_native=middle)]
     stage_figure(items,{items[0]['cid']:dict(dice='.5')},tmp_path/'encoder_stages_heatmap.png')
-    manifest=json.loads((tmp_path/'ppt'/'layout_manifest.json').read_text(encoding='utf-8'))
-    assert manifest['figures']
-    for f in manifest['figures']:
-        assert (tmp_path/f['preview']).is_file()
-        assert f['preview_size']==[1920,1080]
-        assert f['placement'][2]<=1920 and f['placement'][3]<=1080
-        if f['kind']=='ppt': assert f['min_text_px']>=18
-    assert any(f['coverage'].get('stages')==[0,1,2] for f in manifest['figures'])
+    assert not (tmp_path/'ppt').exists()
     validate_visual_outputs(tmp_path,required_families=['encoder_stages'])
-    victim=tmp_path/next(f['path'] for f in manifest['figures'] if f['kind']=='ppt')
-    victim.unlink()
+    (tmp_path/'encoder_stages_heatmap.png').unlink()
     with pytest.raises(ValueError,match='incomplete'): validate_visual_outputs(tmp_path,required_families=['encoder_stages'])
 
 
@@ -236,22 +228,15 @@ def test_metrics_page_coverage_all_columns_rows_summaries(tmp_path):
     rows['case0']['source_note']='Synthetic only; UNKNOWN / pending stays UNKNOWN / pending'
     source=build(rows)
     t.export_table(source,tmp_path)
-    data=json.loads((tmp_path/'ppt'/'layout_manifest.json').read_text(encoding='utf-8'))
-    pages=[f for f in data['figures'] if f['kind']=='ppt']
-    coverage={(r,c) for f in pages for r in f['coverage']['row_indices'] for c in f['coverage']['column_indices']}
-    assert coverage=={(r,c) for r in range(len(source['records'])) for c in range(len(source['columns']))}
-    assert all(f['min_text_px']>=18 for f in pages)
-    for page in pages:
-        texts=page['text_measurements']
-        for i,a in enumerate(texts):
-            x,y,w,h=a['bbox']
-            for b in texts[i+1:]:
-                xx,yy,ww,hh=b['bbox']
-                assert min(x+w,xx+ww)-max(x,xx)<=1 or min(y+h,yy+hh)-max(y,yy)<=1, (a['text'],b['text'])
+    assert not (tmp_path/'ppt').exists()
+    import csv
+    exported=list(csv.DictReader((tmp_path/'metrics_table.csv').open(encoding='utf-8-sig')))
+    assert len(exported)==len(source['records'])
+    assert set(exported[0])==set(source['columns'])
 
 
 @pytest.mark.parametrize('identity',['nnUNetTrainerUPerNetTopK10EarlyStopping','h2former'])
-@pytest.mark.parametrize('missing',['stage','ppt_page','preview'])
+@pytest.mark.parametrize('missing',['stage','main_png','unexpected_ppt'])
 def test_new_output_atomic_publication(tmp_path,monkeypatch,identity,missing):
     from test_report_metrics_table import write_inputs,wire_no_forward
     import generate_nnunet_result_report as o
@@ -261,8 +246,8 @@ def test_new_output_atomic_publication(tmp_path,monkeypatch,identity,missing):
     real=v.validate_visual_outputs
     def check(output,*a):
         if missing=='stage': (output/'encoder_stages_heatmap.png').unlink()
-        elif missing=='ppt_page': (output/'ppt'/'encoder_stages_01.png').unlink()
-        else: (output/'ppt'/'encoder_stages_01_slide.png').unlink()
+        elif missing=='main_png': (output/'summary.png').unlink()
+        else: (output/'ppt').mkdir()
         # Main-image completeness is also checked after this point by this probe.
         if not (output/'encoder_stages_heatmap.png').is_file(): raise ValueError('report output incomplete: stage')
         return real(output,*a)
@@ -313,7 +298,7 @@ def test_hybrid_encoder_page_node_geometry(tmp_path, monkeypatch, name, width, s
     from matplotlib.patches import FancyBboxPatch
     captures = []
     def capture(fig, output, **kwargs):
-        if Path(output).name != "architecture_detail_01.png": return
+        if Path(output).name != "architecture_detail.png": return
         fig.set_dpi(v.DPI); fig.canvas.draw(); renderer = fig.canvas.get_renderer()
         ax = next(a for a in fig.axes if a.get_visible())
         nodes = {p.get_gid(): p for p in ax.patches if isinstance(p, FancyBboxPatch)}
@@ -472,7 +457,7 @@ def test_architecture_all_panels_containment(tmp_path, monkeypatch, name, width,
             classifier=SimpleNamespace(in_channels=width,out_channels=2))
     family = "architecture_detail" if detail else "architecture_overview"
     _architecture(model, name, tmp_path/(family+".png"), detail=detail)
-    assert len(captures) == (5 if detail else 4)
+    assert len(captures) == 1
     counts = [(24,27)]
     if width and detail:
         counts.append((3+2*len(scales), 3*len(scales)+2))

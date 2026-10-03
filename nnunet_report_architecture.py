@@ -78,7 +78,7 @@ def draw_overview(ax, network, patch_size, final_stage, intermediate_stage):
     ax.set_ylim(0, height)
     ax.axis("off")
     ax.set_facecolor(BG)
-    ax.text(.25, height-.48, "Original nnUNetTrainerTopK10 | PlainConvUNet",
+    ax.text(.25, height-.48, "PlainConvUNet | loaded encoder / decoder metadata",
             fontsize=19, weight="bold", color=NAVY)
     ax.text(.25, height-1.00,
             f"RESTORED NETWORK METADATA  |  patch {_shape(patch_size)}  |  {count} encoder stages / {count-1} decoder steps",
@@ -141,13 +141,13 @@ def _panel(ax, height, title, note):
 def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
     """Three numbered, independent panels; no wires cross panel boundaries."""
     import matplotlib.pyplot as plt
-    from report_visuals import setup_font,save_figure,panel_pages
+    from report_visuals import setup_font,save_figure
     setup_font()
     channels, sizes = _metadata(network, patch_size, final_stage, intermediate_stage)
     count = len(channels)
     enc_h, dec_h, head_h = 4.55, 2.25 + 1.34*(count-1), 4.35
     fig = plt.figure(figsize=(21, 8.6 + 1.65*(count-1)), facecolor=BG)
-    fig.suptitle("Original nnUNetTrainerTopK10 | detailed PlainConvUNet view",
+    fig.suptitle("PlainConvUNet | detailed loaded-network view",
                  x=.035, y=.987, ha="left", fontsize=19.5,
                  weight="bold", color=NAVY)
     fig.text(.035, .963,
@@ -179,7 +179,7 @@ def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
     dec = fig.add_subplot(grid[1])
     _panel(dec, dec_h, "② Decoder | one local operation at each skip scale",
            "Each row: ConvTranspose2d → matching encoder skip concat → StackedConvBlocks. Named tensors link rows.")
-    # Tall decoder panels need extra heading clearance at the PPT body size.
+    # Tall decoder panels need heading clearance for enlarged labels.
     dec.texts[1].set_y(dec_h-1.06)
     top = dec_h - 2.55
     for step in range(count-1):
@@ -209,8 +209,8 @@ def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
            "Each decoder stage has a seg_layers head. Inference with deep supervision disabled returns only the D0 main output.")
     rows = [(2.30, [(f"TRAIN: D{final_stage-1} … D0", ORANGE),
                     (f"seg_layers[0..{final_stage-1}]", PURPLE),
-                    ("deep-supervision logits list\nhighest resolution first", PURPLE),
-                    ("TopK10 loss\ntraining only", ORANGE)]),
+                    ("Training logits list\nhigh resolution first", PURPLE),
+                    ("Trainer loss\ntraining only", ORANGE)]),
             (1.05, [("INFER: D0", GREEN), ("seg_layers[-1]", PURPLE),
                     (f"main logits · {network.decoder.seg_layers[-1].out_channels} classes", PURPLE),
                     ("single tensor returned", GREEN)])]
@@ -226,8 +226,16 @@ def draw_detail(network, patch_size, final_stage, intermediate_stage, output):
                fontsize=8.7, color=INK)
     try:
         from matplotlib.text import Text
-        for text in fig.findobj(Text): text.set_fontsize(text.get_fontsize()*1.25)
+        for text in fig.findobj(Text): text.set_fontsize(text.get_fontsize()*1.625)
+        # Reserve actual renderer height between the enlarged title and metadata.
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        title_bounds = fig._suptitle.get_window_extent(renderer)
+        note = fig.texts[1]
+        note_bounds = note.get_window_extent(renderer)
+        shift = max(0., note_bounds.y1 - title_bounds.y0 + 12.)
+        note.set_y(note.get_position()[1] - shift / fig.bbox.height)
+        grid.update(top=min(grid.top, note.get_position()[1] - 15. / fig.bbox.height))
         save_figure(fig,output,family="architecture_detail",coverage={"panels":[1,2,3],"decoder_steps":list(range(count-1))})
-        panel_pages(fig,output,"architecture_detail")
     finally:
         plt.close(fig)

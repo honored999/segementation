@@ -207,16 +207,6 @@ def wire_no_forward(monkeypatch,metadata):
     def artifact(path,family):
         path=Path(path); path.parent.mkdir(exist_ok=True,parents=True)
         Image.new('RGB',(64,36),'white').save(path)
-        ppt=path.parent/'ppt'; ppt.mkdir(exist_ok=True)
-        page=ppt/(family+'_01.png'); preview=ppt/(family+'_01_slide.png')
-        Image.new('RGB',(64,36),'white').save(page)
-        Image.new('RGB',(1920,1080),'white').save(preview)
-        mp=ppt/'layout_manifest.json'
-        data=json.loads(mp.read_text(encoding='utf-8')) if mp.exists() else {'figures':[]}
-        data['figures'].append(dict(path=page.relative_to(path.parent).as_posix(),
-            preview=preview.relative_to(path.parent).as_posix(),family=family,kind='ppt',
-            synthetic_renderer_substitute=True))
-        mp.write_text(json.dumps(data),encoding='utf-8')
     monkeypatch.setattr(table,'render_table',lambda h,c,n,p: artifact(p,'metrics_table'))
     monkeypatch.setattr(report_visuals,'stage_figure',lambda i,r,p: artifact(p,'encoder_stages'))
     if metadata is None:
@@ -231,7 +221,7 @@ def wire_no_forward(monkeypatch,metadata):
         import standalone_nnunet2d.predict as predict
         monkeypatch.setattr(predict,'_read_checkpoint',lambda *a: ({},metadata))
         monkeypatch.setattr(predict,'_load_model',lambda *a: (SimpleNamespace(),metadata))
-        monkeypatch.setattr(report,'_slice_features',lambda *a: ({0:np.zeros((2,2))},None,None))
+        monkeypatch.setattr(report,'_slice_features',lambda *a,**kw: ({0:np.zeros((2,2))},None,None))
         def plot(*a,**kw):
             target=next(x for x in reversed(a) if isinstance(x,Path))
             artifact(target,target.stem)
@@ -246,6 +236,7 @@ def test_real_entry_shared_table_no_forward(tmp_path,monkeypatch,identity):
     args,metadata=write_inputs(tmp_path,identity)
     wire_no_forward(monkeypatch,metadata)
     assert main(args)==0
+    assert not (tmp_path/'output'/'ppt').exists()
     output=tmp_path/'output'
     records=list(csv.DictReader((output/'metrics_table.csv').open(encoding='utf-8-sig')))
     assert len(records)==9 and records[-1]['tp']=='7'

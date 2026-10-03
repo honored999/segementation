@@ -290,19 +290,18 @@ def export_table(table, output):
 
 
 def render_table(headers, cells, notes, output):
-    """Keep full ordered data; paginate both rows and columns without truncation."""
+    """Keep full ordered data; render all rows and columns without truncation."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from report_visuals import BODY, TITLE, PPT_SIZE, setup_font, wrap, save_figure
+    from report_visuals import BODY, TITLE, setup_font, wrap, save_figure
     setup_font(); output=Path(output)
-    def draw(indices, row_indices, path, page=False, label=""):
+    def draw(indices, row_indices, path):
         limits=[28 if headers[i]=='case_id' else 18 for i in indices]
         wrapped=[[wrap(str(v),limits[j]) for j,v in enumerate(row)] for row in
             [[headers[i] for i in indices],*[[cells[r][i] for i in indices] for r in row_indices]]]
         heights=[.27*max(len(v.split('\n')) for v in row)+.18 for row in wrapped]
-        if page: size=PPT_SIZE
-        else: size=(max(18,2.7*len(indices)),sum(heights)+2.2)
+        size=(max(18,2.7*len(indices)),sum(heights)+2.2)
         fig=plt.figure(figsize=size)
         top=.84; bottom=.12
         ax=fig.add_axes((.025,bottom,.95,top-bottom)); ax.axis('off')
@@ -315,25 +314,9 @@ def render_table(headers, cells, notes, output):
             row_type=cells[row_indices[r-1]][headers.index('row_type')] if r and 'row_type' in headers else ''
             cell.set_facecolor('#dae7f2' if r==0 else '#e6f0e5' if row_type in ('case_macro_mean','voxel_total') else '#f4f7fa' if r%2 else 'white')
         fig.suptitle('Full evaluation set | metrics and voxel counts',fontsize=TITLE,y=.975)
-        fig.text(.025,.885,label or 'All source columns and cases; ordered macro and voxel summaries retained',fontsize=BODY)
+        fig.text(.025,.885,'All source columns and cases; ordered macro and voxel summaries retained',fontsize=BODY)
         fig.text(.025,.04,'Missing: N/A; blank: not applicable. Source definitions, units and full provenance: report.txt / CSV',fontsize=BODY)
         try: save_figure(fig,path,family='metrics_table',coverage={'column_indices':indices,'columns':[headers[i] for i in indices],
             'row_indices':row_indices,'case_ids':[cells[r][headers.index('case_id')] for r in row_indices]})
         finally: plt.close(fig)
     draw(list(range(len(headers))),list(range(len(cells))),output)
-    repeat=[headers.index(h) for h in ('case_id','row_type') if h in headers]
-    others=[i for i in range(len(headers)) if i not in repeat]
-    number=0
-    for start in range(0,len(others),4):
-        cols=repeat+others[start:start+4]
-        batch=[]; height=.65
-        for r,row in enumerate(cells):
-            rh=.27*max(len(wrap(str(row[c]),28 if headers[c]=='case_id' else 18).split('\n')) for c in cols)+.18
-            if batch and (height+rh>6.1 or len(batch)>=8):
-                number+=1; draw(cols,batch,output.parent/'ppt'/f'metrics_table_{number:02d}.png',True,
-                    f'Column group {start//4+1} | source rows {batch[0]+1}-{batch[-1]+1} of {len(cells)}')
-                batch=[]; height=.65
-            batch.append(r); height+=rh
-        if batch:
-            number+=1; draw(cols,batch,output.parent/'ppt'/f'metrics_table_{number:02d}.png',True,
-                f'Column group {start//4+1} | source rows {batch[0]+1}-{batch[-1]+1} of {len(cells)}')
