@@ -166,7 +166,12 @@ def _validate(document):
             if any(len(g[k]) != n for k, n in (('Size', 3), ('Spacing', 3), ('Origin', 3), ('Direction', 9))):
                 raise ValueError('invalid geometry shape')
             geometry(Header())
-        if e['image']['geometry'] != e['gt']['geometry']:
+        import numpy as np
+        image_geometry, gt_geometry = e['image']['geometry'], e['gt']['geometry']
+        # Accept NIfTI metadata roundoff; voxel dimensions must remain exact.
+        if image_geometry['Size'] != gt_geometry['Size'] or any(
+                not np.allclose(image_geometry[key], gt_geometry[key], rtol=0.0, atol=1e-6)
+                for key in ('Spacing', 'Origin', 'Direction')):
             raise ValueError('image/GT geometry conflict')
         indices = e.get('display_slices')
         if not isinstance(indices, list) or not 1 <= len(indices) <= 3 or any(type(i) is not int or not 0 <= i < e['gt']['geometry']['Size'][2] for i in indices) or indices != sorted(set(indices)):
