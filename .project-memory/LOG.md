@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-04 - Configurable-depth ordinary PlainConvUNet Trainer
+
+- Changed: one separate external Trainer reads encoder_last_stage from saved plans/configuration, constructs retained encoder stages and corresponding official UNetDecoder directly, and inherits TopK10/early-stopping/single-output policy. Added short derived-plans/server-command instructions; old UPerNet Trainers unchanged.
+- Validation: independent exact-snapshot static review PASS; source/diff/hash inspection only. User explicitly requested no tests; no tests/imports/model construction/runtime validation were executed. Earlier NoStage7 test results do not apply to this new Trainer.
+- Result: source implementation completed by a leaf subagent. Main edited only branch-local records. Based on f1b9ca8; user subsequently authorized committing and pushing this accepted addition. Canonical master memory unchanged. Raw data, source plans and fixed splits untouched.
+- Next: deliver source, create independent derived plans on server, and compare ordinary-decoder depths with fresh per-configuration outputs and original full-volume validation. Runtime compatibility and performance remain unverified.
+
 ## 2026-10-03 - NoStage7 UPerNet branch-local engineering acceptance
 
 - Changed: separate external Trainer removes only returned encoder stage7 and fixes decoder inputs(1,3,5,6),preserving baseline policy and plans. Existing Trainer source untouched.
