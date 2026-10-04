@@ -1,0 +1,298 @@
+{
+  "worktree": "E:\\study\\研一\\work14-图像分割\\segementation-upernet-configurable-stages",
+  "branch": "codex/upernet-configurable-stages",
+  "base": "8a41ce3b0d4e2c980c9e9063a60b055b0a841d89",
+  "HEAD": "8a41ce3b0d4e2c980c9e9063a60b055b0a841d89",
+  "independent_review": "PENDING",
+  "integration": "uncommitted/unmerged",
+  "manifest_self_excluded": ".task-notes/upernet-selected-stages/snapshot_manifest.json",
+  "files": [
+    {
+      "path": ".project-memory/GOALS.md",
+      "status": "modified",
+      "bytes": 971,
+      "sha256": "533a33a495143d57dd148e4d7d2d153ac25d7296797d1a09227868d9f419ecca"
+    },
+    {
+      "path": ".project-memory/LOG.md",
+      "status": "modified",
+      "bytes": 2221,
+      "sha256": "472dd184d76def02a13aa8726423fffe499acf1b80cc687c7feee5c64c3b4089"
+    },
+    {
+      "path": ".project-memory/NEXT.md",
+      "status": "modified",
+      "bytes": 1160,
+      "sha256": "5ad735d5557b6c0085e41b648c6df491536ba84dc13710fd667cb4a12fa0cd58"
+    },
+    {
+      "path": ".project-memory/STATUS.md",
+      "status": "modified",
+      "bytes": 2439,
+      "sha256": "a652776754c6e4687eb75aec294bb4cb30c27f8b0e27070ca876d1901dce6915"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/checklist.md",
+      "status": "untracked",
+      "bytes": 2282,
+      "sha256": "834fa15e00d145a301d00a78f2512f2d1599ce0ebbc0103421dbc0ca00cfa1cc"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/design.md",
+      "status": "untracked",
+      "bytes": 2319,
+      "sha256": "fdbb0a3dcb246a7938ef4e2aa8f682fe883c455b7db8688ac8bcb9270f46659a"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/reviewer_prompt.md",
+      "status": "untracked",
+      "bytes": 7661,
+      "sha256": "308b522615873a016a5d8365d338bb54fb63103fb9e0ef22d594bf21427f6a2a"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/run_validation.py",
+      "status": "untracked",
+      "bytes": 3952,
+      "sha256": "9fbc785a9aadee72f4e29a80fa6e26d5cb888e3c4f25b76248cda06bcee5b904"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation.md",
+      "status": "untracked",
+      "bytes": 9792,
+      "sha256": "34742b2ff8ed4ef4c7b6cf73745471a58a6d912c2f643ad757f75e693c345a21"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/affected-final.json",
+      "status": "untracked",
+      "bytes": 7067,
+      "sha256": "ae8243b9c59a5091e76af166731a78eb02656989e46feaa13390c32da55a0f11"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/baseline-final.json",
+      "status": "untracked",
+      "bytes": 6893,
+      "sha256": "59d7770be0d8ea04f529b2acbb7d7fce8012bfadc96c5cad2f8379a634abbd59"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/focused-expanded.json",
+      "status": "untracked",
+      "bytes": 10636,
+      "sha256": "99ca06ebd1bd80731fe32bf6f146f5704fd43f54b55f27206d31cb332ac24cdf"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/focused-final.json",
+      "status": "untracked",
+      "bytes": 6646,
+      "sha256": "6ea78636118dc7d3e15601ce080e0acc000be78f5ae83bc78cc62dd7967980eb"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/green-first.json",
+      "status": "untracked",
+      "bytes": 12233,
+      "sha256": "57fc186e189c08b0278bcdfb78c315d60a974eac3fb2f87c7a2b284e4c6cb651"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/predictor-fixed.json",
+      "status": "untracked",
+      "bytes": 6308,
+      "sha256": "b7a2fd66e78b72ed9d47b0898c5be4f0e2e0af20110aa09a20e166b535160253"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/red-confirmed.json",
+      "status": "untracked",
+      "bytes": 6926,
+      "sha256": "35251285ac48b8ca3339d6cffc343c1c70140d0acea6609b556794690a140001"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/red-plans-ambiguity.json",
+      "status": "untracked",
+      "bytes": 8845,
+      "sha256": "f53bd9b2d52d2187b27a0aef10a5ebc588b2c794bc717c18e922572ae379a9ca"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/trainer-fixture-fixed.json",
+      "status": "untracked",
+      "bytes": 6413,
+      "sha256": "2bd0cec05af6fb67fe42828d4ea2c6ee9d226d06cb2331bb165073edb86dcad3"
+    },
+    {
+      "path": "nnunet_ext_trainers/README_upernet_selected_stages.md",
+      "status": "untracked",
+      "bytes": 9252,
+      "sha256": "5f78b61e34281ab1557d0358cf9de09d46981a7272047829dd934e7d7a6f8a8d"
+    },
+    {
+      "path": "nnunet_ext_trainers/create_upernet_stage_plans.py",
+      "status": "untracked",
+      "bytes": 3827,
+      "sha256": "aea682983d8ae0f5da59cd6467d6a412ecdc2712b23bc9f4cad350b02effa2a5"
+    },
+    {
+      "path": "nnunet_ext_trainers/nnUNetTrainerMixins.py",
+      "status": "modified",
+      "bytes": 26518,
+      "sha256": "ad4ac9933ce69560e6dd550dfc7191b44e8b394f6eeba38a64c6f6f4b2ef5c77"
+    },
+    {
+      "path": "nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py",
+      "status": "untracked",
+      "bytes": 8853,
+      "sha256": "c53ac4d16048d862ac62ec995bffea9b948e09fa7ccea6a9c7432b074e318cce"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/test_upernet_selected_stages.py",
+      "status": "untracked",
+      "bytes": 24862,
+      "sha256": "74cb361f14013894e1b46fe81fb674cf438f0a165e5f4bfbc0d06994b271418e"
+    }
+  ],
+  "ignored_files": [
+    {
+      "path": ".pytest_cache/.gitignore",
+      "bytes": 39,
+      "sha256": "e7c6bb30148cf667606dcd63e7ca77acaa3cfb0c8303bf09e6419e1e1669dc6d"
+    },
+    {
+      "path": ".pytest_cache/CACHEDIR.TAG",
+      "bytes": 191,
+      "sha256": "37dc88ef9a0abeddbe81053a6dd8fdfb13afb613045ea1eb4a5c815a74a3bde4"
+    },
+    {
+      "path": ".pytest_cache/README.md",
+      "bytes": 310,
+      "sha256": "420e808d79a6c25d3cda0af33bc4782314a14949866682c68ce8149e89b66b70"
+    },
+    {
+      "path": ".pytest_cache/v/cache/lastfailed",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": ".pytest_cache/v/cache/nodeids",
+      "bytes": 13599,
+      "sha256": "051ade1a72ce4967d7926e94898a0c24e1d52bdf0ded85347a5edd0f88c3bd23"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/create_upernet_stage_plans.cpython-314.pyc",
+      "bytes": 6235,
+      "sha256": "5fec2af1baf200189522c4c7cb58c9e2a2b63f7a4beed4bd2ad519e6a8b627c0"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerEarlyStopping.cpython-314.pyc",
+      "bytes": 792,
+      "sha256": "6ff6090b5d5dcf1234db9c43d140220ae3a27ab083fa1ed8b450707e78a3eaa0"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerForeground50.cpython-314.pyc",
+      "bytes": 1640,
+      "sha256": "fe2686d5b66df0411c761b1ddbf96545350950f9045d190d5ae95fb2adcb5c3c"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerMixins.cpython-314.pyc",
+      "bytes": 43031,
+      "sha256": "9422bc612431c634a3eb0c4fa49d0cc6ad6394ff5c7365542043f2f5f9b121a4"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerNoDeepSupervisionEarlyStopping.cpython-314.pyc",
+      "bytes": 898,
+      "sha256": "20504e4a5edee418cf0d6b3a12a0e97c59875a621e7c5ab31f23fc167de1bfae"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerNoDeepSupervisionTopK10EarlyStopping.cpython-314.pyc",
+      "bytes": 942,
+      "sha256": "cc2cd7f69021555a9910c04ad53699c558927fab5cbe606997958868c0197484"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerStage2SmallUNet.cpython-314.pyc",
+      "bytes": 1752,
+      "sha256": "d3360ed7755265fdc2ced25c2134fe9341ac3b8117a07ed075f1c94363798c0b"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerTopK10.cpython-314.pyc",
+      "bytes": 777,
+      "sha256": "402e0909c6ddb2652e1c67213de1c52dc730a9d94d7fddcc73dfd4d6d55b1377"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerTopK20.cpython-314.pyc",
+      "bytes": 740,
+      "sha256": "163c7fb83355b9f75c496d8f52d4296c1a43946a1dca84431bae5a3379394adb"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerUPerNetEarlyStopping.cpython-314.pyc",
+      "bytes": 922,
+      "sha256": "22a78203d051d8e6bd7760094be5fd1347a61c547da395eb96e0f4bfc534ae40"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.cpython-314.pyc",
+      "bytes": 14964,
+      "sha256": "038c9eaf30aeee83930a38c48b93669ad3d30afde146fe2075bbf45bbbda1204"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/nnUNetTrainerUPerNetTopK10EarlyStopping.cpython-314.pyc",
+      "bytes": 972,
+      "sha256": "127d08ebfd692b72da8f46a54eecc9353fcf89657a4a2f75751d427f6d99df86"
+    },
+    {
+      "path": "nnunet_ext_trainers/__pycache__/small_unet_2d.cpython-314.pyc",
+      "bytes": 4780,
+      "sha256": "01c13b795048a9f05366dbb9193c78f2244774861e83035bba442fbe28189043"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_official_upernet_trainers.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 84299,
+      "sha256": "e85e657d894c73473940bccc0715da96c72e7d81954ecd63399c1b0d7f8a194b"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_trainer_early_stopping.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 42596,
+      "sha256": "5db00fce4e0475e00a8bc723e884b67af6004c98d865e1f30db3e59a488c116e"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_trainer_foreground50.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 3288,
+      "sha256": "c6fc76467e10d79e8cec7d957764bbd1acbe51ad59c6937f5e89dd1bc371354c"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_trainer_stage2_small_unet.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 30975,
+      "sha256": "bebb9a1a4ca2c52559d3c938f67c03f417d79dfcf939c8b3795bff9fb57ed078"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_trainer_topk10.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 3210,
+      "sha256": "dd709f5652b7df1084e66c135c1e19a70fcc2d38f08ffb24b95668f9ac451071"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/__pycache__/test_upernet_selected_stages.cpython-314-pytest-9.0.3.pyc",
+      "bytes": 110022,
+      "sha256": "3acab5f8457f710bc39ffa12ce3486446124756954b8e2e500ed6cec154dc1bc"
+    }
+  ],
+  "protected_worktrees": [
+    {
+      "path": "E:\\study\\研一\\work14-图像分割\\segementation",
+      "branch": "feat/h2former-stroke",
+      "HEAD": "d717a7a82d30a1d23fbb2c3aab4425c1708806fa",
+      "status": ""
+    },
+    {
+      "path": "E:\\study\\研一\\work14-图像分割\\segementation-upernet-es-topk10",
+      "branch": "codex/nnunet-upernet-es-topk10",
+      "HEAD": "8a41ce3b0d4e2c980c9e9063a60b055b0a841d89",
+      "status": ""
+    },
+    {
+      "path": "E:\\study\\研一\\work14-图像分割\\segementation\\.worktrees\\upernet-no-stage7",
+      "branch": "codex/upernet-no-stage7",
+      "HEAD": "f1b9ca87e28bda0c8941b639d87349b7d9012338",
+      "status": ""
+    }
+  ],
+  "canonical_master_memory_tracked": "",
+  "test_temp_root": "E:\\study\\研一\\work14-图像分割\\segementation-upernet-configurable-stages-test-temp",
+  "validation_snapshot_matches": [
+    "focused-final",
+    "baseline-final",
+    "affected-final"
+  ]
+}

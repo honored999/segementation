@@ -1,5 +1,9 @@
 # Goals
 
+## Branch-local milestone (unintegrated; 2026-10-03)
+
+- Deliver manual plans-configured encoder selections for official UPerNet with reproducible checkpoint/predictor identity. Implementation and independent Level 3 review completed (PASS; P1 CLOSED). Branch remains unmerged; server/performance/formal evidence pending.
+
 ## Project goal
 
 - Develop reproducible stroke-lesion segmentation models while preserving

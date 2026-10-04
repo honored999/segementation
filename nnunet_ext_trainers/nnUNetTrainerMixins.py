@@ -262,6 +262,49 @@ def select_upernet_feature_indices(
     return selected  # type: ignore[return-value]
 
 
+def upernet_cumulative_scales(
+    strides: Sequence[Sequence[int]], n_stages: int
+) -> tuple[tuple[int, int], ...]:
+    """Validate plan strides (including official scalar strides) without model allocation."""
+    if isinstance(n_stages, bool) or not isinstance(n_stages, Integral) or n_stages < 2:
+        raise ValueError("n_stages must be an integer >= 2")
+    if len(strides) != n_stages:
+        raise ValueError("n_stages must match the number of stride entries")
+    cumulative = (1, 1)
+    scales = []
+    for index, value in enumerate(strides):
+        if isinstance(value, Integral) and not isinstance(value, bool):
+            value = (value, value)
+        try:
+            stride = _as_pair(value, name=f"strides[{index}]")
+        except TypeError as error:
+            raise ValueError(f"strides[{index}] must contain two positive integers") from error
+        cumulative = (cumulative[0] * stride[0], cumulative[1] * stride[1])
+        scales.append(cumulative)
+    return tuple(scales)
+
+
+def validate_upernet_feature_indices(
+    indices: Sequence[int], strides: Sequence[Sequence[int]], n_stages: int
+) -> tuple[int, ...]:
+    """Reject invalid selections; never sort, coerce, deduplicate or fall back."""
+    scales = upernet_cumulative_scales(strides, n_stages)
+    if not isinstance(indices, (list, tuple)) or not 2 <= len(indices) <= n_stages:
+        raise ValueError(f"upernet_feature_indices must contain 2..{n_stages} stage indices")
+    if any(isinstance(i, bool) or not isinstance(i, Integral) for i in indices):
+        raise ValueError("upernet_feature_indices must contain integers, not bool/float/string/null")
+    selected = tuple(int(i) for i in indices)
+    if any(i < 0 or i >= n_stages for i in selected):
+        raise ValueError(f"upernet_feature_indices out of range [0, {n_stages - 1}]")
+    if any(a >= b for a, b in zip(selected, selected[1:])):
+        raise ValueError("upernet_feature_indices must be strictly increasing without duplicates")
+    for a, b in zip(selected, selected[1:]):
+        if not all(x < y for x, y in zip(scales[a], scales[b])):
+            raise ValueError(f"selected stages {a}, {b} require strictly decreasing 2D resolutions; "
+                             f"cumulative scales are {scales[a]}, {scales[b]}")
+    return selected
+
+
 class _ConvNormAct(nn.Sequential):
     def __init__(
         self,
@@ -310,7 +353,7 @@ def _encoder_spatial_geometry(encoder: PlainConvEncoder) -> tuple[tuple[tuple, .
 
 
 class UPerNetDecoder(nn.Module):
-    """Four-level 2D UPerNet decoder used by the official Trainer variants."""
+    """N-level 2D decoder; the four-level module/state/numerical path is preserved."""
 
     def __init__(
         self,
@@ -322,13 +365,13 @@ class UPerNetDecoder(nn.Module):
         fpn_channels: int = 128,
         pool_scales: Sequence[int] = (1, 2, 4),
         encoder_spatial_geometry: tuple[tuple[tuple, ...], ...] | None = None,
-        selected_feature_indices: tuple[int, int, int, int] | None = None,
+        selected_feature_indices: tuple[int, ...] | None = None,
     ) -> None:
         super().__init__()
         channels = tuple(in_channels)
         scales = tuple(pool_scales)
-        if len(channels) != 4 or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in channels):
-            raise ValueError("in_channels must contain four positive integers")
+        if len(channels) < 2 or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in channels):
+            raise ValueError("in_channels must contain at least two positive integers")
         if not isinstance(num_classes, int) or num_classes <= 0:
             raise ValueError("num_classes must be a positive integer")
         if fpn_channels != 128:
@@ -366,7 +409,7 @@ class UPerNetDecoder(nn.Module):
             for _ in channels[:-1]
         )
         self.fusion = _ConvNormAct(
-            4 * fpn_channels,
+            len(channels) * fpn_channels,
             fpn_channels,
             kernel_size=3,
             norm_factory=norm_factory,
@@ -375,10 +418,10 @@ class UPerNetDecoder(nn.Module):
         self.classifier = nn.Conv2d(fpn_channels, num_classes, kernel_size=1, bias=True)
         self.deep_supervision = False
 
-    def _validate_features(self, features: Sequence[Tensor]) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    def _validate_features(self, features: Sequence[Tensor]) -> tuple[Tensor, ...]:
         values = tuple(features)
-        if len(values) != 4:
-            raise ValueError("UPerNetDecoder requires exactly four feature maps")
+        if len(values) != len(self.in_channels):
+            raise ValueError(f"UPerNetDecoder requires exactly {len(self.in_channels)} feature maps")
         batch_size: int | None = None
         previous_spatial: tuple[int, int] | None = None
         for index, (feature, expected_channels) in enumerate(zip(values, self.in_channels, strict=True)):
@@ -416,8 +459,8 @@ class UPerNetDecoder(nn.Module):
                     align_corners=False,
                 )
             )
-        pyramid: list[Tensor | None] = [None, None, None, self.ppm_bottleneck(torch.cat(ppm_values, dim=1))]
-        for index in reversed(range(3)):
+        pyramid: list[Tensor | None] = [None] * (len(values) - 1) + [self.ppm_bottleneck(torch.cat(ppm_values, dim=1))]
+        for index in reversed(range(len(values) - 1)):
             lateral = self.lateral_projections[index](values[index])
             top_down = torch.nn.functional.interpolate(
                 pyramid[index + 1],
@@ -450,17 +493,17 @@ class UPerNetDecoder(nn.Module):
                 )
             if index in self.selected_feature_indices:
                 selected_sizes.append(spatial)
-        if len(selected_sizes) != 4 or any(min(size) < 1 for size in selected_sizes):
+        if len(selected_sizes) != len(self.in_channels) or any(min(size) < 1 for size in selected_sizes):
             raise ValueError("input_size produces invalid selected encoder feature maps")
 
         def area(size: tuple[int, int]) -> np.int64:
             return np.int64(size[0]) * np.int64(size[1])
 
-        highest, middle_a, middle_b, deepest = selected_sizes
+        highest, deepest = selected_sizes[0], selected_sizes[-1]
         width = np.int64(self.fpn_channels)
         total = sum((width * np.int64(scale) * np.int64(scale) for scale in self.pool_scales), np.int64(0))
         total += width * area(deepest)  # PPM bottleneck
-        for size in (highest, middle_a, middle_b):
+        for size in selected_sizes[:-1]:
             total += width * area(size) * np.int64(2)  # lateral projection and refinement
         total += width * area(highest)  # fusion
         total += np.int64(self.classifier.out_channels) * area(highest)
@@ -471,7 +514,7 @@ class _PlainConvUNetUPerNet(nn.Module):
     def __init__(
         self,
         encoder: PlainConvEncoder,
-        selected_feature_indices: tuple[int, int, int, int],
+        selected_feature_indices: tuple[int, ...],
         num_output_channels: int,
         *,
         norm_op,
@@ -564,4 +607,6 @@ __all__ = [
     "UPerNetArchitectureMixin",
     "UPerNetDecoder",
     "select_upernet_feature_indices",
+    "validate_upernet_feature_indices",
+    "upernet_cumulative_scales",
 ]

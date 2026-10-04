@@ -1,0 +1,239 @@
+{
+  "date": "2026-10-04",
+  "worktree": "E:\\study\\研一\\work14-图像分割\\segementation-upernet-configurable-stages",
+  "branch": "codex/upernet-configurable-stages",
+  "base": "8a41ce3b0d4e2c980c9e9063a60b055b0a841d89",
+  "independent_review": "PASS; original P1 CLOSED",
+  "reviewed_manifest_sha256": "9cb7266a68b87cf77ce125f86318e2e6db51863610044f0489d2cba0368f39ba",
+  "source_tests_unchanged_since_independent_review": true,
+  "fresh_precommit_validation": "111 passed; exit 0; validation/delivery-precommit-20261004.json",
+  "manifest_self_excluded": true,
+  "raw_byte_hash_platform": "Windows checkout; Git may normalize CRLF/LF on Linux",
+  "files": [
+    {
+      "path": ".project-memory/GOALS.md",
+      "bytes": 1040,
+      "sha256": "6b8abfa924db02f3d906c86cd8103ce15b0853c07325b10a3bb878b5f7390968"
+    },
+    {
+      "path": ".project-memory/LOG.md",
+      "bytes": 4174,
+      "sha256": "369a445812a1bc80995d1a9fc52d2174723e58981487bc7e9fc906a1a5a18592"
+    },
+    {
+      "path": ".project-memory/NEXT.md",
+      "bytes": 1482,
+      "sha256": "6c46b207a041e4f1f1d3c4418d455fdb40705030bed3a5f49a2ee4f9c865cf5d"
+    },
+    {
+      "path": ".project-memory/STATUS.md",
+      "bytes": 5070,
+      "sha256": "490f230f141a78658daeabde4ba64e3239c5f9cd6ee02b2a41941bcf8e8bf18b"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/acceptance_level3_20261004.md",
+      "bytes": 2632,
+      "sha256": "0f8cc0284b4d129a5f0b0fbbae3f68293fdb1f14934d4db5a5da0fe5fd0ab348"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/checklist.md",
+      "bytes": 2282,
+      "sha256": "834fa15e00d145a301d00a78f2512f2d1599ce0ebbc0103421dbc0ca00cfa1cc"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/ddp_fix_delta.patch",
+      "bytes": 8549,
+      "sha256": "ff4338b8014535e59eb24114357129bc48d2cb225086591dfa9213dd260ea84b"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/ddp_fix_validation.md",
+      "bytes": 10101,
+      "sha256": "ff435157849636a8dc1ba8e5112970a372ed3444d032e7033e38a717693b5d51"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/design.md",
+      "bytes": 2319,
+      "sha256": "fdbb0a3dcb246a7938ef4e2aa8f682fe883c455b7db8688ac8bcb9270f46659a"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/re_review_ddp_prompt.md",
+      "bytes": 6795,
+      "sha256": "fc59d147e101aa73112f26750d9793ad211f43f8af4615e993f3e4a9aa246839"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/re_review_level3_20261004_01a10481.md",
+      "bytes": 14937,
+      "sha256": "0c52fdc17cdd1e0b1423172ae3934bfc742b7a032862b5d29aeb5984b7ec10bd"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/review_level3_20261003.md",
+      "bytes": 16751,
+      "sha256": "f940aa383e564ce6de7a4c33dca9e749ef20364f6d37619afc2fd0d0e0b55e2d"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/reviewer_prompt.md",
+      "bytes": 7661,
+      "sha256": "308b522615873a016a5d8365d338bb54fb63103fb9e0ef22d594bf21427f6a2a"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/run_validation.py",
+      "bytes": 3952,
+      "sha256": "9fbc785a9aadee72f4e29a80fa6e26d5cb888e3c4f25b76248cda06bcee5b904"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/server_validation.md",
+      "bytes": 6139,
+      "sha256": "4e618eabf85792bbef9e7b23fec17bf2ea6d13b08b203234d5f133db2c652c40"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/snapshot_manifest.json",
+      "bytes": 11660,
+      "sha256": "8655a1725ce8ae8da79d3b7d581525a07d70034ff6262c57ca6971e779eb1878"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/snapshot_manifest_accepted.json",
+      "bytes": 17021,
+      "sha256": "70e25b4a5794a7b05e0e898f2a09a8d2a2a100dded70a23938e333555a51af9c"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/snapshot_manifest_ddp_fix.json",
+      "bytes": 17893,
+      "sha256": "9cb7266a68b87cf77ce125f86318e2e6db51863610044f0489d2cba0368f39ba"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation.md",
+      "bytes": 9792,
+      "sha256": "34742b2ff8ed4ef4c7b6cf73745471a58a6d912c2f643ad757f75e693c345a21"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/affected-final.json",
+      "bytes": 7067,
+      "sha256": "ae8243b9c59a5091e76af166731a78eb02656989e46feaa13390c32da55a0f11"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/baseline-final.json",
+      "bytes": 6893,
+      "sha256": "59d7770be0d8ea04f529b2acbb7d7fce8012bfadc96c5cad2f8379a634abbd59"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/delivery-precommit-20261004.json",
+      "bytes": 7110,
+      "sha256": "32bc9d99151402daf2455e7ae4858f80cc4dcdc2cc322d2dbf73f52bc8bc9039"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-affected-final.json",
+      "bytes": 7101,
+      "sha256": "d1d3a2193fc22f062db2626e1f455b5c1aee73d73944f1d72d580ccd820f5ed5"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-final-green.json",
+      "bytes": 6144,
+      "sha256": "ef5b752077570bf776665fe36a23e15b146f2b09eaaab1711924c3c838d22389"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-focused-final.json",
+      "bytes": 6688,
+      "sha256": "84ce08882a5186ac45ed7cfba11f33808ae9691a643008bb6774e01604ba1f99"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-green.json",
+      "bytes": 15958,
+      "sha256": "e9ed34fd8bbb9e6e0eaea12a51d56614da4369a556938cb6e458e60af5d62b1a"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-prefix-red.json",
+      "bytes": 11054,
+      "sha256": "79f2f4a242114e635d6a64486e20c14d02b6c245d696e96241b69d9dff0a9f83"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/fix-ddp-red.json",
+      "bytes": 17691,
+      "sha256": "9a964940dd927b44dce18da03e66d6b85c1422fbbab981cd58baf0aa7e410cdd"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/focused-expanded.json",
+      "bytes": 10636,
+      "sha256": "99ca06ebd1bd80731fe32bf6f146f5704fd43f54b55f27206d31cb332ac24cdf"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/focused-final.json",
+      "bytes": 6646,
+      "sha256": "6ea78636118dc7d3e15601ce080e0acc000be78f5ae83bc78cc62dd7967980eb"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/green-first.json",
+      "bytes": 12233,
+      "sha256": "57fc186e189c08b0278bcdfb78c315d60a974eac3fb2f87c7a2b284e4c6cb651"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/predictor-fixed.json",
+      "bytes": 6308,
+      "sha256": "b7a2fd66e78b72ed9d47b0898c5be4f0e2e0af20110aa09a20e166b535160253"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/re-review-checkpoint-20261004-01a10481-b.json",
+      "bytes": 7386,
+      "sha256": "4b9037f13be1e64a59cc3d7c34e880a8bc6c6b4871aea8e6c1c52b0358a17433"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/re-review-ddp-20261004-01a10481-a.json",
+      "bytes": 6155,
+      "sha256": "b089664f3579973cd0f5e7d22a3327090f2084400b57c76143a7caabc637bb44"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/red-confirmed.json",
+      "bytes": 6926,
+      "sha256": "35251285ac48b8ca3339d6cffc343c1c70140d0acea6609b556794690a140001"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/red-plans-ambiguity.json",
+      "bytes": 8845,
+      "sha256": "f53bd9b2d52d2187b27a0aef10a5ebc588b2c794bc717c18e922572ae379a9ca"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/review-level3-20261003-geometry-plans-a.json",
+      "bytes": 6489,
+      "sha256": "7ff756bc2cb443116469d0e661d62f2680ef96f31e8de289ebad9f405e2804c8"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/review-level3-20261003-identity-a.json",
+      "bytes": 6069,
+      "sha256": "d4db0adf2e3d04182c13a6912428fd6be566b3b6ef332ff300d323e1f04f4ed7"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/review-level3-20261003-runtime-a.json",
+      "bytes": 7134,
+      "sha256": "6f350a5629ce60f2309bb9d5ec94f0c7f796763d0f16b2c6edf46e569e999b9f"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/trainer-fixture-fixed.json",
+      "bytes": 6413,
+      "sha256": "2bd0cec05af6fb67fe42828d4ea2c6ee9d226d06cb2331bb165073edb86dcad3"
+    },
+    {
+      "path": "nnunet_ext_trainers/README_upernet_selected_stages.md",
+      "bytes": 11061,
+      "sha256": "44b97357fd6cd3a1dcada931df9803bede5faf75da1878ddbda9e170af83c0b6"
+    },
+    {
+      "path": "nnunet_ext_trainers/create_upernet_stage_plans.py",
+      "bytes": 3827,
+      "sha256": "aea682983d8ae0f5da59cd6467d6a412ecdc2712b23bc9f4cad350b02effa2a5"
+    },
+    {
+      "path": "nnunet_ext_trainers/nnUNetTrainerMixins.py",
+      "bytes": 26518,
+      "sha256": "ad4ac9933ce69560e6dd550dfc7191b44e8b394f6eeba38a64c6f6f4b2ef5c77"
+    },
+    {
+      "path": "nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py",
+      "bytes": 10474,
+      "sha256": "c3c817399e67b5d6b679148990e2f450e1161534d8b4355091671b958aae3c19"
+    },
+    {
+      "path": "nnunet_ext_trainers/tests/test_upernet_selected_stages.py",
+      "bytes": 30401,
+      "sha256": "6f096df1f85f62c57dbc7ea3aed44745282900b4f00b1151ba0fdb7962600448"
+    }
+  ]
+}

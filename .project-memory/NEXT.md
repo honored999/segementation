@@ -1,5 +1,13 @@
 # Next
 
+## Branch-local next actions (2026-10-04, after independent PASS)
+
+1. Preserve the accepted source snapshot and review evidence; P1 is closed, no implementation/review blocker remains.
+2. User authorized branch commit/push; verify remote delivered commit, then user downloads an isolated server checkout using server_validation.md. Merge/integration remains separately authorized.
+3. Before separately authorized server testing, define resource preflight and CUDA/SyncBatchNorm/NCCL/multi-rank checks with isolated plans/results; preserve preprocessing, fixed patient splits and scientific policies. No performance or formal-evaluation claim follows from CPU synthetic evidence.
+
+## Retained baseline next actions (historical; outside this task)
+
 ## Current focus
 
 - Decide whether to run a separately authorized, isolated Lite-UPerNet

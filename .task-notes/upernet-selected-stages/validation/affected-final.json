@@ -1,0 +1,56 @@
+{
+  "preflight": {
+    "cpu_percent": 13.725490196078427,
+    "ram_percent": 48.62405958177731,
+    "ram_total_GiB": 15.839164733886719,
+    "gpus": [
+      {
+        "index": 0,
+        "gpu_percent": 13.0,
+        "vram_percent": 15.266927083333334,
+        "used_MiB": 938.0,
+        "total_MiB": 6144.0
+      }
+    ],
+    "decision": "NORMAL",
+    "load": "CPU only, one thread, serial synthetic; no real data or CUDA allocations"
+  },
+  "command": [
+    "D:\\Anaconda\\envs\\newconda\\python.exe",
+    "-m",
+    "pytest",
+    "nnunet_ext_trainers/tests",
+    "-q",
+    "--basetemp",
+    "E:\\study\\研一\\work14-图像分割\\segementation-upernet-configurable-stages-test-temp\\affected-final"
+  ],
+  "exit_code": 0,
+  "duration_seconds": 34.55903339385986,
+  "stdout": "........................................................................ [ 68%]\n.................................                                        [100%]\n============================== warnings summary ===============================\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20: DeprecationWarning: Please import `gaussian_filter` from the `scipy.ndimage` namespace; the `scipy.ndimage.filters` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.filters import gaussian_filter, gaussian_gradient_magnitude\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20: DeprecationWarning: Please import `gaussian_gradient_magnitude` from the `scipy.ndimage` namespace; the `scipy.ndimage.filters` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.filters import gaussian_filter, gaussian_gradient_magnitude\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:21\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:21: DeprecationWarning: Please import `grey_dilation` from the `scipy.ndimage` namespace; the `scipy.ndimage.morphology` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.morphology import grey_dilation\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:23\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:23: DeprecationWarning: Please import `label` from the `scipy.ndimage` namespace; the `scipy.ndimage.measurements` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.measurements import label as lb\n\nnnunet_ext_trainers/tests/test_official_upernet_trainers.py::test_four_trainers_are_unique_external_nnunet_identities\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\jit\\_script.py:1640: DeprecationWarning: `torch.jit.interface` is deprecated. Please use `torch.compile` instead.\n    warnings.warn(\n\nnnunet_ext_trainers/tests/test_official_upernet_trainers.py::test_new_trainer_losses_are_single_output_and_preserve_official_weights[nnUNetTrainerNoDeepSupervisionTopK10EarlyStopping]\nnnunet_ext_trainers/tests/test_official_upernet_trainers.py::test_new_trainer_losses_are_single_output_and_preserve_official_weights[nnUNetTrainerUPerNetTopK10EarlyStopping]\nnnunet_ext_trainers/tests/test_upernet_selected_stages.py::test_actual_cpu_trainer_initialize_resume_and_validation_rebuild\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\nn\\modules\\loss.py:44: UserWarning: size_average and reduce args will be deprecated, please use reduction='none' instead.\n    self.reduction: str = _Reduction.legacy_get_string(size_average, reduce)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n105 passed, 8 warnings in 31.98s\n",
+  "stderr": "",
+  "source_sha256": {
+    "nnunet_ext_trainers/create_upernet_stage_plans.py": "aea682983d8ae0f5da59cd6467d6a412ecdc2712b23bc9f4cad350b02effa2a5",
+    "nnunet_ext_trainers/nnUNetTrainerEarlyStopping.py": "c94509f74058c457bc64c30bbb65aa5c31b95233b035c6d3713579967842da4f",
+    "nnunet_ext_trainers/nnUNetTrainerForeground50.py": "21a681b59271eca1e150abcc69e5a3847d6ac402fa14668a6da14d06205a43e5",
+    "nnunet_ext_trainers/nnUNetTrainerMixins.py": "ad4ac9933ce69560e6dd550dfc7191b44e8b394f6eeba38a64c6f6f4b2ef5c77",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionEarlyStopping.py": "5da5a885b28f77fa186fa69e2820f8f0569dc9f5cfd4ceb9212710f0edaa9405",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionTopK10EarlyStopping.py": "04e53e40d025465483a2e0e5f8c202eb2cfc2f0e1a2083fac8ac3c5a120b98e4",
+    "nnunet_ext_trainers/nnUNetTrainerStage2SmallUNet.py": "8e00b6b3e9804fbef021db5df82f4062b7644085ec2eebb44788beda72f63ab7",
+    "nnunet_ext_trainers/nnUNetTrainerTopK10.py": "29f5c72f231127b2d9273c76425af73e652b0144ca59c3afe7dcb82b1cfe3a33",
+    "nnunet_ext_trainers/nnUNetTrainerTopK20.py": "9b12781d65737327f7928e223b2134be778f01303685d3f073ee92c767024b4b",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetEarlyStopping.py": "44fcad0a1f7ff2ab708d07a2d738b7adf2c7d32a3577ecef32f9b9c1d7141670",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py": "c53ac4d16048d862ac62ec995bffea9b948e09fa7ccea6a9c7432b074e318cce",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetTopK10EarlyStopping.py": "1eec907bdec7dca69e88d3c25453b2a58728236d831f1d08c319c99feaeadbcb",
+    "nnunet_ext_trainers/small_unet_2d.py": "622696459ffb3de396d9aa1a787808ef7c236d67fb871841f01231f15c78a349",
+    "nnunet_ext_trainers/tests/test_official_upernet_trainers.py": "7d688118eb4370153e5754f767d529c479a5881435e6efa293819373ce433b16",
+    "nnunet_ext_trainers/tests/test_trainer_early_stopping.py": "697abd9514544e80a00d93a25d2666d1ed217af05d007f1a09b746b597e7fc2e",
+    "nnunet_ext_trainers/tests/test_trainer_foreground50.py": "9196260155608ab385637953c7786b848b046539660cc191ca4b5bf99a72e123",
+    "nnunet_ext_trainers/tests/test_trainer_stage2_small_unet.py": "0d1f201dbf51e5ec70618bda43af27ea7591a543a2d6776cf3f5921af3e8b00e",
+    "nnunet_ext_trainers/tests/test_trainer_topk10.py": "dc4d5a36ea38f9b9302b3ab43276cf8de889f092dc2ee6a66958a82bd931f564",
+    "nnunet_ext_trainers/tests/test_upernet_selected_stages.py": "74cb361f14013894e1b46fe81fb674cf438f0a165e5f4bfbc0d06994b271418e",
+    "nnunet_ext_trainers/tests/verify_effective_oversampling.py": "f160bb7b3ae04d40d799554598f7324539dc547368bb6dc7cda7cc1034361d59",
+    "nnunet_ext_trainers/tests/verify_effective_topk10_loss.py": "114dfe2f2aa65948a725af46f03e80d7f519117fd348ac5037a1d2f64b7fe676",
+    "nnunet_ext_trainers/tests/verify_external_discovery.py": "3bd17438841af0f4cce8bf40dee677bb5c5d685083ba6a8fdde2458f532ca522",
+    "nnunet_ext_trainers/tests/verify_external_topk10_discovery.py": "c3d227f4ccaf1bdabc404efc744d12b0a5810e65c35a260ce3008151ba1b212d"
+  }
+}

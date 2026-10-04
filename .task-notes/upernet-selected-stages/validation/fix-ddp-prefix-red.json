@@ -1,0 +1,58 @@
+{
+  "preflight": {
+    "cpu_percent": 11.579980372914623,
+    "ram_percent": 58.803745151297804,
+    "ram_total_GiB": 15.839164733886719,
+    "gpus": [
+      {
+        "index": 0,
+        "gpu_percent": 0.0,
+        "vram_percent": 20.100911458333332,
+        "used_MiB": 1235.0,
+        "total_MiB": 6144.0
+      }
+    ],
+    "decision": "NORMAL",
+    "load": "CPU only, one thread, serial synthetic; no real data or CUDA allocations"
+  },
+  "command": [
+    "D:\\Anaconda\\envs\\newconda\\python.exe",
+    "-m",
+    "pytest",
+    "nnunet_ext_trainers/tests/test_upernet_selected_stages.py::test_selected_trainer_real_ddp_checkpoint_identity[plain]",
+    "-p",
+    "no:cacheprovider",
+    "-q",
+    "--basetemp",
+    "E:\\study\\研一\\work14-图像分割\\segementation-upernet-configurable-stages-test-temp\\fix-ddp-prefix-red"
+  ],
+  "exit_code": 1,
+  "duration_seconds": 10.413564682006836,
+  "stdout": "F                                                                        [100%]\n================================== FAILURES ===================================\n__________ test_selected_trainer_real_ddp_checkpoint_identity[plain] __________\n\ncpu_gloo_group = <torch.distributed.distributed_c10d.ProcessGroup object at 0x00000275D9FDA7F0>\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000275DCC47230>\ntmp_path = WindowsPath('E:/study/研一/work14-图像分割/segementation-upernet-configurable-stages-test-temp/fix-ddp-prefix-red/test_selected_trainer_real_ddp0')\ncompiled = False\n\n    @pytest.mark.parametrize('compiled', [False,True], ids=['plain','eager-compiled'])\n    def test_selected_trainer_real_ddp_checkpoint_identity(cpu_gloo_group, monkeypatch, tmp_path, compiled):\n        original = build([0,2])\n        sender = fake_trainer(original)\n        cpu_ddp_initialize(sender, monkeypatch, compiled=compiled)\n        destination = tmp_path/'ddp.pth'\n        sender.save_checkpoint(str(destination))\n        rebuilt = build([0,2])\n        receiver = fake_trainer(rebuilt)\n        cpu_ddp_initialize(receiver, monkeypatch, compiled=compiled)\n        receiver.load_checkpoint(str(destination))\n        assert all(torch.equal(v,rebuilt.state_dict()[k]) for k,v in tensor_state(original).items())\n        cp = torch.load(destination,weights_only=False)\n        # The official loader accepts module-prefixed states; guards must also apply.\n        cp['network_weights'] = {'module.'+k:v for k,v in cp['network_weights'].items()}\n>       receiver.load_checkpoint(cp)\n\nnnunet_ext_trainers\\tests\\test_upernet_selected_stages.py:565: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nnnunet_ext_trainers\\nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py:194: in load_checkpoint\n    super().load_checkpoint(checkpoint)\nnnunet_ext_trainers\\nnUNetTrainerMixins.py:139: in load_checkpoint\n    self.network.module.load_state_dict(new_state_dict)\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\nn\\modules\\module.py:2619: in load_state_dict\n    load(self, state_dict)\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\nn\\modules\\module.py:2589: in load\n    module._load_from_state_dict(\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\nn\\modules\\module.py:2392: in _load_from_state_dict\n    hook(\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\torch\\nn\\modules\\module.py:91: in __call__\n    return self.hook(module, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nnnunet_ext_trainers\\nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py:92: in _check_load_identity\n    self.validate_state_identity(state_dict, prefix)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\nself = _SelectedStagesUPerNet(\n  (encoder): PlainConvEncoder(\n    (stages): Sequential(\n      (0): Sequential(\n        (0): S...ts=False)\n      (2): ReLU(inplace=True)\n    )\n    (classifier): Conv2d(128, 3, kernel_size=(1, 1), stride=(1, 1))\n  )\n)\nstate_dict = OrderedDict({'module._extra_state': {'version': 1, 'indices': [0, 2], 'n_levels': 2, 'n_encoder_stages': 4, 'scales': ...02]],\n\n         [[-3.2610e-02]],\n\n         [[ 1.9638e-01]]]]), 'module.decoder.classifier.bias': tensor([0., 0., 0.])})\nprefix = ''\n\n    def validate_state_identity(self, state_dict, prefix: str = \"\") -> None:\n        identity = state_dict.get(prefix + \"_extra_state\")\n        # Exact primitive type checking rejects equality-spoofing bool/float values.\n        def same_types_and_values(expected, actual):\n            if type(expected) is not type(actual):\n                return False\n            if isinstance(expected, dict):\n                return expected.keys() == actual.keys() and all(\n                    same_types_and_values(value, actual[key]) for key, value in expected.items()\n                )\n            if isinstance(expected, list):\n                return len(expected) == len(actual) and all(\n                    same_types_and_values(a, b) for a, b in zip(expected, actual)\n                )\n            return expected == actual\n        if not same_types_and_values(self._selection_identity, identity):\n>           raise ValueError(\"UPerNet selected-stage identity missing, corrupted or mismatched; \"\n                             f\"expected {self._selection_identity}, got {identity}\")\nE           ValueError: UPerNet selected-stage identity missing, corrupted or mismatched; expected {'version': 1, 'indices': [0, 2], 'n_levels': 2, 'n_encoder_stages': 4, 'scales': [[1, 1], [4, 4]], 'in_channels': [2, 2], 'num_classes': 3, 'fpn_channels': 128, 'pool_scales': [1, 2, 4]}, got None\n\nnnunet_ext_trainers\\nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py:88: ValueError\n============================== warnings summary ===============================\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20: DeprecationWarning: Please import `gaussian_filter` from the `scipy.ndimage` namespace; the `scipy.ndimage.filters` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.filters import gaussian_filter, gaussian_gradient_magnitude\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:20: DeprecationWarning: Please import `gaussian_gradient_magnitude` from the `scipy.ndimage` namespace; the `scipy.ndimage.filters` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.filters import gaussian_filter, gaussian_gradient_magnitude\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:21\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:21: DeprecationWarning: Please import `grey_dilation` from the `scipy.ndimage` namespace; the `scipy.ndimage.morphology` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.morphology import grey_dilation\n\nD:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:23\n  D:\\Anaconda\\envs\\newconda\\Lib\\site-packages\\batchgenerators\\augmentations\\utils.py:23: DeprecationWarning: Please import `label` from the `scipy.ndimage` namespace; the `scipy.ndimage.measurements` namespace is deprecated and will be removed in SciPy 2.0.0.\n    from scipy.ndimage.measurements import label as lb\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ===========================\nFAILED nnunet_ext_trainers/tests/test_upernet_selected_stages.py::test_selected_trainer_real_ddp_checkpoint_identity[plain]\n1 failed, 4 warnings in 7.82s\n",
+  "stderr": "",
+  "source_sha256": {
+    "nnunet_ext_trainers/create_upernet_stage_plans.py": "aea682983d8ae0f5da59cd6467d6a412ecdc2712b23bc9f4cad350b02effa2a5",
+    "nnunet_ext_trainers/nnUNetTrainerEarlyStopping.py": "c94509f74058c457bc64c30bbb65aa5c31b95233b035c6d3713579967842da4f",
+    "nnunet_ext_trainers/nnUNetTrainerForeground50.py": "21a681b59271eca1e150abcc69e5a3847d6ac402fa14668a6da14d06205a43e5",
+    "nnunet_ext_trainers/nnUNetTrainerMixins.py": "ad4ac9933ce69560e6dd550dfc7191b44e8b394f6eeba38a64c6f6f4b2ef5c77",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionEarlyStopping.py": "5da5a885b28f77fa186fa69e2820f8f0569dc9f5cfd4ceb9212710f0edaa9405",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionTopK10EarlyStopping.py": "04e53e40d025465483a2e0e5f8c202eb2cfc2f0e1a2083fac8ac3c5a120b98e4",
+    "nnunet_ext_trainers/nnUNetTrainerStage2SmallUNet.py": "8e00b6b3e9804fbef021db5df82f4062b7644085ec2eebb44788beda72f63ab7",
+    "nnunet_ext_trainers/nnUNetTrainerTopK10.py": "29f5c72f231127b2d9273c76425af73e652b0144ca59c3afe7dcb82b1cfe3a33",
+    "nnunet_ext_trainers/nnUNetTrainerTopK20.py": "9b12781d65737327f7928e223b2134be778f01303685d3f073ee92c767024b4b",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetEarlyStopping.py": "44fcad0a1f7ff2ab708d07a2d738b7adf2c7d32a3577ecef32f9b9c1d7141670",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py": "30427335fbc573155fc7735abff015646624510559086789670a265324e9ebed",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetTopK10EarlyStopping.py": "1eec907bdec7dca69e88d3c25453b2a58728236d831f1d08c319c99feaeadbcb",
+    "nnunet_ext_trainers/small_unet_2d.py": "622696459ffb3de396d9aa1a787808ef7c236d67fb871841f01231f15c78a349",
+    "nnunet_ext_trainers/tests/test_official_upernet_trainers.py": "7d688118eb4370153e5754f767d529c479a5881435e6efa293819373ce433b16",
+    "nnunet_ext_trainers/tests/test_trainer_early_stopping.py": "697abd9514544e80a00d93a25d2666d1ed217af05d007f1a09b746b597e7fc2e",
+    "nnunet_ext_trainers/tests/test_trainer_foreground50.py": "9196260155608ab385637953c7786b848b046539660cc191ca4b5bf99a72e123",
+    "nnunet_ext_trainers/tests/test_trainer_stage2_small_unet.py": "0d1f201dbf51e5ec70618bda43af27ea7591a543a2d6776cf3f5921af3e8b00e",
+    "nnunet_ext_trainers/tests/test_trainer_topk10.py": "dc4d5a36ea38f9b9302b3ab43276cf8de889f092dc2ee6a66958a82bd931f564",
+    "nnunet_ext_trainers/tests/test_upernet_selected_stages.py": "6f096df1f85f62c57dbc7ea3aed44745282900b4f00b1151ba0fdb7962600448",
+    "nnunet_ext_trainers/tests/verify_effective_oversampling.py": "f160bb7b3ae04d40d799554598f7324539dc547368bb6dc7cda7cc1034361d59",
+    "nnunet_ext_trainers/tests/verify_effective_topk10_loss.py": "114dfe2f2aa65948a725af46f03e80d7f519117fd348ac5037a1d2f64b7fe676",
+    "nnunet_ext_trainers/tests/verify_external_discovery.py": "3bd17438841af0f4cce8bf40dee677bb5c5d685083ba6a8fdde2458f532ca522",
+    "nnunet_ext_trainers/tests/verify_external_topk10_discovery.py": "c3d227f4ccaf1bdabc404efc744d12b0a5810e65c35a260ce3008151ba1b212d"
+  }
+}

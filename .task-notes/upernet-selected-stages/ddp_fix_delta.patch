@@ -1,0 +1,161 @@
+--- reviewed/nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py
++++ current/nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py
+@@ -157,6 +157,26 @@
+     def initialize(self) -> None:
+         first = not self.was_initialized
+         super().initialize()
++        if first and self.is_ddp:
++            wrapper = self.network
++            model = _unwrapped_network(wrapper)
++            if model.selected_feature_indices[-1] < len(model.encoder.stages) - 1:
++                # Official initialize already performed compile/SyncBatchNorm and
++                # built the optimizer. Trailing stages execute but do not reach
++                # the loss: DDP must detect their genuinely unused parameters.
++                # Rebuild only the reducer before any forward, keeping the same
++                # module/parameters/device placement/process group and defaults.
++                ddp_kwargs = {
++                    "device_ids": wrapper.device_ids,
++                    "output_device": wrapper.output_device,
++                    "process_group": wrapper.process_group,
++                    "find_unused_parameters": True,
++                }
++                self.network = wrapper.module
++                del wrapper  # release the old reducer before attaching the new one
++                self.network = nn.parallel.DistributedDataParallel(self.network, **ddp_kwargs)
++                self.print_to_log_file("UPerNet DDP: find_unused_parameters=True "
++                                       "for unselected trailing encoder stages")
+         if first:
+             self.print_to_log_file("UPerNet effective selected-stage identity: " +
+                                    json.dumps(_unwrapped_network(self.network).get_extra_state(), sort_keys=True))
+@@ -171,4 +191,9 @@
+         # Match inherited loader's DDP prefix normalization without changing its loop.
+         normalized = {key[7:] if key.startswith("module.") else key: value for key, value in weights.items()}
+         model.validate_state_identity(normalized)
++        # In DDP the inherited loader sees module-prefixed wrapper keys and can
++        # retain that prefix before loading the inner model. Pass precisely the
++        # validated inner-model state, without mutating the caller's checkpoint.
++        checkpoint = dict(checkpoint)
++        checkpoint["network_weights"] = normalized
+         super().load_checkpoint(checkpoint)
+--- reviewed/nnunet_ext_trainers/tests/test_upernet_selected_stages.py
++++ current/nnunet_ext_trainers/tests/test_upernet_selected_stages.py
+@@ -461,3 +461,119 @@
+     output=tmp_path/'nnUNetPlansUPerNetStages_s07.json'
+     with pytest.raises(ValueError): create_upernet_stage_plans(source,output,'2d',[0,7])
+     assert not output.exists() and source.read_text(encoding='utf-8')==text
++
++
++
++@pytest.fixture
++def cpu_gloo_group():
++    """ASCII FileStore avoids this Windows build's Unicode rendezvous failure."""
++    from datetime import timedelta
++    import tempfile
++    import torch.distributed as dist
++    assert not dist.is_initialized(), 'test must not join or disturb an existing group'
++    with tempfile.TemporaryDirectory(prefix='upernet-ddp-') as directory:
++        rendezvous = str(Path(directory)/'rendezvous')
++        assert rendezvous.isascii(), 'CPU Gloo test requires an ASCII temporary root'
++        store = dist.FileStore(rendezvous, 1)
++        dist.init_process_group('gloo', store=store, rank=0, world_size=1,
++                                timeout=timedelta(seconds=20))
++        try:
++            yield dist.group.WORLD
++        finally:
++            dist.destroy_process_group()
++            del store
++
++
++def cpu_ddp_initialize(trainer, monkeypatch, *, compiled):
++    """Replace only CUDA-dependent base initialization with its CPU DDP equivalent.
++
++    Exercise the real new Trainer.initialize integration after the official order
++    (compile then DDP). The initializer's parent lookup is patched, never the fix.
++    Real CUDA/SyncBatchNorm/multi-rank behavior is separately deferred.
++    """
++    import weakref
++    created = []
++    def base_initialize(self):
++        network = self.network
++        if compiled:
++            network = torch.compile(network, backend='eager')
++        self.network = nn.parallel.DistributedDataParallel(network)
++        created.append(weakref.ref(self.network))
++        self.was_initialized = True
++    monkeypatch.setattr(OldTrainer, 'initialize', base_initialize)
++    trainer.was_initialized = False
++    trainer.is_ddp = True
++    trainer.print_to_log_file = lambda *a, **k: None
++    trainer.initialize()
++    return created[0]
++
++
++@pytest.mark.parametrize('compiled', [False, True], ids=['plain','eager-compiled'])
++@pytest.mark.parametrize('indices', [[0,3], [0,2]], ids=['last-stage-control','unused-trailing'])
++def test_selected_trainer_ddp_two_iterations(cpu_gloo_group, monkeypatch, indices, compiled):
++    from torch._dynamo import OptimizedModule
++    model = build(indices)
++    trainer = fake_trainer(model)
++    optimizer = trainer.optimizer
++    parameter_ids = [id(p) for p in model.parameters()]
++    created_wrapper = cpu_ddp_initialize(trainer, monkeypatch, compiled=compiled)
++    wrapper = trainer.network
++    assert isinstance(wrapper, nn.parallel.DistributedDataParallel)
++    assert wrapper.process_group is cpu_gloo_group
++    assert isinstance(wrapper.module, OptimizedModule) == compiled
++    # Preserve the last-stage default DDP path. Do not fake grads on unused stages.
++    called = []
++    handle = model.encoder.stages[-1].register_forward_hook(lambda *a: called.append(True))
++    try:
++        for _ in range(2):
++            trainer.optimizer.zero_grad(set_to_none=True)
++            output = wrapper(torch.randn(1,1,17,17))
++            output.square().mean().backward()
++            assert output.shape == (1,3,17,17) and torch.isfinite(output).all()
++        assert called == [True,True]
++        assert wrapper.find_unused_parameters == (indices[-1] < 3)
++        assert (created_wrapper() is wrapper) == (indices[-1] == 3)
++        if indices[-1] < 3:
++            assert created_wrapper() is None
++        assert trainer.optimizer is optimizer
++        assert [id(p) for p in wrapper.parameters()] == parameter_ids
++        for index, stage in enumerate(model.encoder.stages):
++            for parameter in stage.parameters():
++                if index > indices[-1]:
++                    assert parameter.grad is None
++                else:
++                    assert parameter.grad is not None and torch.isfinite(parameter.grad).all()
++    finally:
++        handle.remove()
++
++
++@pytest.mark.parametrize('compiled', [False,True], ids=['plain','eager-compiled'])
++def test_selected_trainer_real_ddp_checkpoint_identity(cpu_gloo_group, monkeypatch, tmp_path, compiled):
++    original = build([0,2])
++    sender = fake_trainer(original)
++    cpu_ddp_initialize(sender, monkeypatch, compiled=compiled)
++    destination = tmp_path/'ddp.pth'
++    sender.save_checkpoint(str(destination))
++    rebuilt = build([0,2])
++    receiver = fake_trainer(rebuilt)
++    cpu_ddp_initialize(receiver, monkeypatch, compiled=compiled)
++    receiver.load_checkpoint(str(destination))
++    assert all(torch.equal(v,rebuilt.state_dict()[k]) for k,v in tensor_state(original).items())
++    cp = torch.load(destination,weights_only=False)
++    # The official loader accepts module-prefixed states; guards must also apply.
++    cp['network_weights'] = {'module.'+k:v for k,v in cp['network_weights'].items()}
++    receiver.load_checkpoint(cp)
++    before = tensor_state(rebuilt)
++    cp['network_weights'] = build([1,3]).state_dict()
++    cp['optimizer_state'] = {'invalid':True}
++    cp['logging'] = {'must_not_load':True}
++    cp['current_epoch'] = 999
++    with pytest.raises(ValueError,match='identity'):
++        receiver.load_checkpoint(cp)
++    assert receiver.current_epoch == 21
++    assert receiver.logger.loaded != cp['logging']
++    assert receiver.optimizer.param_groups[0]['lr'] == .01
++    assert all(torch.equal(v,rebuilt.state_dict()[k]) for k,v in before.items())
++    with pytest.raises(ValueError,match='identity'):
++        receiver.network.load_state_dict({'module.'+k:v for k,v in cp['network_weights'].items()})
++    assert all(torch.equal(v,rebuilt.state_dict()[k]) for k,v in before.items())
