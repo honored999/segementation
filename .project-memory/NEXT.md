@@ -1,5 +1,11 @@
 # Next
 
+## Immediate server continuation (2026-10-04)
+
+1. User downloads task-local CUDA0 probe delivery; retains server-generated validation JSONs and failed long-path evidence.
+2. With fresh safe resource preflight, run test_server_cuda_smoke.py -k cuda0 on physical GPU0, short label g; return full output and validation/g.json.
+3. Evaluate actual CUDA result before separately authorizing DDP/AMP/compile/full-size/real-data steps; no real training or formal evaluation in this task.
+
 ## Branch-local next actions (2026-10-04, after independent PASS)
 
 1. Preserve the accepted source snapshot and review evidence; P1 is closed, no implementation/review blocker remains.

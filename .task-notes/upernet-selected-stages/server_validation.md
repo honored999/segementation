@@ -91,3 +91,25 @@ Expected counts from the reviewed local environment: focused 61 passed, legacy 2
 Return: exact commit, Python/nnunetv2/PyTorch versions, all preflight logs, both pytest summaries/exit codes and any failure traceback. This establishes Linux environment and CPU synthetic compatibility only. CPU DDP fixtures use the disclosed parent initialization shim; they do not establish actual CUDA/SyncBatchNorm/NCCL or multi-rank behavior.
 
 Do not proceed directly to real training/--val/prediction, load real checkpoints, alter raw data/splits, or run full-size eight-stage benchmarks. CUDA/official-initialization/multi-rank preflight is a separate bounded validation step after these logs are reviewed. Plans-copy and real-data operating instructions are in nnunet_ext_trainers/README_upernet_selected_stages.md; preprocessing is reused and each combination has a distinct plans/results identity.
+
+## Windows server: initial CUDA0 synthetic check
+
+User-reported Windows server CPU checks on 2026-10-04: focused 61 passed; legacy 25 passed; both exit 0. Environment: Python 3.10.20, nnunetv2 2.8.1, PyTorch 2.11.0+cu128, built CUDA 12.8. A 279-character synthetic training log path failed; one-character validation labels passed without changing production/tests. Preserve the failed evidence.
+
+A new task-local probe reuses the existing synthetic plans/labels and exercises real official Trainer initialization (no shim), inherited FP32 TopK10 loss, two tiny 17x17 forward/backward iterations, complete encoder execution/used and unused gradients, strict checkpoint reconstruction and pre-write mismatch refusal. Four encoder stages/two channels, FPN128/PPM(1,2,4) retained; selections [0,2] and [0,3]. No optimizer step, real training/data, AMP, torch.compile, DDP or full-size eight-level test. CPU controls passed locally; CUDA remains pending until the user supplies actual server results.
+
+After fetching the delivered probe commit into the existing Windows server worktree (do not reset or overwrite user files), execute in CMD with the existing nnunet5090 environment:
+
+```bat
+cd /d C:\lijialin\segementation-upernet-configurable-stages
+set CUDA_DEVICE_ORDER=PCI_BUS_ID
+set CUDA_VISIBLE_DEVICES=0
+set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
+set PYTHONDONTWRITEBYTECODE=1
+set PYTHONUTF8=1
+python -B .task-notes\upernet-selected-stages\run_validation.py g .task-notes/upernet-selected-stages/test_server_cuda_smoke.py -k cuda0 -s -p no:cacheprovider
+```
+
+The guard still samples CPU/RAM and all physical GPUs, labels the GPU load and refuses any CUDA run when a monitored resource is >=80%. It never hides GPU1 utilization. It records the runner and probe hashes alongside production source hashes. CUDA tests fail rather than skip if CUDA/device availability is wrong. Expected: two CUDA_SINGLE_DEVICE_SYNTHETIC_OK records and 2 passed, 2 deselected, exit 0. Peak memory is PyTorch allocated memory only, not whole-device VRAM or a full-size feasibility claim.
+
+Return the entire output/resource preflight and validation/g.json. CUDA single-device PASS does not establish actual DDP/SyncBatchNorm/NCCL, multiple GPUs, AMP/compile, full-size performance or real-data compatibility. Keep production scientific policy unchanged.

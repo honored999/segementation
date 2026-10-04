@@ -44,10 +44,13 @@ label, *args = sys.argv[1:]
 preflight = {'cpu_percent': cpu, 'ram_percent': 100*(1-mem.avail_phys/mem.total_phys), 'ram_total_GiB': mem.total_phys/2**30, 'gpus': gpus}
 high = cpu >= 80 or preflight['ram_percent'] >= 80 or any(g['gpu_percent'] >= 80 or g['vram_percent'] >= 80 for g in gpus)
 preflight['decision'] = 'LIGHTWEIGHT' if high else 'NORMAL'
-preflight['load'] = 'CPU only, one thread, serial synthetic; no real data or CUDA allocations'
+cpu_control = any(args[i:i+2] == ['-k', 'cpu'] for i in range(len(args)))
+cuda_smoke = any('test_server_cuda_smoke.py' in arg for arg in args) and not cpu_control
+preflight['load'] = ('GPU0 tiny 17x17/four-stage/two-channel encoder; single-device FP32; no real data'
+                     if cuda_smoke else 'CPU only, one thread, serial synthetic; no real data or CUDA allocations')
 print('RESOURCE PREFLIGHT ' + json.dumps(preflight), flush=True)
-# At high pressure only an explicitly selected exact test is permitted.
-if high and not any('::' in arg for arg in args):
+# At high pressure CUDA probes stop; only exact lightweight CPU nodes are permitted.
+if high and (cuda_smoke or not any('::' in arg for arg in args)):
     (EVIDENCE / (label + '.json')).write_text(json.dumps({'preflight': preflight, 'requested': args, 'status': 'NOT_RUN_RESOURCE_GUARD'}, indent=2), encoding='utf-8')
     sys.exit(80)
 env = os.environ.copy()
@@ -63,5 +66,9 @@ print(result.stdout, flush=True)
 print(result.stderr, flush=True)
 print('EXIT_CODE ' + str(result.returncode), flush=True)
 snapshot = {str(p.relative_to(ROOT)).replace('\\','/'): hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'nnunet_ext_trainers').rglob('*.py') if '__pycache__' not in str(p)}
+snapshot[str(Path(__file__).relative_to(ROOT)).replace('\\','/')] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+probe = Path(__file__).with_name('test_server_cuda_smoke.py')
+if probe.exists():
+    snapshot[str(probe.relative_to(ROOT)).replace('\\','/')] = hashlib.sha256(probe.read_bytes()).hexdigest()
 (EVIDENCE/(label+'.json')).write_text(json.dumps({'preflight': preflight, 'command': command, 'exit_code': result.returncode, 'duration_seconds': time.time()-start, 'stdout': result.stdout, 'stderr': result.stderr, 'source_sha256': snapshot}, ensure_ascii=False, indent=2), encoding='utf-8')
 sys.exit(result.returncode)

@@ -1,5 +1,11 @@
 # Status
 
+## 2026-10-04 server CPU results / CUDA probe preparation
+
+- User reported server focused 61 passed and legacy 25 passed, exit 0, on Python 3.10.20/nnunetv2 2.8.1/PyTorch 2.11.0+cu128. Short evidence labels avoided a 279-character Windows synthetic log path failure; production code/tests unchanged. Full server evidence hashes not independently collected here.
+- Task-local CUDA0 tiny FP32 probe added; real official initialize/loss/two forward-backward iterations/checkpoint identity, no initializer shim or optimizer step. Its CPU controls passed locally (2 passed). Server CUDA result PENDING. Resource guard refuses CUDA at >=80%, still querying all GPUs.
+- Independent production-source review PASS/P1 CLOSED remains anchored to unchanged source. Branch unmerged; canonical memory untouched. DDP/AMP/compile/full-size/real-data/formal evidence deferred.
+
 ## 2026-10-04 reviewed branch delivery
 
 - User authorized commit/push of this isolated branch; no merge authorized. Reviewed source/tests unchanged. Server download and initial resource-guarded CPU validation instructions added; server execution assigned to user.

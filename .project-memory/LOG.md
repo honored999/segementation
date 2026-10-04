@@ -1,5 +1,11 @@
 # Log
 
+## 2026-10-04 - server CPU PASS and manual CUDA probe
+
+- User-reported server CPU validation: focused 61/legacy 25 passed, exit 0. Failed 279-character Windows log path was resolved by short validation labels; failed evidence retained.
+- Changed only task-local validation/commands and branch memory; real new-Trainer tiny single-device CUDA probe with CPU controls. Production source/tests unchanged; no agents.
+- Validation: local CPU controls 2 passed, exit 0. Server CUDA execution pending, no DDP/AMP/compile/full-size/real-data/formal claim. Branch unmerged/canonical memory untouched.
+
 ## 2026-10-04 - user-authorized branch delivery
 
 - Changed: review status in README, Linux server resource-guarded CPU validation instructions and branch-local delivery state; no source/test changes.

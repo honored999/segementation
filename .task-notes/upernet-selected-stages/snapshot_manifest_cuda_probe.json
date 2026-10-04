@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-04",
+  "parent_commit": "9c5608352fd233602674e73c084e3a0a2945c5b9",
+  "production_source_and_original_tests_unchanged": true,
+  "independent_review_scope": "original production source PASS/P1 CLOSED; new task-local probe CPU self-validation only; no new independent review claimed",
+  "server_reported_CPU": "focused 61 / legacy 25 passed, exit 0; raw server evidence files not transferred",
+  "new_probe_local_evidence": "2 CPU controls passed, 2 CUDA cases deselected; CUDA pending",
+  "reviewed_production_manifest_sha256": "9cb7266a68b87cf77ce125f86318e2e6db51863610044f0489d2cba0368f39ba",
+  "files": [
+    {
+      "path": ".project-memory/LOG.md",
+      "bytes": 4773,
+      "sha256": "6a5b0a7343c736a45b531df5db3093c34722a36fc2fb9298f08e51dfc467cfdf"
+    },
+    {
+      "path": ".project-memory/NEXT.md",
+      "bytes": 1969,
+      "sha256": "c12c8a0130a4531cf48a150fb34d465fb066b7b75c38c029b07c2904f93d305e"
+    },
+    {
+      "path": ".project-memory/STATUS.md",
+      "bytes": 5937,
+      "sha256": "133e918931ccecf76757e2166dc68e7f303571804cc609759db834ae159085c7"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/run_validation.py",
+      "bytes": 4591,
+      "sha256": "ece2d7c637c814ad8ba4589132e7ff3f9509b4534c426ad657feea02470a1b0e"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/server_validation.md",
+      "bytes": 8499,
+      "sha256": "56a7615772cb8a1c18df260de581b48aa049f97fb9ff53868c1950205de15df0"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/test_server_cuda_smoke.py",
+      "bytes": 5832,
+      "sha256": "ad7cee9e25ba634cbb7c5340883e24c3a2c304884cf04580533e30f0a625ed0c"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/cuda-probe-cpu-control-20261004.json",
+      "bytes": 9830,
+      "sha256": "3f5c5f20a0b24f0e860f6d1bd54d1338a6a1490c0fa42f184a79758c91e3053c"
+    },
+    {
+      "path": ".task-notes/upernet-selected-stages/validation/cuda-probe-cpu-final-20261004.json",
+      "bytes": 9828,
+      "sha256": "761ffd50f3ec07cd67b62375fcb80d5c98ce232cbd3579aa1b0199f6b6253607"
+    }
+  ],
+  "production_and_probe_hashes": {
+    "nnunet_ext_trainers/create_upernet_stage_plans.py": "aea682983d8ae0f5da59cd6467d6a412ecdc2712b23bc9f4cad350b02effa2a5",
+    "nnunet_ext_trainers/nnUNetTrainerEarlyStopping.py": "c94509f74058c457bc64c30bbb65aa5c31b95233b035c6d3713579967842da4f",
+    "nnunet_ext_trainers/nnUNetTrainerForeground50.py": "21a681b59271eca1e150abcc69e5a3847d6ac402fa14668a6da14d06205a43e5",
+    "nnunet_ext_trainers/nnUNetTrainerMixins.py": "ad4ac9933ce69560e6dd550dfc7191b44e8b394f6eeba38a64c6f6f4b2ef5c77",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionEarlyStopping.py": "5da5a885b28f77fa186fa69e2820f8f0569dc9f5cfd4ceb9212710f0edaa9405",
+    "nnunet_ext_trainers/nnUNetTrainerNoDeepSupervisionTopK10EarlyStopping.py": "04e53e40d025465483a2e0e5f8c202eb2cfc2f0e1a2083fac8ac3c5a120b98e4",
+    "nnunet_ext_trainers/nnUNetTrainerStage2SmallUNet.py": "8e00b6b3e9804fbef021db5df82f4062b7644085ec2eebb44788beda72f63ab7",
+    "nnunet_ext_trainers/nnUNetTrainerTopK10.py": "29f5c72f231127b2d9273c76425af73e652b0144ca59c3afe7dcb82b1cfe3a33",
+    "nnunet_ext_trainers/nnUNetTrainerTopK20.py": "9b12781d65737327f7928e223b2134be778f01303685d3f073ee92c767024b4b",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetEarlyStopping.py": "44fcad0a1f7ff2ab708d07a2d738b7adf2c7d32a3577ecef32f9b9c1d7141670",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping.py": "c3c817399e67b5d6b679148990e2f450e1161534d8b4355091671b958aae3c19",
+    "nnunet_ext_trainers/nnUNetTrainerUPerNetTopK10EarlyStopping.py": "1eec907bdec7dca69e88d3c25453b2a58728236d831f1d08c319c99feaeadbcb",
+    "nnunet_ext_trainers/small_unet_2d.py": "622696459ffb3de396d9aa1a787808ef7c236d67fb871841f01231f15c78a349",
+    "nnunet_ext_trainers/tests/test_official_upernet_trainers.py": "7d688118eb4370153e5754f767d529c479a5881435e6efa293819373ce433b16",
+    "nnunet_ext_trainers/tests/test_trainer_early_stopping.py": "697abd9514544e80a00d93a25d2666d1ed217af05d007f1a09b746b597e7fc2e",
+    "nnunet_ext_trainers/tests/test_trainer_foreground50.py": "9196260155608ab385637953c7786b848b046539660cc191ca4b5bf99a72e123",
+    "nnunet_ext_trainers/tests/test_trainer_stage2_small_unet.py": "0d1f201dbf51e5ec70618bda43af27ea7591a543a2d6776cf3f5921af3e8b00e",
+    "nnunet_ext_trainers/tests/test_trainer_topk10.py": "dc4d5a36ea38f9b9302b3ab43276cf8de889f092dc2ee6a66958a82bd931f564",
+    "nnunet_ext_trainers/tests/test_upernet_selected_stages.py": "6f096df1f85f62c57dbc7ea3aed44745282900b4f00b1151ba0fdb7962600448",
+    "nnunet_ext_trainers/tests/verify_effective_oversampling.py": "f160bb7b3ae04d40d799554598f7324539dc547368bb6dc7cda7cc1034361d59",
+    "nnunet_ext_trainers/tests/verify_effective_topk10_loss.py": "114dfe2f2aa65948a725af46f03e80d7f519117fd348ac5037a1d2f64b7fe676",
+    "nnunet_ext_trainers/tests/verify_external_discovery.py": "3bd17438841af0f4cce8bf40dee677bb5c5d685083ba6a8fdde2458f532ca522",
+    "nnunet_ext_trainers/tests/verify_external_topk10_discovery.py": "c3d227f4ccaf1bdabc404efc744d12b0a5810e65c35a260ce3008151ba1b212d",
+    ".task-notes/upernet-selected-stages/run_validation.py": "ece2d7c637c814ad8ba4589132e7ff3f9509b4534c426ad657feea02470a1b0e",
+    ".task-notes/upernet-selected-stages/test_server_cuda_smoke.py": "ad7cee9e25ba634cbb7c5340883e24c3a2c304884cf04580533e30f0a625ed0c"
+  },
+  "manifest_self_excluded": true
+}
