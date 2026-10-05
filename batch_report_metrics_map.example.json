@@ -1,0 +1,5 @@
+{
+  "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results_ISLES508_pretrained_ES\\Dataset501_StrokeLesion\\nnUNetTrainerPlainConvDepthTopK10EarlyStopping__nnUNetPlansPlainConvDepth__2d_stage6\\fold_0\\validation": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results_ISLES508_pretrained_ES\\多标准\\plainconv_stage6_topk10_es_fold0_20261004",
+  "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results_ISLES508_pretrained_ES\\Dataset501_StrokeLesion\\nnUNetTrainerUPerNetNoStage7TopK10EarlyStopping__nnUNetPlans__2d\\fold_0\\validation": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results_ISLES508_pretrained_ES\\多标准\\upernet_no_stage7_topk10_fold0_20261004",
+  "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results_ISLES508_pretrained_ES\\Dataset501_StrokeLesion\\nnUNetTrainerTopK10EarlyStopping__nnUNetPlans__2d\\fold_0\\validation": "C:\\lijialin\\models3d\\nnUNet\\nnUNet_results\\多标准\\ISLES508_pretrained_TopK10_ES_fold0_counts"
+}
