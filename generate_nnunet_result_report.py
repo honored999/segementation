@@ -500,8 +500,14 @@ def resolve_external_trainer(finder, trainer_name=TRAINER, extension_dir=None):
             raise ValueError("external Trainer directory/file mismatch")
         discovered = finder(trainer_name)
         if (not isinstance(discovered, type) or discovered.__name__ != trainer_name
-                or discovered.__module__ != trainer_name
-                or resolved(inspect.getfile(discovered)) != expected):
+                or discovered.__module__ != trainer_name):
+            raise ValueError("external Trainer exact class file identity mismatch")
+        # Validate while the explicit lookup context still owns the live module.
+        try:
+            source = resolved(inspect.getfile(discovered))
+        except (TypeError, OSError) as error:
+            raise ValueError("external Trainer exact class file identity mismatch: module unavailable") from error
+        if source != expected:
             raise ValueError("external Trainer exact class file identity mismatch")
         return discovered
     if trainer_name not in SUPPORTED_TRAINERS:
@@ -532,6 +538,20 @@ def resolve_external_trainer(finder, trainer_name=TRAINER, extension_dir=None):
     return discovered
 
 
+def resolve_explicit_trainer(trainer_name, extension_dir):
+    from nnunetv2.utilities.find_class_by_name import (
+        recursive_find_python_class, temporarily_extend_syspath,
+        temporarily_cleanup_imports_from_path,
+    )
+    extension = str(resolved(extension_dir))
+    with temporarily_extend_syspath(extension), temporarily_cleanup_imports_from_path(extension):
+        return resolve_external_trainer(
+            lambda name: recursive_find_python_class(
+                extension, name, None, base_folder=extension, verbose=False,
+                cleanup_imports_from_base_folder=False),
+            trainer_name, extension)
+
+
 def _predictor(info, args):
     from importlib.metadata import version
     import torch
@@ -551,7 +571,8 @@ def _predictor(info, args):
         if not getattr(args, "features_only", False):
             raise ValueError("external source override requires --features-only")
         os.environ["nnUNet_extTrainer"] = str(resolved(extension))
-    discovered = resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name, extension)
+    discovered = (resolve_explicit_trainer(trainer_name, extension) if extension is not None
+                  else resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name))
     metadata = torch.load(info["checkpoint"], map_location="cpu", weights_only=False, mmap=True)
     try:
         validate_checkpoint_identity(metadata, info["model"], strict=trainer_name in FEATURE_TRAINERS)

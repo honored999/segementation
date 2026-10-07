@@ -124,7 +124,101 @@ def test_extension_exact_file_identity(tmp_path,monkeypatch):
     monkeypatch.setenv("nnUNet_extTrainer",str(tmp_path))
     assert report.resolve_external_trainer(lambda _:getattr(module,name),name,tmp_path).__name__==name
     module.__file__=str(tmp_path/"wrong.py")
-    with pytest.raises(ValueError,match="class file identity"):report.resolve_external_trainer(lambda _:getattr(module,name),name,tmp_path)
+    with pytest.raises(ValueError,match="class file identity"):
+        report.resolve_external_trainer(lambda _:getattr(module,name),name,tmp_path)
+
+
+def synthetic_external_lookup(monkeypatch, folder, name, *, wrong_file=False, fail_lookup=False):
+    """Stdlib-only equivalent of the utility contexts and external finder lifecycle."""
+    from contextlib import contextmanager
+    from types import ModuleType
+    utility=ModuleType("nnunetv2.utilities.find_class_by_name")
+    events=[]
+    @contextmanager
+    def extend(path):
+        already=path in sys.path
+        if not already:sys.path.insert(0,path)
+        try:yield
+        finally:
+            if not already:sys.path.remove(path)
+    @contextmanager
+    def cleanup(path):
+        def local(module):
+            value=getattr(module,"__file__",None)
+            return value is not None and Path(value).resolve().is_relative_to(Path(path))
+        previous={key for key,module in sys.modules.items() if local(module)}
+        try:yield
+        finally:
+            events.append("cleanup")
+            for key,module in list(sys.modules.items()):
+                if key not in previous and local(module):sys.modules.pop(key,None)
+    def finder(path,trainer,current_module,*,base_folder,verbose,cleanup_imports_from_base_folder):
+        assert path==base_folder==str(folder)
+        assert trainer==name and current_module is None
+        assert cleanup_imports_from_base_folder is False
+        assert str(folder) in sys.path
+        if fail_lookup:raise RuntimeError("synthetic finder failed")
+        module=ModuleType(name)
+        module.__file__=str(folder/("wrong.py" if wrong_file else name+".py"))
+        exec(compile((folder/(name+".py")).read_text(),module.__file__,"exec"),module.__dict__)
+        sys.modules[name]=module
+        dependency=ModuleType("synthetic_trainer_dependency")
+        dependency.__file__=str(folder/"dependency.py")
+        sys.modules[dependency.__name__]=dependency
+        events.append("lookup")
+        return getattr(module,name)
+    utility.temporarily_extend_syspath=extend
+    utility.temporarily_cleanup_imports_from_path=cleanup
+    utility.recursive_find_python_class=finder
+    monkeypatch.setitem(sys.modules,utility.__name__,utility)
+    monkeypatch.delitem(sys.modules,name,raising=False)
+    monkeypatch.delitem(sys.modules,"synthetic_trainer_dependency",raising=False)
+    monkeypatch.setenv("nnUNet_extTrainer",str(folder))
+    return events
+
+
+@pytest.mark.parametrize("name", report.FEATURE_TRAINERS+(report.TRAINER,report.ORIGINAL_TRAINER))
+def test_external_source_lifecycle_accepts_pass_only_all_trainers(tmp_path,monkeypatch,name):
+    (tmp_path/(name+".py")).write_text("class "+name+": pass")
+    events=synthetic_external_lookup(monkeypatch,tmp_path,name)
+    original_path=sys.path.copy()
+    result=report.resolve_explicit_trainer(name,tmp_path)
+    assert result.__name__==name and result.__module__==name
+    assert events==["lookup","cleanup"]
+    assert name not in sys.modules and "synthetic_trainer_dependency" not in sys.modules
+    assert sys.path==original_path and "torch" not in sys.modules
+
+
+@pytest.mark.parametrize("failure", ["wrong_file","finder_error"])
+def test_external_source_lifecycle_cleans_failure(tmp_path,monkeypatch,failure):
+    name="nnUNetTrainerForeground50"
+    (tmp_path/(name+".py")).write_text("class "+name+": pass")
+    events=synthetic_external_lookup(monkeypatch,tmp_path,name,wrong_file=failure=="wrong_file",fail_lookup=failure=="finder_error")
+    original_path=sys.path.copy()
+    error=ValueError if failure=="wrong_file" else RuntimeError
+    with pytest.raises(error):report.resolve_explicit_trainer(name,tmp_path)
+    assert events[-1]=="cleanup"
+    assert name not in sys.modules and "synthetic_trainer_dependency" not in sys.modules
+    assert sys.path==original_path
+
+
+@pytest.mark.parametrize("guard", ["name","module","file","env","unregistered"])
+def test_external_source_retains_identity_guards(tmp_path,monkeypatch,guard):
+    from types import ModuleType
+    name="nnUNetTrainerForeground50"
+    path=tmp_path/(name+".py");path.write_text("class "+name+": pass")
+    module=ModuleType(name);module.__file__=str(path)
+    exec(compile(path.read_text(),str(path),"exec"),module.__dict__)
+    discovered=getattr(module,name)
+    monkeypatch.setitem(sys.modules,name,module)
+    monkeypatch.setenv("nnUNet_extTrainer",str(tmp_path))
+    if guard=="name":discovered.__name__="WrongName"
+    elif guard=="module":discovered.__module__="wrong_module"
+    elif guard=="file":path.unlink()
+    elif guard=="env":monkeypatch.setenv("nnUNet_extTrainer",str(tmp_path/"other"))
+    else:monkeypatch.delitem(sys.modules,name)
+    with pytest.raises(ValueError,match="identity mismatch|directory/file mismatch"):
+        report.resolve_external_trainer(lambda _:discovered,name,tmp_path)
 
 
 def test_missing_source_truthful_skip(tmp_path):
