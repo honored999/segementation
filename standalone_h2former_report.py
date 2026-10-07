@@ -14,6 +14,83 @@ from generate_nnunet_result_report import (
 SUPPORTED = {"h2former", "h2former_lite_upernet", "h2former_lite_upernet_w128_ppm1236"}
 
 
+def final_h2_slot(model, prediction):
+    """Exact user-selected final run/export policy; never rank epochs or metrics."""
+    import re
+    model, prediction = Path(model), Path(prediction)
+    export = prediction.parent if prediction.name == "predictions" else prediction
+    if export.parent != model:
+        raise ValueError("final H2 export must belong directly to its model root")
+    run = model.parent.name if model.name == "fold_0" else model.name
+    if run in ("H2Former_fold0_bs4_preprocessed", "H2_fold0_bs4_preprocessed"):
+        match = re.fullmatch(r"full_volume_predictions_(best|latest)1000", export.name)
+    elif run in ("H2Former_fold0_bs4_adamw", "H2Former_LiteUPerNet_AdamW_EarlyStop_bs4", "H2Former_UPerNet_W128_PPM1236"):
+        match = re.fullmatch(r"full_volume_predictions_(best|latest)", export.name)
+        if match is None:
+            match = re.fullmatch(r"(best|latest)_prediction", export.name)
+    else:
+        raise ValueError("run is not one of the user-selected final H2 runs (screening excluded)")
+    if match is None:
+        raise ValueError("intermediate/unrecognized export excluded by exact final suffix policy")
+    return match.group(1)
+
+
+def current_h2_checkpoint(model, prediction, manifest):
+    """Resolve only an explicitly authorized current named slot, never search recursively."""
+    model = resolved(model)
+    slot = final_h2_slot(model, resolved(prediction))
+    export = resolved(prediction).parent
+    if (model.parent.name == "H2Former_UPerNet_W128_PPM1236"
+            and export.name == "best_prediction"
+            and (model / "full_volume_predictions_best" / "predictions").is_dir()):
+        raise ValueError("W128 best_prediction superseded by distinct full_volume_predictions_best export")
+    name = "checkpoint_" + slot + ".pth"
+    parents = (model, model / "checkpoints")
+    candidates = {resolved(parent / name) for parent in parents
+                  if (parent / name).is_file() and resolved(parent / name).parent in parents}
+    metadata = manifest.get("checkpoint", {})
+    value = metadata.get("path") if isinstance(metadata, dict) else None
+    if isinstance(value, str) and Path(value).is_absolute() and resolved(value) in candidates:
+        return resolved(value)  # Explicit manifest locator may disambiguate the current named slot.
+    if len(candidates) != 1:
+        raise ValueError("current H2 checkpoint slot missing/ambiguous; only model root or model/checkpoints allowed")
+    return candidates.pop()
+
+
+def require_stable_current_checkpoint(checkpoint, digest):
+    if digest is not None and _hash_file(checkpoint) != digest:
+        raise ValueError("current diagnostic checkpoint changed during loading/capture; abort publication")
+
+
+def validate_diagnostic_current_mode(args):
+    if not getattr(args, "diagnostic_current_checkpoint", False):
+        return
+    if (not getattr(args, "features_only", False) or not getattr(args, "final_h2_only", False)
+            or getattr(args, "source", "standalone-h2former") != "standalone-h2former"):
+        raise ValueError("--diagnostic-current-checkpoint requires standalone --features-only --final-h2-only")
+    if args.confirm_prediction_checkpoint or args.prediction_checkpoint_declaration:
+        raise ValueError("current diagnostic checkpoint must keep saved prediction provenance UNKNOWN")
+    if args.prediction_dir is None:
+        raise ValueError("current diagnostic mode requires explicit final prediction directory")
+    final_h2_slot(resolved(args.model_dir), resolved(args.prediction_dir))
+
+
+def require_snapshot_checkpoint(manifest, checkpoint):
+    """Historical features require the exact immutable manifest weights, not a namesake."""
+    import re
+    metadata = manifest.get("checkpoint", {})
+    value = metadata.get("path")
+    digest = metadata.get("sha256", metadata.get("checkpoint_sha256"))
+    if (not isinstance(value, str) or not Path(value).is_absolute()
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise ValueError("H2 features-only requires exact manifest checkpoint path and SHA256")
+    expected = resolved(value)
+    if resolved(checkpoint) != expected or not expected.is_file():
+        raise ValueError("H2 snapshot checkpoint path mismatch or missing")
+    if _hash_file(expected) != digest:
+        raise ValueError("H2 snapshot checkpoint hash mismatch; no mutable best/latest substitution")
+
+
 def _source_statement(confirmed, declaration):
     if bool(declaration and declaration.strip()) != bool(confirmed):
         raise ValueError("user confirmation requires both flag and nonempty declaration")
@@ -404,6 +481,9 @@ def run(args):
     from standalone_nnunet2d.data.preprocessing import z_score_normalize
     from standalone_nnunet2d.predict import _read_checkpoint, _load_model
     from standalone_nnunet2d.training.official_config import DEFAULT_RUN_STATE
+    if getattr(args, "features_only", False) and not args.selection_json:
+        raise ValueError("--features-only requires frozen selection")
+    validate_diagnostic_current_mode(args)
     info = inspect(args)
     if args.check:
         print(json.dumps({"status":"METADATA ONLY; checkpoint content and geometry PENDING",
@@ -413,6 +493,15 @@ def run(args):
                           "count_coverage":count_coverage(info["rows"]),
                           "output":str(info["output"])},indent=2))
         return 0
+    if getattr(args, "features_only", False):
+        if getattr(args, "diagnostic_current_checkpoint", False):
+            expected = current_h2_checkpoint(info["paths"]["model_dir"], info["paths"]["prediction_dir"], info["manifest"])
+            if expected != info["paths"]["checkpoint"]:
+                raise ValueError("explicit current checkpoint differs from authorized final slot")
+        else:
+            require_snapshot_checkpoint(info["manifest"], info["paths"]["checkpoint"])
+    diagnostic_digest = (_hash_file(info["paths"]["checkpoint"])
+                         if getattr(args, "diagnostic_current_checkpoint", False) else None)
     verify_selection(info)
     _, metadata = _read_checkpoint(info["paths"]["checkpoint"])
     name = _identity(metadata, info["config"], info["manifest"])
@@ -421,7 +510,9 @@ def run(args):
         raise ValueError("pending checkpoint requires explicit --allow-pending")
     if run_state != info["policy"]["run_state"]:
         raise ValueError("checkpoint and prediction manifest run_state mismatch")
-    for cid in info["rows"]:
+    geometry_ids = ({e["case_id"] for e in info["selection"]["entries"]}
+                    if getattr(args, "features_only", False) else info["rows"])
+    for cid in geometry_ids:
         headers=[]
         for key in ("images","labels","predictions"):
             reader=sitk.ImageFileReader(); reader.SetFileName(str(info[key][cid])); reader.ReadImageInformation(); headers.append(reader)
@@ -431,6 +522,7 @@ def run(args):
     model, loaded=_load_model(info["paths"]["checkpoint"],device)
     if _identity(loaded,info["config"],info["manifest"]) != name:
         raise ValueError("loaded checkpoint identity changed")
+    require_stable_current_checkpoint(info["paths"]["checkpoint"], diagnostic_digest)
     items=[]
     for group, ids in report_groups(info, select_cases):
         for cid in ids:
@@ -451,12 +543,15 @@ def run(args):
                                           "padding":"actual offsets in native mappings; full-source z-score",
                                           "tile_step_size":.5,"mirroring":False},
                               geometry={k:getattr(image,"Get"+k)() for k in ("Size","Spacing","Origin","Direction")}))
+    require_stable_current_checkpoint(info["paths"]["checkpoint"], diagnostic_digest)
     output=info["output"]
     if not output.parent.is_dir():
         raise ValueError(f"output parent does not exist: {output.parent}")
     staging=Path(tempfile.mkdtemp(prefix=f".{output.name}-",dir=output.parent))
     try:
         source_status = _source_statement(args.confirm_prediction_checkpoint, args.prediction_checkpoint_declaration)
+        if getattr(args, "diagnostic_current_checkpoint", False):
+            source_status = "UNKNOWN; CURRENT DIAGNOSTIC weights only, not saved prediction provenance proof"
         note = "Diagnostic checkpoint features; saved prediction source " + source_status
         _summary_figure(items,info["rows"],model,3,staging/"summary.png",
                         trainer_name="nnUNetTrainerTopK10",source_note=note)
@@ -467,9 +562,13 @@ def run(args):
         _architecture(model,name,staging/"architecture_overview.png")
         _architecture(model,name,staging/"architecture_detail.png",detail=True)
         txt=[f"Dataset501 standalone {name}, fold 0 diagnostic report; not five-fold OOF or clinical evidence.",
-             f"Checkpoint: {info['paths']['checkpoint']}",f"Checkpoint SHA256: {_hash_file(info['paths']['checkpoint'])}",
+             f"Checkpoint: {info['paths']['checkpoint']}",f"Checkpoint SHA256: {diagnostic_digest or _hash_file(info['paths']['checkpoint'])}",
              f"Config: {info['paths']['config']}",f"Prediction manifest: {info['paths']['manifest']}",
              f"Prediction provenance: {source_status}",
+             "Checkpoint mode: " + ("CURRENT DIAGNOSTIC; historical snapshot path/SHA may differ; manifest unchanged" if getattr(args, "diagnostic_current_checkpoint", False) else "strict historical snapshot"),
+             "Original selected report association: " + str(getattr(args, "existing_report", None) or "direct invocation"),
+             "Saved prediction directory: " + str(info['paths']['prediction_dir']),
+             "Historical manifest checkpoint (unchanged; not confirmed by current weights): " + json.dumps(info["manifest"].get("checkpoint", {}), ensure_ascii=False),
              "Resolved configuration (as supplied):", json.dumps(info["config"],ensure_ascii=False,indent=2),
              "Training data backend: " + str(info["config"].get("data_source", {}).get("type", "unknown") if isinstance(info["config"].get("data_source"),dict) else "unknown"),
              "Diagnostic prediction entry: source NIfTI / full-volume z-score / SimpleITK array-axis-0 windows; separate from training backend.",
@@ -483,7 +582,7 @@ def run(args):
              "Native: one shared window per case, fixed 8 channels/layer copied to CPU; per-channel min-max color normalization. Summary: per-slice percentile normalization; not absolute cross-case scale.",
              "Selection: full-case Dice high 3 and low 3 distinct cases; max 3 GT-positive slices per case; GT affects display selection only.",
              f"Metrics: {info['paths']['metrics_dir']}; Source report f2_mode: {info['summary'].get('f2_mode','unknown')}; mode alone does not establish a formula; AVD percent, HD95 mm; missing remains missing.",
-             "Case metric definitions come from optional source summary metric_definitions (caller-declared, not independently verified). Missing declarations remain unknown. See per-metric definitions and provenance in the appended full evaluation metrics table. Existing metrics are read only; only missing TP/FP/FN are recomputed from saved full-volume masks.",
+             "Case metric definitions come from optional source summary metric_definitions (caller-declared, not independently verified). Missing declarations remain unknown. See per-metric definitions and provenance in the appended full evaluation metrics table. Existing metrics are read only; features-only mode never exports metrics or recomputes TP/FP/FN. Ordinary full reports fill missing counts from saved masks.",
              "Evidence: local diagnostic generation; real checkpoint, case geometry, provenance and visual approval require server validation.",
              "Summary metrics:",json.dumps(info["summary"],ensure_ascii=False,indent=2),"Model repr:",repr(model)]
         for item in items:
@@ -496,20 +595,36 @@ def run(args):
         if info.get("selection"):
             txt = [line for line in txt if not line.startswith("Selection:")]
         (staging/"report.txt").write_text("\n".join(txt)+"\n",encoding="utf-8")
+        if diagnostic_digest is not None:
+            (staging / "diagnostic_checkpoint.json").write_text(json.dumps(dict(
+                mode="CURRENT DIAGNOSTIC", checkpoint_path=str(info["paths"]["checkpoint"]),
+                checkpoint_sha256=diagnostic_digest, saved_prediction_provenance="UNKNOWN",
+                existing_report=str(getattr(args, "existing_report", None) or "direct invocation"),
+                prediction_dir=str(info["paths"]["prediction_dir"]),
+                manifest_checkpoint=info["manifest"].get("checkpoint", {}),
+                checkpoint_run_state=run_state, manifest_run_state=info["policy"]["run_state"]
+            ), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         with (staging/"report.txt").open("a",encoding="utf-8") as handle:
             handle.write(save_selection(info, staging))
-        table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
-                            label_contract=lambda: binary_labels(info["config"], info["manifest"], standalone=True),
-                            check_geometry=check_geometry, geometry_verified=True)
-        with (staging/"report.txt").open("a",encoding="utf-8") as handle:
-            handle.write(export_table(table, staging))
-        required = ("encoder_stages_heatmap.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png",
-                    "architecture_overview.png", "architecture_detail.png", "report.txt",
-                    "metrics_table.csv", "metrics_table.png")
-        if not all((staging/name).is_file() for name in required):
-            raise ValueError("report output incomplete")
-        validate_visual_outputs(staging,["summary","encoder_stages","feature_channels","feature_channels_64x64","architecture_overview","architecture_detail","metrics_table"])
+        if getattr(args, "features_only", False):
+            required = ("encoder_stages_heatmap.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "architecture_overview.png", "architecture_detail.png", "report.txt")
+            if not all((staging / name).is_file() for name in required):
+                raise ValueError("feature output incomplete")
+            validate_visual_outputs(staging, ["summary", "encoder_stages", "feature_channels", "feature_channels_64x64", "architecture_overview", "architecture_detail"])
+        else:
+            table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
+                                label_contract=lambda: binary_labels(info["config"], info["manifest"], standalone=True),
+                                check_geometry=check_geometry, geometry_verified=True)
+            with (staging/"report.txt").open("a",encoding="utf-8") as handle:
+                handle.write(export_table(table, staging))
+            required = ("encoder_stages_heatmap.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png",
+                        "architecture_overview.png", "architecture_detail.png", "report.txt",
+                        "metrics_table.csv", "metrics_table.png")
+            if not all((staging/name).is_file() for name in required):
+                raise ValueError("report output incomplete")
+            validate_visual_outputs(staging,["summary","encoder_stages","feature_channels","feature_channels_64x64","architecture_overview","architecture_detail","metrics_table"])
         check_selection_output(info, staging)
+        require_stable_current_checkpoint(info["paths"]["checkpoint"], diagnostic_digest)
         protected_output(output,(*info["paths"].values(),))
         os.rename(staging,output)
     finally:

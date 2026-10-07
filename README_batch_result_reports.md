@@ -98,3 +98,119 @@ Static source inspection only: no local tests, syntax compilation, image reads,
 model/checkpoint loads or inference were run. Real server rendering and adapter
 compatibility remain unverified. An installed CJK font is required by the reused
 report_visuals helpers; no font/dependency is installed automatically.
+
+
+## Quick v2 feature backfill (SERVER VALIDATION PENDING)
+
+Use the server report checkout containing this change and its existing nnunetv2
+2.8.1 environment. All eight source directories in
+`batch_report_trainer_extensions.example.json` are filled from user-provided
+server locations. There are no EDIT placeholders. Filenames/dependencies still
+require server verification; missing correct source files truthfully skip.
+Original sibling source dependencies are used in place; never combine differing
+mixins by copying files into one directory.
+
+Run these commands in Windows **CMD**, from this server report checkout:
+
+```bat
+conda activate nnunet5090
+run_batch_feature_backfill.cmd --dry-run
+run_batch_feature_backfill.cmd --allow-pending
+```
+
+The launcher defaults to --features-only --final-h2-only --use-current-h2-checkpoints,
+using the existing v2/root/selection paths and a fresh final output root.
+`--allow-pending` permits pending H2 alignment only; it does not waive checkpoint
+identity or SHA256 proof. Omit it when pending H2 diagnostics are not wanted.
+Use the already working server environment if its name differs. Local checks
+used newconda; no dependency installation/upgrade is needed.
+
+Equivalent complete command (CMD):
+
+```bat
+python batch_generate_result_reports.py --features-only --final-h2-only --use-current-h2-checkpoints --existing-summary "C:\lijialin\models3d\nnUNet\batch_reports_dataset501_v2\batch_summary.csv" --images-dir "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion\imagesTr" --labels-dir "C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion\labelsTr" --selection-json "C:\lijialin\models3d\nnUNet\nnUNet_results\reports\comparison_fixed_cohort_v1\comparison_selection.json" --trainer-extension-map "batch_report_trainer_extensions.example.json" --output-dir "C:\lijialin\models3d\nnUNet\batch_reports_dataset501_v2_features_final_v1" --device cuda --allow-pending
+```
+
+This reads saved `status=saved/feature_failed` job sources and metrics from the
+existing batch_summary.csv, and checks each original report's frozen selection
+copy against the supplied manifest. Unrun/failed/skipped saved reports are not
+regenerated (including the three genuinely unrun reports). Existing successfully
+recorded feature outputs are skipped if their required files exist. No scan,
+full-19-mask reread, clinical metric recomputation, metric-table/count export,
+or saved-report rewrite occurs. Full population filenames and saved metric rows
+remain checked by the reused generator; frozen hashes and geometry are checked
+for the six displayed cases. Features necessarily read those selected DWI/GT/
+prediction volumes; GT stays outside preprocessing and model forward.
+
+Output must be a new sibling of the original batch root. Existing or overlapping
+output paths fail; repeated actual runs need a fresh sibling name. New diagnostics
+are at `<fresh-root>/<job>/feature_diagnostics/`. Original reports, metrics and
+selection are read-only. The new CSV includes `existing_report` for traceability;
+`feature_saved` means the generator produced its required outputs,
+`feature_skipped` means unsupported/missing source/weights or already existing
+features, and `feature_failed` means attempted diagnostics failed. Feature skips
+are nonfatal; exit 1 means attempted feature failure, exit 2 invalid global input.
+A dry-run is a metadata plan, not proof of source/checkpoint/feature compatibility,
+and reads no checkpoints/models/voxels. It writes no output.
+
+Added diagnostic identities: Foreground50, Foreground50DetailRefine,
+GroupedTopK10, UPerNetEarlyStopping, TopK10EarlyStopping,
+UPerNetNoStage7TopK10EarlyStopping with `nnUNetPlans__2d`;
+PlainConvDepthTopK10EarlyStopping with `nnUNetPlansPlainConvDepth__2d_stage5`
+or `2d_stage6`; and UPerNetSelectedStagesTopK10EarlyStopping with
+`nnUNetPlansUPerNetStages_s2345__2d`. All names include the `nnUNetTrainer`
+prefix. Added identities require a real mapped source; `--trainer-extension-dir`
+can provide one default directory, with per-Trainer map entries taking precedence.
+Original three adapters retain their strict local fallback. Ordinary full-report
+mode still rejects added identities. Direct diagnostic use also accepts
+`--features-only --trainer-extension-dir <exact-directory>`.
+
+Added identities validate exact class file identity, checkpoint Trainer/config/
+fold and conservatively the full saved plans against current plans (including
+inherited parents, transpose and reader fields). The real nnU-Net build loader
+constructs the network. Runtime encoder count/metadata and s2345 selection are
+checked, then existing hooks validate actual BCHW stage outputs. Official backfill
+skips architecture diagrams, so changed decoders do not need fabricated diagrams.
+Feature inverse geometry and normalization are unchanged. Configurations lacking
+one unique native 64x64 intermediate stage are truthfully unsupported.
+
+Default H2 reporting retains the exact manifest absolute checkpoint path and
+matching SHA256 guard. The new explicitly authorized
+`--use-current-h2-checkpoints` option works only with
+`--features-only --final-h2-only`. It passes `--diagnostic-current-checkpoint`
+to the reused standalone generator. Direct invocation requires the same explicit
+features-only/final flags and rejects prediction checkpoint confirmation claims.
+
+Final H2 policy retains exactly best1000/latest1000 for the preprocessed bs4 run,
+current best/latest for AdamW and LiteUPer, and prefers W128
+`full_volume_predictions_best` over `best_prediction`. These are distinct exports,
+never averaged. Screening and other numeric suffixes are excluded; the policy
+never finds the largest epoch or ranks by Dice. Official completed jobs remain.
+The local v2 metadata yields 12 official + 7 H2 retained records and 7 H2
+exclusions; three unrun official jobs remain unrun. Existing reports are preserved.
+
+Current checkpoint resolution uses only `checkpoint_best.pth` or
+`checkpoint_latest.pth` for the retained slot, directly in the model root or its
+`checkpoints` child. A matching existing manifest locator within these candidates
+may disambiguate; otherwise there must be exactly one candidate. Missing/conflicting
+candidates skip. No recursive search or arbitrary filename substitution occurs.
+The standalone entry repeats this guard before checkpoint reads. Real checkpoint
+identity/config/alignment checks remain; pending requires `--allow-pending` and
+stays pending. The current file's SHA256 is captured before reads and checked after loading,
+after feature capture, and immediately before publication. A detected change
+aborts publication and cleans staging; no large checkpoint copy is made.
+
+Current diagnostics persist actual path/SHA256, original report/export association,
+unchanged historical manifest checkpoint metadata, UNKNOWN saved-mask provenance,
+and both alignment states in `report.txt` and `diagnostic_checkpoint.json`.
+Historical snapshot path/hash may differ; this is explicitly marked CURRENT
+DIAGNOSTIC, never proof that current weights generated saved predictions.
+
+`final_report_allowlist.json` and `final_report_allowlist.csv` contain the 19
+retained original report records (CSV has `report_basename` for PPT filtering);
+`final_report_excluded.csv` gives the seven excluded records and reasons. The
+JSON separately records unrun jobs and hashes the source summary. Copies are
+created in fresh backfill output; the checked-in local metadata exports were
+created from the local v2 CSV without reading image/model data. No PPT or PPT
+scripts are edited. Real server weights/features/geometry/rendering still require
+server validation; no feature completion or formal clinical result is claimed.

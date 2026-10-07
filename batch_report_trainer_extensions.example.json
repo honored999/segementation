@@ -1,0 +1,10 @@
+{
+  "nnUNetTrainerForeground50": "C:\\lijialin\\segementation\\.worktrees\\nnunet-result-report\\nnunet_ext_trainers",
+  "nnUNetTrainerForeground50DetailRefine": "C:\\lijialin\\segementation\\.worktrees\\foreground50-detail-refine\\nnunet_ext_trainers",
+  "nnUNetTrainerGroupedTopK10": "C:\\lijialin\\segementation\\.worktrees\\standalone-nnunet2d\\nnunet_ext_trainers",
+  "nnUNetTrainerUPerNetEarlyStopping": "C:\\lijialin\\segementation\\.worktrees\\nnunet-result-report\\nnunet_ext_trainers",
+  "nnUNetTrainerTopK10EarlyStopping": "C:\\lijialin\\segementation\\.worktrees\\isles2022-dwi-conversion\\nnunet_ext_trainers",
+  "nnUNetTrainerPlainConvDepthTopK10EarlyStopping": "C:\\lijialin\\segementation\\.worktrees\\upernet-no-stage7\\nnunet_ext_trainers",
+  "nnUNetTrainerUPerNetNoStage7TopK10EarlyStopping": "C:\\lijialin\\segementation\\.worktrees\\upernet-no-stage7\\nnunet_ext_trainers",
+  "nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping": "C:\\lijialin\\segementation-upernet-configurable-stages\\nnunet_ext_trainers"
+}

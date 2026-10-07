@@ -11,7 +11,7 @@ import subprocess
 import sys
 import traceback
 from generate_nnunet_result_report import (
-    SUPPORTED_TRAINERS, TRAINER, collect, read_metrics, check_geometry,
+    SUPPORTED_TRAINERS, FEATURE_TRAINERS, model_identity, TRAINER, collect, read_metrics, check_geometry,
     protected_output, _normalize_display, _overlay_rgba,
 )
 from report_comparison_selection import (
@@ -386,28 +386,54 @@ def saved_report(job, info, output):
 def feature_command(job, args, target):
     if job["source"] == "official-nnunet":
         trainer = job["model"].name.split("__")[0]
-        if trainer not in SUPPORTED_TRAINERS or job["model"].name != f"{trainer}__nnUNetPlans__2d":
-            return None, "no exact existing feature adapter; TopK10ES/PlainConvStage6/NoStage7 saved-only"
+        try:
+            model_identity(job["model"])
+        except ValueError as error:
+            return None, str(error)
+        if trainer not in SUPPORTED_TRAINERS and not getattr(args, "features_only", False):
+            return None, "additional Trainer supported only with --features-only"
+        extension = getattr(args, "trainer_extensions", {}).get(trainer)
+        if trainer in FEATURE_TRAINERS and extension is None:
+            return None, "correct Trainer source missing; supply --trainer-extension-map or --trainer-extension-dir"
+        if extension is not None and not (extension / (trainer + ".py")).is_file():
+            return None, "exact external Trainer class file missing: " + str(extension / (trainer + ".py"))
         checkpoint = job["model"] / "fold_0" / "checkpoint_best.pth"
         if not checkpoint.is_file():
             return None, "diagnostic checkpoint_best.pth missing; no substitution"
         extra = []
+        if extension is not None:
+            extra += ["--trainer-extension-dir", str(extension)]
         if trainer == TRAINER:
-            extra = ["--prediction-checkpoint-declaration", "UNKNOWN; saved prediction checkpoint is unverified; named checkpoint is diagnostic only"]
+            extra += ["--prediction-checkpoint-declaration", "UNKNOWN; saved prediction checkpoint is unverified; named checkpoint is diagnostic only"]
     else:
         from report_comparison_selection import file_hash
-        metadata = job["manifest_data"]["checkpoint"]
-        value, digest = metadata.get("path"), metadata.get("sha256", metadata.get("checkpoint_sha256"))
-        if not isinstance(value, str) or not Path(value).is_absolute():
-            return None, "H2 exact manifest checkpoint path missing"
-        checkpoint = Path(value).resolve()
-        if not checkpoint.is_file() or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            return None, "H2 manifest lacks existing exact checkpoint + SHA256 proof; historic mutable best/latest names cannot prove snapshot weights"
-        if file_hash(checkpoint) != digest:
-            return None, "H2 manifest checkpoint hash mismatch; snapshot features skipped"
+        use_current = getattr(args, "use_current_h2_checkpoints", False)
+        if use_current:
+            validate_backfill_flags(args)
+            from standalone_h2former_report import current_h2_checkpoint
+            try:
+                checkpoint = current_h2_checkpoint(job["model"], job["prediction"], job["manifest_data"])
+            except ValueError as error:
+                return None, str(error)
+        else:
+            metadata = job["manifest_data"]["checkpoint"]
+            value, digest = metadata.get("path"), metadata.get("sha256", metadata.get("checkpoint_sha256"))
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                return None, "H2 exact manifest checkpoint path missing"
+            checkpoint = Path(value).resolve()
+            if not checkpoint.is_file() or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                return None, "H2 manifest lacks existing exact checkpoint + SHA256 proof; historic mutable best/latest names cannot prove snapshot weights"
+            if file_hash(checkpoint) != digest:
+                return None, "H2 manifest checkpoint hash mismatch; snapshot features skipped"
         extra = ["--manifest", str(job["manifest"]), "--config", str(job["config"])]
+        if use_current:
+            extra += ["--diagnostic-current-checkpoint", "--final-h2-only"]
+            if job.get("existing_report"):
+                extra += ["--existing-report", str(job["existing_report"])]
         if args.allow_pending:
             extra.append("--allow-pending")
+    if getattr(args, "features_only", False):
+        extra.append("--features-only")
     command = [sys.executable, str(CODE / "generate_nnunet_result_report.py"), "--source", job["source"],
                "--model-dir", str(job["model"]), "--fold", "0", "--images-dir", str(args.images_dir),
                "--labels-dir", str(args.labels_dir), "--prediction-dir", str(job["prediction"]),
@@ -433,13 +459,13 @@ def features(job, args, target, log):
 
 
 def write_summary(output, records, args):
-    document = dict(mode="saved-results + optional features" if args.features else "saved-results",
+    document = dict(mode="features-only backfill" if getattr(args, "features_only", False) else "saved-results + optional features" if args.features else "saved-results",
                     dry_run=args.dry_run, records=records)
     if args.dry_run:
         print(json.dumps(document, ensure_ascii=False, indent=2))
         return
     (output / "batch_summary.json").write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    fields = ("status", "source", "model", "prediction", "metrics", "association", "report", "features", "reason", "log")
+    fields = ("status", "source", "model", "prediction", "metrics", "association", "report", "existing_report", "features", "reason", "log")
     with (output / "batch_summary.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(records)
@@ -448,19 +474,188 @@ def write_summary(output, records, args):
         for r in records) + "\n", encoding="utf-8")
 
 
+def extension_map(args):
+    document = read_json(args.trainer_extension_map) if args.trainer_extension_map else {}
+    if not isinstance(document, dict):
+        raise ValueError("Trainer extension map requires a JSON object")
+    result = {}
+    for trainer, value in document.items():
+        if trainer not in SUPPORTED_TRAINERS + FEATURE_TRAINERS or not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError("Trainer extension map requires supported Trainer -> absolute source directory")
+        result[trainer] = Path(value).resolve()
+    if args.trainer_extension_dir:
+        if not args.trainer_extension_dir.is_absolute():
+            raise ValueError("Trainer extension directory must be absolute")
+        for trainer in FEATURE_TRAINERS:
+            result.setdefault(trainer, args.trainer_extension_dir.resolve())
+    return result
+
+
+def validate_backfill_flags(args):
+    if getattr(args, "final_h2_only", False) and not getattr(args, "features_only", False):
+        raise ValueError("--final-h2-only requires --features-only")
+    if getattr(args, "use_current_h2_checkpoints", False) and not (
+            getattr(args, "features_only", False) and getattr(args, "final_h2_only", False)):
+        raise ValueError("--use-current-h2-checkpoints requires --features-only --final-h2-only")
+
+
+def select_final_records(previous):
+    """Pure metadata policy for final presentation/backfill; no metric or epoch ranking."""
+    from standalone_h2former_report import final_h2_slot
+    kept, excluded, groups = [], [], {}
+    for row in previous:
+        if row.get("status") not in ("saved", "feature_failed"):
+            continue
+        if row.get("source") == "official-nnunet":
+            kept.append(row)
+        elif row.get("source") == "standalone-h2former":
+            try:
+                slot = final_h2_slot(Path(row["model"]), Path(row["prediction"]))
+                groups.setdefault((str(Path(row["model"])).casefold(), slot), []).append(row)
+            except ValueError as error:
+                excluded.append(dict(row, exclusion_reason=str(error)))
+    for candidates in groups.values():
+        preferred = [r for r in candidates if Path(r["prediction"]).parent.name.startswith("full_volume_predictions_")]
+        winners = preferred if preferred else candidates
+        if len(winners) != 1:
+            excluded.extend(dict(r, exclusion_reason="ambiguous final exports for the same run/slot; no metric-based selection") for r in candidates)
+            continue
+        winner = winners[0]
+        kept.append(winner)
+        excluded.extend(dict(r, exclusion_reason="distinct alternate export superseded by full_volume_predictions final export; not averaged")
+                        for r in candidates if r is not winner)
+    order = {id(r): i for i, r in enumerate(previous)}
+    kept.sort(key=lambda r: order[id(r)])
+    return kept, excluded
+
+
+def write_final_allowlist(output, previous, summary):
+    kept, excluded = select_final_records(previous)
+    from report_comparison_selection import file_hash
+    document = dict(policy="exact user final exports; no Dice/epoch ranking; alternate exports never averaged",
+                    source_summary=str(summary), source_summary_sha256=file_hash(summary),
+                    retained_count=len(kept), excluded_count=len(excluded),
+                    official_count=sum(r["source"] == "official-nnunet" for r in kept),
+                    h2_count=sum(r["source"] == "standalone-h2former" for r in kept),
+                    retained=[dict(r, report_basename=Path(r["report"]).name) for r in kept], excluded=excluded,
+                    unrun=[r for r in previous if r.get("source") in ("official-nnunet", "standalone-h2former")
+                           and r.get("status") not in ("saved", "feature_failed")])
+    (output / "final_report_allowlist.json").write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for name, rows in (("final_report_allowlist.csv", document["retained"]), ("final_report_excluded.csv", excluded)):
+        fields = list(dict.fromkeys(key for row in rows for key in row)) or ["source", "report", "exclusion_reason"]
+        with (output / name).open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader(); writer.writerows(rows)
+    return document
+
+
+def backfill(args):
+    """Replay completed saved jobs only. Never discover/evaluate masks or rewrite reports."""
+    validate_backfill_flags(args)
+    summary = args.existing_summary
+    if summary is None:
+        summary = args.output_dir.with_name(args.output_dir.name.removesuffix("_features_final_v1").removesuffix("_features_v1")) / "batch_summary.csv"
+    summary = summary.resolve()
+    with summary.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not {"status", "source", "model", "prediction", "metrics", "report"} <= set(reader.fieldnames or []):
+            raise ValueError("existing summary missing saved job sources")
+        previous = list(reader)
+    eligible, final_excluded = select_final_records(previous) if getattr(args, "final_h2_only", False) else (previous, [])
+    selection = validate(read_json(args.selection_json))
+    if len(selection["population"]) != 19:
+        raise ValueError("backfill requires frozen 19-case cohort")
+    sources = [summary.parent, CODE, args.images_dir, args.labels_dir, args.selection_json,
+               *args.trainer_extensions.values()]
+    jobs = []
+    for row in eligible:
+        if row["status"] not in ("saved", "feature_failed"):
+            continue  # Three genuinely unrun reports are not new jobs.
+        paths = {}
+        for key in ("model", "prediction", "metrics", "report"):
+            path = Path(row[key])
+            if not path.is_absolute() or not path.is_dir():
+                raise ValueError("completed job needs existing absolute " + key + ": " + row[key])
+            paths[key] = path.resolve()
+        if validate(read_json(paths["report"] / "comparison_selection.json")) != selection:
+            raise ValueError("existing report frozen selection differs from supplied selection")
+        sources.extend(paths.values())
+        jobs.append((row, paths))
+    output = protected_output(args.output_dir, sources)
+    if output.parent != summary.parent.parent:
+        raise ValueError("feature output must be a fresh sibling of existing report root")
+    if not args.dry_run:
+        output.mkdir(parents=True, exist_ok=False)
+        (output / "logs").mkdir()
+        if getattr(args, "final_h2_only", False):
+            write_final_allowlist(output, previous, summary)
+    records = [dict(row, features="not run: existing report was not completed; no backfill attempted")
+               for row in previous if row["status"] not in ("saved", "feature_failed")]
+    records.extend(dict(row, status="feature_excluded", features="not run: excluded by final H2 policy", reason=row["exclusion_reason"])
+                   for row in final_excluded)
+    for number, (row, paths) in enumerate(jobs, 1):
+        target = output / (str(number).zfill(3) + "_" + paths["report"].name)
+        log = output / "logs" / f"job_{number:03d}.log"
+        record = dict(row, report=str(target), existing_report=str(paths["report"]), log=str(log))
+        records.append(record)
+        job = dict(source=row["source"], model=paths["model"], prediction=paths["prediction"], metrics=paths["metrics"], existing_report=paths["report"])
+        try:
+            existing_features = paths["report"] / "feature_diagnostics"
+            if row.get("features", "").startswith("generated:") and all(
+                    (existing_features / name).is_file() for name in
+                    ("encoder_stages_heatmap.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt")):
+                record.update(status="feature_skipped", features="skipped: existing completed feature diagnostics", reason="original feature files retained")
+                continue
+            if job["source"] == "standalone-h2former":
+                job.update(manifest=paths["prediction"].parent / "prediction_manifest.json",
+                           config=paths["model"] / "resolved_config.json")
+                job["manifest_data"] = read_json(job["manifest"])
+            elif job["source"] != "official-nnunet":
+                raise ValueError("unsupported saved source")
+            if args.dry_run:
+                record.update(status="planned", features="PENDING exact checkpoint/source validation; no checkpoint reads")
+            else:
+                target.mkdir()
+                record["features"], failed = features(job, args, target, log)
+                record.update(status="feature_failed" if failed else "feature_skipped" if record["features"].startswith("skipped:") else "feature_saved", reason="diagnostics only; original reports/metrics preserved")
+        except Exception as error:
+            record.update(status="feature_failed", features="failed: " + str(error))
+            if not args.dry_run:
+                log.write_text(traceback.format_exc(), encoding="utf-8")
+        if not args.dry_run:
+            write_summary(output, records, args)
+    write_summary(output, records, args)
+    return int(any(r["status"] == "feature_failed" for r in records))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-roots", type=Path, nargs="+", required=True)
+    parser.add_argument("--results-roots", type=Path, nargs="+")
     for name in ("images-dir", "labels-dir", "selection-json", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--metrics-map", type=Path, help="JSON exact absolute prediction dir -> metrics dir")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--features", action="store_true")
+    parser.add_argument("--features-only", action="store_true")
+    parser.add_argument("--final-h2-only", action="store_true", help="retain only exact user final H2 exports; official saved jobs retained")
+    parser.add_argument("--use-current-h2-checkpoints", action="store_true", help="DIAGNOSTIC ONLY current named best/latest slots; requires final features-only mode")
+    parser.add_argument("--existing-summary", type=Path, help="existing completed batch_summary.csv; no scan or saved-report regeneration")
+    parser.add_argument("--trainer-extension-map", type=Path, help="JSON Trainer -> absolute real SERVER source directory")
+    parser.add_argument("--trainer-extension-dir", type=Path, help="default real source directory for added Trainers; map entries take precedence")
     parser.add_argument("--allow-pending", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="metadata/coverage plan only; no output, voxels, checkpoints or models")
     args = parser.parse_args(argv)
     records = []
     try:
+        validate_backfill_flags(args)
+        args.trainer_extensions = extension_map(args)
+        if args.features_only:
+            args.features = True
+            return backfill(args)
+        if args.existing_summary or args.trainer_extensions:
+            raise ValueError("existing summary/external source overrides require --features-only")
+        if not args.results_roots:
+            raise ValueError("--results-roots required for ordinary batch reporting")
         roots = sorted({p.resolve() for p in args.results_roots})
         args.images_dir, args.labels_dir = args.images_dir.resolve(), args.labels_dir.resolve()
         args.selection_json = args.selection_json.resolve()

@@ -22,6 +22,50 @@ TRAINER = "nnUNetTrainerUPerNetTopK10EarlyStopping"
 ORIGINAL_TRAINER = "nnUNetTrainerTopK10"
 STANDARD_TRAINER = "nnUNetTrainer"
 SUPPORTED_TRAINERS = (TRAINER, ORIGINAL_TRAINER, STANDARD_TRAINER)
+# Additional real external Trainers are diagnostic-only; no decoder diagram claims.
+FEATURE_TRAINERS = (
+    "nnUNetTrainerForeground50", "nnUNetTrainerForeground50DetailRefine",
+    "nnUNetTrainerGroupedTopK10", "nnUNetTrainerUPerNetEarlyStopping",
+    "nnUNetTrainerTopK10EarlyStopping", "nnUNetTrainerPlainConvDepthTopK10EarlyStopping",
+    "nnUNetTrainerUPerNetNoStage7TopK10EarlyStopping",
+    "nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping",
+)
+
+
+def model_identity(model):
+    parts = model.name.split("__")
+    if len(parts) != 3:
+        raise ValueError("exact Trainer__plans__configuration directory required")
+    trainer, plans, config = parts
+    if trainer in SUPPORTED_TRAINERS:
+        valid = (plans, config) == ("nnUNetPlans", "2d")
+    elif trainer == "nnUNetTrainerPlainConvDepthTopK10EarlyStopping":
+        valid = plans == "nnUNetPlansPlainConvDepth" and config in ("2d_stage5", "2d_stage6")
+    elif trainer == "nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping":
+        valid = (plans, config) == ("nnUNetPlansUPerNetStages_s2345", "2d")
+    else:
+        valid = trainer in FEATURE_TRAINERS and (plans, config) == ("nnUNetPlans", "2d")
+    if not valid:
+        raise ValueError("unsupported exact Trainer/plans/configuration identity")
+    return trainer, plans, config
+
+
+def validate_checkpoint_identity(metadata, model, *, strict=False):
+    trainer, plans, config = model_identity(model)
+    init = metadata.get("init_args", {})
+    if metadata.get("trainer_name") != trainer or init.get("configuration") != config:
+        raise ValueError("checkpoint Trainer/configuration mismatch")
+    fold = init.get("fold")
+    if (strict and fold is None) or (fold is not None and str(fold) != "0"):
+        raise ValueError("checkpoint fold mismatch")
+    if strict:
+        saved_plans = init.get("plans")
+        if not isinstance(saved_plans, dict) or saved_plans.get("plans_name") != plans:
+            raise ValueError("checkpoint plans identity mismatch")
+        current = json.loads((model / "plans.json").read_text(encoding="utf-8"))
+        if saved_plans != current:
+            raise ValueError("checkpoint full plans differ from model plans")
+
 from report_comparison_selection import (load_selection, verify_selection, report_groups, selected_slices, save_selection, check_selection_output)
 METRICS = ("dice", "iou", "f2", "avd_percent", "lcd", "recall", "hd95_mm")
 
@@ -138,16 +182,16 @@ def check_geometry(image, other, case_id):
         raise ValueError(f"{case_id}: only 3D original volumes supported")
 
 
-def _check_identity(model_dir, checkpoint, fold):
-    trainer = model_dir.name.split("__")[0]
-    if fold != 0 or trainer not in SUPPORTED_TRAINERS or model_dir.name != f"{trainer}__nnUNetPlans__2d" or model_dir.parent.name != "Dataset501_StrokeLesion":
+def _check_identity(model_dir, checkpoint, fold, *, features_only=False):
+    trainer, _, configuration = model_identity(model_dir)
+    if fold != 0 or trainer not in (SUPPORTED_TRAINERS + FEATURE_TRAINERS if features_only else SUPPORTED_TRAINERS) or model_dir.parent.name != "Dataset501_StrokeLesion":
         raise ValueError("only exact Dataset501 standard nnUNetTrainer / TopK10 / UPerNet fold 0 2D model directories are supported")
     dataset = json.loads((model_dir / "dataset.json").read_text(encoding="utf-8"))
     plans = json.loads((model_dir / "plans.json").read_text(encoding="utf-8"))
     channels = dataset.get("channel_names")
     if not isinstance(channels, dict) or len(channels) != 1 or not isinstance(next(iter(channels.values())), str) or next(iter(channels.values())) != "DWI":
         raise ValueError("only one-channel DWI Dataset501 is supported")
-    if "2d" not in plans.get("configurations", {}):
+    if configuration not in plans.get("configurations", {}):
         raise ValueError("2d configuration missing")
     require_simpleitk_reader(plans)
     if trainer == STANDARD_TRAINER:
@@ -207,7 +251,7 @@ def inspect_sources(args):
         metrics = resolved(candidates[0])
     checkpoint = resolved(args.checkpoint)
     output = protected_output(args.output_dir, (model, images, labels, preds, metrics, checkpoint))
-    dataset, plans, checkpoint = _check_identity(model, checkpoint, args.fold)
+    dataset, plans, checkpoint = _check_identity(model, checkpoint, args.fold, features_only=getattr(args, "features_only", False))
     if not str(dataset.get("name", "")).startswith("Dataset501") and "Dataset501" not in str(model.parent):
         raise ValueError("Dataset501 identity not established by model directory or dataset.json")
     image_map = collect(images, input_channel=True)
@@ -444,8 +488,22 @@ def _diagnostic_feature(raw_path, predictor, stage, selected_slice=None, interme
         captured.clear()
 
 
-def resolve_external_trainer(finder, trainer_name=TRAINER):
+def resolve_external_trainer(finder, trainer_name=TRAINER, extension_dir=None):
     """Use nnU-Net's temporary external import path and reject namesakes."""
+    if extension_dir is not None:
+        import inspect
+        extension = resolved(extension_dir)
+        expected = extension / (trainer_name + ".py")
+        if trainer_name not in SUPPORTED_TRAINERS + FEATURE_TRAINERS or trainer_name == STANDARD_TRAINER:
+            raise ValueError("unsupported external Trainer")
+        if not expected.is_file() or os.environ.get("nnUNet_extTrainer") != str(extension):
+            raise ValueError("external Trainer directory/file mismatch")
+        discovered = finder(trainer_name)
+        if (not isinstance(discovered, type) or discovered.__name__ != trainer_name
+                or discovered.__module__ != trainer_name
+                or resolved(inspect.getfile(discovered)) != expected):
+            raise ValueError("external Trainer exact class file identity mismatch")
+        return discovered
     if trainer_name not in SUPPORTED_TRAINERS:
         raise ValueError("unsupported Trainer")
     discovered = finder(trainer_name)
@@ -486,14 +544,17 @@ def _predictor(info, args):
         architecture = info["plans"]["configurations"]["2d"].get("architecture", {})
         if architecture.get("network_class_name") != "dynamic_network_architectures.architectures.unet.PlainConvUNet":
             raise ValueError("standard Trainer requires exact plans PlainConvUNet architecture")
-    discovered = resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name)
+    extension = getattr(args, "trainer_extension_dir", None)
+    if trainer_name in FEATURE_TRAINERS and extension is None:
+        raise ValueError("added Trainer requires explicit --trainer-extension-dir")
+    if extension is not None:
+        if not getattr(args, "features_only", False):
+            raise ValueError("external source override requires --features-only")
+        os.environ["nnUNet_extTrainer"] = str(resolved(extension))
+    discovered = resolve_external_trainer(recursive_find_trainer_class_by_name, trainer_name, extension)
     metadata = torch.load(info["checkpoint"], map_location="cpu", weights_only=False, mmap=True)
     try:
-        if metadata.get("trainer_name") != trainer_name or metadata.get("init_args", {}).get("configuration") != "2d":
-            raise ValueError("checkpoint Trainer/configuration mismatch")
-        fold_value = metadata.get("init_args", {}).get("fold")
-        if fold_value is not None and str(fold_value) != "0":
-            raise ValueError("checkpoint fold mismatch")
+        validate_checkpoint_identity(metadata, info["model"], strict=trainer_name in FEATURE_TRAINERS)
     finally:
         del metadata
     predictor = nnUNetPredictor(tile_step_size=0.5, use_gaussian=True, use_mirroring=False,
@@ -503,11 +564,42 @@ def _predictor(info, args):
                                                     checkpoint_name=info["checkpoint"].name)
     if predictor.trainer_name != trainer_name or len(predictor.configuration_manager.patch_size) != 2:
         raise ValueError("loaded Trainer/configuration identity mismatch")
-    _network_kind(predictor.network, trainer_name)
+    if trainer_name in FEATURE_TRAINERS:
+        from dynamic_network_architectures.building_blocks.plain_conv_encoder import PlainConvEncoder
+        encoder = getattr(predictor.network, "encoder", None)
+        if type(encoder) is not PlainConvEncoder or len(encoder.stages) != len(encoder.output_channels):
+            raise ValueError("unsupported actual runtime encoder stages")
+        validate_runtime_encoder(predictor.network, trainer_name, predictor.configuration_manager.configuration)
+        _original_feature_stages(predictor.network, predictor.configuration_manager.patch_size)
+    else:
+        _network_kind(predictor.network, trainer_name)
     if trainer_name in (ORIGINAL_TRAINER, STANDARD_TRAINER):
         if predictor.network.decoder.deep_supervision is not False:
             raise ValueError("original U-Net inference must return the main output with deep supervision disabled")
+    if extension is not None:
+        info["trainer_source"] = str(resolved(extension) / (trainer_name + ".py"))
     return predictor
+
+
+def validate_runtime_encoder(network, trainer, configuration):
+    encoder = network.encoder
+    architecture = configuration.get("architecture", {}).get("arch_kwargs", {})
+    expected = architecture.get("n_stages")
+    if trainer == "nnUNetTrainerPlainConvDepthTopK10EarlyStopping":
+        last = configuration.get("encoder_last_stage")
+        if type(last) is not int:
+            raise ValueError("Depth configuration lacks exact encoder_last_stage")
+        expected = last + 1
+    elif trainer == "nnUNetTrainerUPerNetNoStage7TopK10EarlyStopping":
+        expected = 7
+    if type(expected) is not int or len(encoder.stages) != expected:
+        raise ValueError("actual runtime encoder stage count differs from declared configuration")
+    if len(encoder.output_channels) != expected or len(encoder.strides) != expected:
+        raise ValueError("actual runtime encoder metadata mismatch")
+    if trainer == "nnUNetTrainerUPerNetSelectedStagesTopK10EarlyStopping":
+        selected = configuration.get("upernet_feature_indices")
+        if selected != [2, 3, 4, 5] or tuple(getattr(network, "selected_feature_indices", ())) != tuple(selected):
+            raise ValueError("actual selected stages differ from exact s2345 plans")
 
 
 def _network_kind(network, trainer_name):
@@ -842,8 +934,8 @@ def create_report(info, predictor, declaration):
 
     require_simpleitk_reader(info["plans"])
     trainer_name = info["model"].name.split("__")[0]
-    kind = _network_kind(predictor.network, trainer_name)
-    if kind == "plain_unet":
+    kind = "encoder_only" if trainer_name in FEATURE_TRAINERS else _network_kind(predictor.network, trainer_name)
+    if kind in ("plain_unet", "encoder_only"):
         stage, intermediate_stage = _original_feature_stages(
             predictor.network, predictor.configuration_manager.patch_size)
     else:
@@ -874,7 +966,10 @@ def create_report(info, predictor, declaration):
                    if kind == "plain_unet" and declaration is None else
                    "Diagnostic features: specified checkpoint; saved prediction source USER CONFIRMED (user statement only)."
                    if kind == "plain_unet" else None)
-    if kind == "plain_unet":
+    if info.get("features_only"):
+        source_note = "Diagnostic checkpoint features; saved prediction weights UNKNOWN"
+        pass  # No diagram claim for feature backfill, including changed decoders.
+    elif kind == "plain_unet":
         patch_size = predictor.configuration_manager.patch_size
         _plain_unet_overview_figure(predictor.network, patch_size, stage,
                                     intermediate_stage, info["output"] / "architecture_overview.png")
@@ -892,12 +987,17 @@ def create_report(info, predictor, declaration):
     title = ("Dataset501 official nnU-Net 2D PlainConvUNet: fold 0 single-fold validation report"
              if kind == "plain_unet" else
              "Dataset501 official nnU-Net 2D UPerNet TopK10 EarlyStopping: fold 0 single-fold validation report")
-    source_line = _source_statement(trainer_name, info["checkpoint"].name, declaration)
+    source_line = ("Saved prediction provenance: UNKNOWN; checkpoint is diagnostic only. Architecture diagrams skipped."
+                   if info.get("features_only") else _source_statement(trainer_name, info["checkpoint"].name, declaration))
+    if kind == "encoder_only":
+        title = "Dataset501 real external Trainer encoder diagnostics: " + trainer_name
     txt = [title, "Trainer: " + trainer_name,
            "This is not five-fold OOF or a clinical conclusion.",
+           "Real Trainer source: " + info.get("trainer_source", "existing strict adapter"),
+           "Metrics mode: saved values reused; no metric export or count recomputation." if info.get("features_only") else "Metrics mode: ordinary full report.",
            f"Model directory: {info['model']}", f"Checkpoint: {info['checkpoint']}",
            f"Checkpoint SHA256: {_hash_file(info['checkpoint'])}",
-           f"Full-set geometry verified: {info['geometry_count']} of {len(info['rows'])} metrics-covered cases (DWI, GT, saved prediction; size, spacing, origin, direction).",
+           f"Geometry scope: {'selected frozen cases only' if info.get('features_only') else 'full set'}; verified {info['geometry_count']} of {len(info['rows'])} metrics-covered cases (DWI, GT, saved prediction; size, spacing, origin, direction).",
            "Reader/axis contract: plans image_reader_writer=SimpleITKIO; 3D GetArrayFromImage z/y/x.",
            source_line,
            f"Historical saved-prediction TTA status (user supplied, not independently verified): {info.get('historical_tta', 'unknown')}; original statement above may contain details.",
@@ -905,7 +1005,7 @@ def create_report(info, predictor, declaration):
            f"Feature: mean(abs(channel)) at final encoder stage {stage}; native 64x64 stage {intermediate_stage}; bilinear upsample per patch; Gaussian overlap mean; inverse padding/resample/crop/transpose.",
            "Native channels: fixed uniformly spaced IDs, at most eight per actual layer; final and intermediate encoder features share one local window containing the fixed representative original slice center (first displayed slice in legacy mode); nearest pixel display. They are not full-image maps or lesion probabilities. Same column across layers has no guaranteed semantic match.",
            "Summary display: DWI and feature magnitude each use per-slice 1st-99th percentile normalization to [0,1]; constant maps become zero; DWI+feature overlay alpha=0.48. Intensities not comparable across cases. TP green, FP red, FN blue.",
-            *(["Original PlainConvUNet architecture: architecture_overview.png shows the module flow; architecture_detail.png separates encoder, decoder and output-head panels. Both use loaded network metadata; summary.png contains case comparisons only."] if kind == "plain_unet" else []),
+            *(["Original PlainConvUNet architecture: architecture_overview.png shows the module flow; architecture_detail.png separates encoder, decoder and output-head panels. Both use loaded network metadata; summary.png contains case comparisons only."] if kind == "plain_unet" and not info.get("features_only") else []),
            "Native-channel display: each channel at its actual native CxHxW independently uses (value-min)/(max-min) to [0,1]; constant channels display uniformly at zero. Shared coolwarm blue/red means relative low/high only, not negative/positive. Colors cannot compare absolute intensity across channels or cases and are not lesion probabilities.",
            "Encoder stages: all actual encoder.stages outputs; 0-based; same forward/slice/window as both native samples. Mean(abs(channel)), immediate 2D reduction. Input is the real padded model-input window. Model normalization: nnU-Net plans preprocessor; display normalization: finite-only 1st-99th percentiles per layer/window. Invalid values display zero with counts/status; constant/all-invalid maps display zero. Native grids/nearest are not original-space alignment, attention, Grad-CAM, saved prediction replay or lesion probability. Independent display normalization prevents absolute layer/case intensity comparison.",
            "Output: main PNGs only; no PPT directory, slide preview, layout_manifest or pagination.",
@@ -942,6 +1042,11 @@ def main(argv=None):
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--selection-json", type=Path, help="shared frozen comparison manifest")
+    parser.add_argument("--final-h2-only", action="store_true", help="explicit user final H2 export policy")
+    parser.add_argument("--diagnostic-current-checkpoint", action="store_true", help="CURRENT DIAGNOSTIC weights only; standalone final feature jobs only")
+    parser.add_argument("--existing-report", type=Path, help="selected original report association; not checkpoint provenance proof")
+    parser.add_argument("--features-only", action="store_true", help="frozen selected-case diagnostics only; no metrics export/count recomputation or diagrams")
+    parser.add_argument("--trainer-extension-dir", type=Path, help="exact real external Trainer source directory (diagnostics only)")
     parser.add_argument("--check", action="store_true", help="metadata only; no model or real-image loading")
     parser.add_argument("--prediction-checkpoint-declaration", help="user statement about saved-mask checkpoint provenance (official or standalone); required for official UPerNet")
     parser.add_argument("--confirm-prediction-checkpoint", action="store_true", help="explicit user confirmation for standard/original official Trainer or standalone saved-mask checkpoint provenance; requires declaration")
@@ -952,12 +1057,18 @@ def main(argv=None):
     parser.add_argument("--allow-pending", action="store_true", help="explicitly allow pending standalone checkpoint/manifest")
     args = parser.parse_args(argv)
     try:
+        if args.diagnostic_current_checkpoint:
+            from standalone_h2former_report import validate_diagnostic_current_mode
+            validate_diagnostic_current_mode(args)
         if args.source == "standalone-h2former":
             if args.confirm_prediction_checkpoint != bool(args.prediction_checkpoint_declaration):
                 raise ValueError("user confirmation requires both --confirm-prediction-checkpoint and --prediction-checkpoint-declaration")
             from standalone_h2former_report import run
             return run(args)
+        if args.features_only and not args.selection_json:
+            raise ValueError("--features-only requires frozen --selection-json")
         info = inspect_sources(args)
+        info["features_only"] = args.features_only
         if args.check:
             print(json.dumps({"status": "METADATA ONLY; geometry, checkpoint content and provenance not verified",
                               "cases": len(info["rows"]), "selected": report_groups(info, select_cases),
@@ -976,7 +1087,11 @@ def main(argv=None):
         if info["model"].name.startswith(TRAINER + "__") and not args.prediction_checkpoint_declaration:
             raise ValueError("UPerNet full report requires --prediction-checkpoint-declaration; metadata-only --check is available")
         require_simpleitk_reader(info["plans"])
-        info["geometry_count"] = verify_full_geometry(info)
+        geometry_info = info
+        if args.features_only:
+            selected = {e["case_id"] for e in info["selection"]["entries"]}
+            geometry_info = dict(info, rows={cid: info["rows"][cid] for cid in selected})
+        info["geometry_count"] = verify_full_geometry(geometry_info)
         verify_selection(info)
         predictor = _predictor(info, args)
         output = info["output"]
@@ -990,21 +1105,29 @@ def main(argv=None):
             create_report(staged_info, predictor, args.prediction_checkpoint_declaration)
             with (work / "report.txt").open("a", encoding="utf-8") as handle:
                 handle.write(save_selection(info, work))
-            table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
-                                label_contract=lambda: binary_labels(info["dataset"]),
-                                check_geometry=check_geometry, geometry_verified=True)
-            table_text = export_table(table, work)
-            with (work / "report.txt").open("a", encoding="utf-8") as handle:
-                handle.write(table_text)
-            required = ["encoder_stages_heatmap.png", "architecture_overview.png", "metrics_table.csv", "metrics_table.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
-            if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)):
-                required.extend(("architecture_overview.png", "architecture_detail.png"))
-            if not all((work / name).is_file() for name in required):
-                raise ValueError("report output incomplete")
-            from report_visuals import validate_visual_outputs
-            families=["summary","encoder_stages","feature_channels","feature_channels_64x64","architecture_overview","metrics_table"]
-            if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)): families.append("architecture_detail")
-            validate_visual_outputs(work,families)
+            if args.features_only:
+                required = ["encoder_stages_heatmap.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
+                families = ["summary", "encoder_stages", "feature_channels", "feature_channels_64x64"]
+                from report_visuals import validate_visual_outputs
+                if not all((work / name).is_file() for name in required):
+                    raise ValueError("feature output incomplete")
+                validate_visual_outputs(work, families)
+            else:
+                table = build_table(info["rows"], info["summary"], info["predictions"], info["labels"],
+                                    label_contract=lambda: binary_labels(info["dataset"]),
+                                    check_geometry=check_geometry, geometry_verified=True)
+                table_text = export_table(table, work)
+                with (work / "report.txt").open("a", encoding="utf-8") as handle:
+                    handle.write(table_text)
+                required = ["encoder_stages_heatmap.png", "architecture_overview.png", "metrics_table.csv", "metrics_table.png", "summary.png", "feature_channels.png", "feature_channels_64x64.png", "report.txt"]
+                if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)):
+                    required.extend(("architecture_overview.png", "architecture_detail.png"))
+                if not all((work / name).is_file() for name in required):
+                    raise ValueError("report output incomplete")
+                from report_visuals import validate_visual_outputs
+                families=["summary","encoder_stages","feature_channels","feature_channels_64x64","architecture_overview","metrics_table"]
+                if (info["model"].name.split("__")[0] in (ORIGINAL_TRAINER, STANDARD_TRAINER)): families.append("architecture_detail")
+                validate_visual_outputs(work,families)
             check_selection_output(info, work)
             protected_output(output, (info["model"], *info["images"].values(),
                              *info["labels"].values(), *info["predictions"].values(),
