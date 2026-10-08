@@ -108,7 +108,12 @@ def _source_path(raw_root: Path, case_id: str) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    import sys
+    command = list(sys.argv[1:] if argv is None else argv)
+    if any(arg == '--preprocessed-root' or arg.startswith('--preprocessed-root=') for arg in command):
+        from standalone_nnunet2d.source_space_evaluation import main as prepared_main
+        return prepared_main(command)
+    arguments = _parser().parse_args(command)
     _, checkpoint_metadata = _read_checkpoint(arguments.checkpoint)
     run_state, alignment_evidence = validate_checkpoint_alignment_metadata(
         checkpoint_metadata
