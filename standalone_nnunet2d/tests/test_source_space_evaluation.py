@@ -557,3 +557,90 @@ def test_b3_properties_changed_after_case_record_rejected(tmp_path, monkeypatch)
     monkeypatch.setattr(ev, 'write_json', changed)
     with pytest.raises(ValueError, match='changed'): ev.main(args)
     assert ev.read_json(tmp_path / 'out/prediction_manifest.json')['status'] == 'failed'
+
+
+@pytest.fixture
+def serialized_training_config(tmp_path, monkeypatch):
+    from standalone_nnunet2d.formal_train import build_formal_config, write_resolved_config
+    from standalone_nnunet2d.training.formal_checkpoint import FormalTrainerState, save_formal_checkpoint
+    from standalone_nnunet2d.training.official_config import OfficialTrainerSchedule, make_official_optimizer
+
+    args, md, _, _ = fixture_run(tmp_path, monkeypatch)
+    config = build_formal_config(fold=0, epochs=1000, schedule=OfficialTrainerSchedule(),
+                                model_name='h2former', optimizer_name='adamw')
+    config.update(md['resolved_config'])
+    # Mixed nested sequences must normalize recursively without sorting arrays.
+    config['schedule']['nested_sequences'] = ({'axes': [(0, 1), (1, 0)]},)
+    model = torch.nn.Conv2d(1, 2, 1)
+    optimizer = make_official_optimizer(model, model_name='h2former', optimizer_name='adamw')
+    checkpoint = Path(args[1])
+    save_formal_checkpoint(model, optimizer, checkpoint, FormalTrainerState(10, 2500, .7, 0, .8, 10),
+                           config, rng_state={}, checkpoint_root=checkpoint.parent)
+    sidecar = checkpoint.parent / 'resolved_config.json'
+    write_resolved_config(sidecar, config)
+    return ev._parser().parse_args(args), config, sidecar
+
+
+def test_contract_accepts_real_saver_tuple_list_config(serialized_training_config):
+    args, config, sidecar = serialized_training_config
+    payload, _ = ev.read_formal_payload(args.checkpoint)
+    saved = payload['metadata']['resolved_config']
+    decoded = ev.read_json(sidecar)
+    assert isinstance(saved['optimizer']['betas'], tuple)
+    for key in ('patch_size', 'rotation_radians', 'mirror_axes', 'nested_sequences'):
+        assert isinstance(saved['schedule'][key], tuple)
+        assert isinstance(decoded['schedule'][key], list)
+    assert isinstance(saved['schedule']['nested_sequences'][0]['axes'][0], tuple)
+    assert saved != decoded
+    result = ev._contract(args)
+    assert result[2] == config  # Normalization must not mutate the checkpoint config.
+    assert result[3] == ('val0',)
+    assert result[-1][sidecar.resolve()] == ev.sha256(sidecar)
+
+
+@pytest.mark.parametrize('field_path,value', [
+    (('optimizer', 'lr'), .002),
+    (('optimizer', 'betas'), [.8, .999]),
+    (('schedule', 'patch_size'), [256, 512]),
+    (('schedule', 'rotation_radians'), [-1., 1.]),
+    (('schedule', 'mirror_axes'), [1, 0]),
+    (('schedule', 'nested_sequences'), [{'axes': [[1, 0], [0, 1]]}]),
+    (('source_identity', 'plans_sha256'), 'b' * 64),
+    (('source_identity', 'source_version'), 'different'),
+    (('initialization_provenance', 'sha256'), 'b' * 64),
+])
+def test_contract_rejects_real_saver_config_difference(serialized_training_config, field_path, value):
+    args, _, sidecar = serialized_training_config
+    config = ev.read_json(sidecar)
+    target = config
+    for key in field_path[:-1]:
+        target = target[key]
+    target[field_path[-1]] = value
+    sidecar.write_text(json.dumps(config), encoding='utf-8')
+    with pytest.raises(ValueError, match='resolved_config.json conflicts'):
+        ev._contract(args)
+    assert not args.output_root.exists()
+
+
+@pytest.mark.parametrize('field', ['optimizer', 'schedule', 'source_identity'])
+def test_contract_rejects_real_saver_missing_config_field(serialized_training_config, field):
+    args, _, sidecar = serialized_training_config
+    config = ev.read_json(sidecar)
+    del config[field]
+    sidecar.write_text(json.dumps(config), encoding='utf-8')
+    with pytest.raises(ValueError, match='resolved_config.json conflicts'):
+        ev._contract(args)
+
+
+def test_contract_does_not_stringify_non_json_config(serialized_training_config):
+    from standalone_nnunet2d.formal_train import write_resolved_config
+
+    args, _, sidecar = serialized_training_config
+    payload, _ = ev.read_formal_payload(args.checkpoint)
+    config = payload['metadata']['resolved_config']
+    config['schedule']['unsupported'] = b'not-json'
+    torch.save(payload, args.checkpoint)
+    write_resolved_config(sidecar, config)
+    assert ev.read_json(sidecar)['schedule']['unsupported'] == str(b'not-json')
+    with pytest.raises((TypeError, ValueError)):
+        ev._contract(args)

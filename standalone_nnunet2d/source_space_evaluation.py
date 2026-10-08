@@ -267,7 +267,8 @@ def _contract(args):
     if sidecar.is_file():
         sidecar_config, digest = _stable_read(sidecar, read_json)
         metadata_hashes[sidecar.resolve()] = digest
-        if sidecar_config != cfg:
+        # JSON sidecars encode checkpoint tuples as arrays, including nested sequences.
+        if json.loads(json.dumps(sidecar_config, allow_nan=False)) != json.loads(json.dumps(cfg, allow_nan=False)):
             raise ValueError('training resolved_config.json conflicts with checkpoint config')
     provenance = cfg.get('initialization_provenance')
     validate_initialization_provenance(provenance)
