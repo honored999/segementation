@@ -1,0 +1,16 @@
+{
+  "raw_root": "D:\\experiment_data\\nnUNet_raw",
+  "preprocessed_root": "D:\\experiment_data\\nnUNet_preprocessed",
+  "results_parent": "D:\\experiment_outputs\\nnunet_exclude15_AB_v1",
+  "pretrained_checkpoint": "D:\\pretrained\\ISLES\\checkpoint_best.pth",
+  "pretrained_plans": "D:\\pretrained\\ISLES\\nnUNetPlans.json",
+  "pretrained_expected_bytes": 370907859,
+  "gpu": "0",
+  "trainer": "nnUNetTrainerTopK10EarlyStopping",
+  "excluded_cases": [],
+  "source_hashes": {
+    "nnUNetTrainerEarlyStopping.py": "09665ac4e7b242f01ca0706614c4f10a7a2ad6802adadbcbd191faa415fe2a86",
+    "nnUNetTrainerTopK10.py": "d1f4d4a3af00e11c6938d4163b55c499374ee375bb766e20ddb7b170b4458b99",
+    "nnUNetTrainerTopK10EarlyStopping.py": "2951972bedd3e5379597dd4fd9527ea2e614171061153747cde46532fd9ad64a"
+  }
+}
