@@ -81,10 +81,10 @@ def resource_check(gpu):
     return stats
 
 
-def verify(config, arm, seed):
+def verify(config, arm, seed, cv70_fold=None, config_path=None):
     raw = Path(config["raw_root"]).resolve()
     prep = Path(config["preprocessed_root"]).resolve()
-    result = Path(config["results_parent"]).resolve() / f"seed_{seed}" / arm
+    result = Path(config["results_parent"]).resolve() / f"seed_{seed}" / (arm if cv70_fold is None else f"fold_{cv70_fold}")
     checkpoint = Path(config["pretrained_checkpoint"]).resolve()
     if result.exists():
         raise ValueError(f"Run directory exists, refusing overwrite/resume: {result}")
@@ -114,7 +114,22 @@ def verify(config, arm, seed):
     for filename, expected in config["source_hashes"].items():
         if hash_file(ROOT / "trainers" / filename) != expected:
             raise ValueError(f"Trainer snapshot changed: {filename}")
-    train, selection, evaluation = memberships(original, config["excluded_cases"], arm)
+    if cv70_fold is None:
+        train, selection, evaluation = memberships(original, config["excluded_cases"], arm)
+    else:
+        from cv70 import load_protocol, resolve_protocol_path, protect_output
+        if type(cv70_fold) is not int or not 0 <= cv70_fold <= 4:
+            raise ValueError("CV70 fold must be 0..4")
+        if config["trainer"] != "nnUNetTrainerTopK10EarlyStopping":
+            raise ValueError("CV70 requires existing TopK10EarlyStopping")
+        expected_sources = read_json(ROOT / "experiment_config.example.json")["source_hashes"]
+        if config["source_hashes"] != expected_sources:
+            raise ValueError("CV70 Trainer snapshot hash contract differs")
+        cv_path = resolve_protocol_path(config, config_path)
+        protect_output(result, (cv_path, config_path or ROOT / "experiment_config.json"))
+        protocol = load_protocol(cv_path, original)
+        fold = protocol["folds"][cv70_fold]
+        train, selection, evaluation = fold["train"], fold["val"], fold["val"]
     protected_hashes = {str(p): hash_file(p) for p in paths.values()}
     return result, train, selection, evaluation, protected_hashes
 
@@ -135,18 +150,26 @@ def bind_split(trainer, train, val, phase):
     trainer.do_split = MethodType(fixed_split, trainer)
 
 
-def export_metrics(summary_path, evaluation, selection, output):
+def export_metrics(summary_path, evaluation, selection, output, cohort_label="evaluation19"):
     summary = read_json(summary_path)
     records = summary["metric_per_case"]
-    by_id = {Path(r["prediction_file"]).name.removesuffix(".nii.gz"): r["metrics"]["1"] for r in records}
+    from cv70 import case_id
+    by_id = {case_id(r["prediction_file"]): r["metrics"]["1"] for r in records}
     if len(by_id) != len(records) or set(by_id) != set(evaluation):
-        raise ValueError("Evaluation summary does not contain exactly the original 19 held-out cases")
+        raise ValueError("Evaluation summary does not contain exactly the expected held-out cohort")
     for case, metric in by_id.items():
         if not math.isfinite(float(metric["Dice"])):
             raise ValueError(f"Nonfinite Dice: {case}")
-    with (output / "evaluation19_case_metrics.csv").open("w", encoding="utf-8-sig", newline="") as f:
+    if cohort_label == "evaluation14":
+        from cv70 import metric_values
+        for metric in by_id.values():
+            metric_values({"dice_0_to_1": metric["Dice"], "IoU_0_to_1": metric["IoU"],
+                           "TP_voxels": metric["TP"], "FP_voxels": metric["FP"], "FN_voxels": metric["FN"]})
+    elif cohort_label != "evaluation19":
+        raise ValueError("Unexpected evaluation cohort label")
+    with (output / (cohort_label + "_case_metrics.csv")).open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["case_id", "dice_0_to_1", "IoU_0_to_1", "TP_voxels", "FP_voxels", "FN_voxels", "selection17_member"])
+        writer.writerow(["case_id", "dice_0_to_1", "IoU_0_to_1", "TP_voxels", "FP_voxels", "FN_voxels", "selection14_member" if cohort_label == "evaluation14" else "selection17_member"])
         for case in sorted(evaluation):
             metric = by_id[case]
             writer.writerow([case, metric["Dice"], metric["IoU"], metric["TP"], metric["FP"], metric["FN"], case in selection])
@@ -154,21 +177,33 @@ def export_metrics(summary_path, evaluation, selection, output):
              "secondary_remaining17_dice": sum(by_id[c]["Dice"] for c in selection)/len(selection),
              "evaluation_cases": evaluation, "selection_cases": selection,
              "experiment_class": "exploratory; selected from earlier OOF results"}
+    if cohort_label == "evaluation14":
+        from cv70 import EXPERIMENT_CLASS
+        means = {"primary_validation14_dice": sum(by_id[c]["Dice"] for c in evaluation)/14,
+                 "evaluation_cases": evaluation, "selection_cases": selection, "experiment_class": EXPERIMENT_CLASS}
     (output / "evaluation_summary.json").write_text(json.dumps(means, indent=2), encoding="utf-8")
     return means
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=("A", "B"), required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--arm", choices=("A", "B"))
+    mode.add_argument("--cv70-fold", type=int, choices=range(5))
+    parser.add_argument("--config", type=Path, default=ROOT / "experiment_config.json")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args()
     if args.seed < 0 or args.seed >= 2**32:
         parser.error("Seed must be between 0 and 2**32-1")
-    config = read_json(ROOT / "experiment_config.json")
-    result, train, selection, evaluation, original_hashes = verify(config, args.arm, args.seed)
-    print(f"ARM={args.arm}; seed={args.seed}; train={len(train)}; checkpoint selection={len(selection)}; final evaluation={len(evaluation)}")
+    config = read_json(args.config)
+    result, train, selection, evaluation, original_hashes = verify(config, args.arm, args.seed, args.cv70_fold, args.config)
+    cv_protocol = None
+    if args.cv70_fold is not None:
+        from cv70 import load_protocol, resolve_protocol_path, config_digest, EXPERIMENT_CLASS, PLANS_POLICY
+        cv_path = resolve_protocol_path(config, args.config)
+        cv_protocol = load_protocol(cv_path, read_json(ROOT / "original_splits.json"))
+    print(f"ARM={args.arm}; fold={args.cv70_fold}; seed={args.seed}; train={len(train)}; checkpoint selection={len(selection)}; final evaluation={len(evaluation)}")
     print("RESULT_ROOT", result)
     print("PRETRAIN", config["pretrained_checkpoint"])
     if args.check_only:
@@ -197,6 +232,13 @@ def main():
                 "pretrained_sha256": hash_file(config["pretrained_checkpoint"]),
                 "resources_at_start": resources, "status": "STARTED",
                 "randomness_limit": "Main-process RNG seeded; official nondeterministic augmentation workers and CUDA remain nondeterministic. Repeat paired runs; not bitwise reproducibility."}
+    if cv_protocol is not None:
+        protocol.update({"fold": args.cv70_fold, "experiment_class": EXPERIMENT_CLASS,
+                         "plans_policy": PLANS_POLICY, "ranking_provenance": cv_protocol["ranking_source"],
+                         "cohort_source_protocol_sha256": cv_protocol["protocol_sha256"],
+                         "cv70_protocol_sha256": cv_protocol["protocol_sha256"],
+                         "cv70_protocol_file_sha256": hash_file(cv_path),
+                         "config_sha256": config_digest(config), "nnunetv2_version": "2.8.1"})
     protocol_path = result / "experiment_manifest.json"
     def save():
         protocol_path.write_text(json.dumps(protocol, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -204,12 +246,12 @@ def main():
     try:
         # nnU-Net's external lookup cleans up newly imported modules; retain this one first.
         trainer_module = importlib.import_module(config["trainer"])
-        trainer = get_trainer_from_args(DATASET, "2d", 0, config["trainer"], "nnUNetPlans", False, torch.device("cuda"))
+        trainer = get_trainer_from_args(DATASET, "2d", 0 if args.cv70_fold is None else args.cv70_fold, config["trainer"], "nnUNetPlans", False, torch.device("cuda"))
         source = verify_trainer_source(trainer, trainer_module, config["trainer"])
         protocol["trainer_source"] = str(source)
         if not nested(Path(trainer.output_folder).resolve(), result):
             raise ValueError("Trainer output escaped isolated result root")
-        bind_split(trainer, train, selection, "TRAINING_SELECTION17")
+        bind_split(trainer, train, selection, "TRAINING_SELECTION17" if cv_protocol is None else "TRAINING_SELECTION14")
         maybe_load_checkpoint(trainer, False, False, config["pretrained_checkpoint"])
         if trainer.current_epoch != 0:
             raise ValueError("Fine-tuning did not start at epoch 0")
@@ -227,11 +269,11 @@ def main():
         protocol["status"] = "TRAINED_EVALUATION_PENDING"
         save()
         trainer.load_checkpoint(str(best))
-        bind_split(trainer, train, evaluation, "EVALUATE_ORIGINAL19")
-        trainer.output_folder = str(Path(trainer.output_folder) / "evaluation_original19")
+        bind_split(trainer, train, evaluation, "EVALUATE_ORIGINAL19" if cv_protocol is None else "EVALUATE_VALIDATION14")
+        trainer.output_folder = str(Path(trainer.output_folder) / ("evaluation_original19" if cv_protocol is None else "evaluation_validation14"))
         Path(trainer.output_folder).mkdir(exist_ok=False)
         trainer.perform_actual_validation(False)
-        means = export_metrics(Path(trainer.output_folder) / "validation" / "summary.json", evaluation, selection, result)
+        means = export_metrics(Path(trainer.output_folder) / "validation" / "summary.json", evaluation, selection, result, cohort_label="evaluation19" if cv_protocol is None else "evaluation14")
         protocol["evaluation"] = means
         protocol["status"] = "COMPLETE"
         print("FULL_VOLUME_RESULT", json.dumps(means), flush=True)
@@ -241,6 +283,9 @@ def main():
         raise
     finally:
         changed = [p for p, h in original_hashes.items() if hash_file(p) != h]
+        if cv_protocol is not None:
+            if hash_file(cv_path) != protocol["cv70_protocol_file_sha256"] or config_digest(read_json(args.config)) != protocol["config_sha256"]:
+                changed.append("CV70 protocol/config")
         protocol["canonical_metadata_unchanged"] = not changed
         save()
         if changed:

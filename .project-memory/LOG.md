@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-11 - Selected70 five-fold exploratory launcher
+
+- Changed: retained existing15-exclusion A/B, added history-selected70-case protocol preparation and shared fivefold56train/14val mode; serial fresh ISLES-pretrained TopK10_ES runs0..4, guarded complete70-case full-volume aggregation. Original95 splits/raw data and byte-hashed Trainer snapshots remain untouched.
+- Validation: parent fresh newconda affected suite17PASS; asymmetric paper-F2 regression covered; actual source95 metadata ranked and private protocol prepared/checked. Independent read-only final review PASS after deployment documentation fix. No local model, checkpoint, image or training execution.
+- Result: branch-local engineering state only, not integrated into master. Private cohort/protocol/config ignored and excluded from publication; history-selected OOF remains exploratory development evidence, original95 plans statistics deliberately retained.
+- Next: after final review PASS publish same experiment branch, transfer private protocol/config to server, check all56/14 folds before training. Real CUDA/checkpoint/augmentation/full-volume runs remain server-validation pending.
+
 ## 2026-10-11 - Exploratory nnU-Net A/B package archived (branch-local)
 
 - Changed: versioned reusable A/B scripts, frozen Trainer snapshots, public metadata, configuration template and focused tests. Private configuration and patient splits remain ignored local files.

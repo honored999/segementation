@@ -14,3 +14,7 @@ seed_*/
 *.nii.gz
 experiment_manifest.json
 evaluation_summary.json
+
+experiment_config.cv70.json
+cv70_protocol.json
+oof70_summary.json
