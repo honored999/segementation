@@ -18,3 +18,12 @@
 - None for the Lite-UPerNet implementation.
 - Whole-repository `python -m pytest -q` still encounters six pre-existing
   `non_teacher_student_files` import-collection errors outside this task diff.
+
+## 2026-10-12 CKPD immediate actions (branch-local)
+
+1. Deploy the small CKPD package separately using docs/NNUNET_CKPD_SERVER_STEPS_ZH.md.
+2. Select and record the intended Dataset508 source checkpoint; confirm cohort independence and fixed source/target splits.
+3. Run bounded source-train calibration with host/GPU resource guards, then isolated Dataset501 fold-0 CKPD and same-weight full-tuning control.
+4. Evaluate original full-volume metrics and preserve per-case provenance. Fold-0 is development evidence, not five-fold OOF.
+
+Blockers to real-server evidence: source weight path and patient-cohort provenance are not verified locally; actual server data and CUDA execution are unavailable in this checkout.

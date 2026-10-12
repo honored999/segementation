@@ -1,0 +1,7 @@
+# Keep byte-bound CKPD source identities stable across Windows checkouts.
+nnunet_ext_trainers/ckpd.py text eol=lf
+nnunet_ext_trainers/nnUNetTrainerCKPDTopK10EarlyStopping.py text eol=lf
+nnunet_ext_trainers/tests/test_ckpd.py text eol=lf
+nnunet_ext_trainers/tests/test_trainer_ckpd.py text eol=lf
+tools/calibrate_nnunet_ckpd.py text eol=lf
+tools/tests/test_calibrate_nnunet_ckpd.py text eol=lf

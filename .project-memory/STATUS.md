@@ -33,3 +33,9 @@ Updated: 2026-09-21
 
 - Lite-UPerNet implementation is accepted. No real-data training, preflight,
   fold evaluation, or formal five-fold OOF evaluation has been run.
+
+## 2026-10-12 branch-local CKPD acceptance
+
+On codex/nnunet-ckpd-finetune (base 414cdac), the opt-in ordinary 2D Dataset501 CKPD Trainer and Dataset508 train-only calibration CLI are implemented. Encoder rank-4 adapters on four ASR-selected convolutions train with the full decoder; baseline TopK10/early stopping, SGD/PolyLR, nnUNetPlans, fixed splits and full-volume evaluation remain the experiment contract. Merged inference weights and same-environment training-state continuation are supported; augmentation queues are excluded.
+
+Fresh parent synthetic CPU validation: 51 passed; independent Level 3 review PASS. No real-data/CUDA/full-model training or formal evaluation. This is branch-local acceptance, not master integration. Source checkpoint for historical fine-tuning is unverified; use a same-checkpoint full-tuning control and independently verify cohort provenance.

@@ -28,3 +28,10 @@
   contracts; no production code or real-data run.
 - Result: design approved in conversation and pending written-spec review.
 - Next: create the implementation plan after user review.
+
+## 2026-10-12 - CKPD branch engineering accepted
+
+- Added opt-in external CKPD Trainer, source-train-only bounded calibrator, checkpoint contracts, tests and server runbooks in isolated codex/nnunet-ckpd-finetune based on 414cdac.
+- Fresh parent focused/affected CPU suite: 51 passed in 22.23s; independent Level 3 review PASS after fixing five initial blockers.
+- Production source/tests were delegated to leaf implementation/fixer workers; parent handled coordination and acceptance only.
+- No real data, CUDA calibration/training, production checkpoint or formal evaluation; raw data/splits and main checkout unchanged. Project-memory updates here are branch-local; master integration/push not performed.
