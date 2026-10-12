@@ -360,9 +360,12 @@ def _validate_source_checkpoint_metadata(args, plans: dict, dataset_json: dict, 
         if not isinstance(init_args.get("dataset_json"), dict) or _stable_json(init_args["dataset_json"]) != _stable_json(dataset_json):
             raise RuntimeError("source checkpoint dataset_json metadata differs from --dataset-json")
         dataset_name = plans_manager.dataset_name
+        declared_dataset_name = dataset_json.get("name")
         if (dataset_name != "Dataset508_ISLES2022DWI"
-                or dataset_json.get("name") != "Dataset508_ISLES2022DWI"):
-            raise RuntimeError("source checkpoint/plans/dataset.json must identify Dataset508_ISLES2022DWI")
+                or declared_dataset_name not in (None, "Dataset508_ISLES2022DWI")):
+            raise RuntimeError(
+                "source plans must identify Dataset508_ISLES2022DWI and any dataset.json name must agree"
+            )
         plans_name = plans_manager.plans_name
         if plans_name != "nnUNetPlansFrom501":
             raise RuntimeError("source plan identifier must be nnUNetPlansFrom501 for the prepared Dataset508 input")

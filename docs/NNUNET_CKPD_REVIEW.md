@@ -48,3 +48,13 @@ No local real data, production checkpoint/full model, CUDA execution or formal e
 Final pre-commit hygiene: removed one extra EOF LF from the Trainer and its test, with no logical changes; added .gitattributes LF rules for the six new Python paths to preserve byte identities on Windows. Parent performed only this minimal integration configuration plus coordination documents, not production Python/test implementation.
 
 Independent final hygiene re-review: PASS remains. Adding one LF to each cleaned file exactly reproduces its previously reviewed SHA256; the reviewer verified the six exact LF rules. No logical source changes or additional tests.
+
+## 2026-10-12 optional dataset name compatibility fix
+
+Server evidence: plans.dataset_name is Dataset508_ISLES2022DWI and plans_name is nnUNetPlansFrom501, but dataset.json omits name. Official nnU-Net 2.8.1 generate_dataset_json accepts dataset_name=None and writes name only if provided. Calibrator now allows an absent/null name while rejecting an explicit conflicting name; exact checkpoint metadata, plans identity and run-folder guards remain intact. No dataset JSON was modified.
+
+Three regression nodes: old code 2 failed / 1 passed; repaired calibrator file 10 passed. Fresh parent CPU calibration+CKPD helper+Trainer suite: 30 passed, 4 upstream warnings in 7.96s. Preflight CPU27%, RAM64% /6GiB available, GPU10% /1372 of6144MiB; pytest hides CUDA and uses one CPU thread. Independent focused review PASS; no real calibration/training.
+
+Frozen patch SHA256:
+- tools/calibrate_nnunet_ckpd.py: bfdc6bcc2e2fb4734a34923c8e8b75f91b54b20f846f0f32b120086db767c855
+- tools/tests/test_calibrate_nnunet_ckpd.py: ae9b50e3ca632a2e64b301fcd977861237da1cee4366a6e015608797719f81e1

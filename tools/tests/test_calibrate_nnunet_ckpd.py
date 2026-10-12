@@ -155,6 +155,39 @@ def test_source_checkpoint_fold_metadata_mismatch_fails_before_network_or_weight
     assert order == ["early_preflight"]
 
 
+
+@pytest.mark.parametrize("name_state", ["missing", None], ids=["missing", "null"])
+def test_source_checkpoint_accepts_absent_or_null_dataset_json_name(tmp_path, name_state):
+    args, plans, dataset_json = _fixture(tmp_path)
+    if name_state == "missing":
+        dataset_json.pop("name")
+    else:
+        dataset_json["name"] = None
+    args.dataset_json.write_text(json.dumps(dataset_json), encoding="utf-8")
+    checkpoint = torch.load(args.source_checkpoint, map_location="cpu", weights_only=False)
+    checkpoint["init_args"]["dataset_json"] = dataset_json
+    torch.save(checkpoint, args.source_checkpoint)
+
+    metadata = calibrator._validate_source_checkpoint_metadata(
+        args, plans, dataset_json, _FakePlansManager(plans))
+
+    assert metadata["source_dataset_name"] == "Dataset508_ISLES2022DWI"
+    assert metadata["source_plans_name"] == "nnUNetPlansFrom501"
+
+
+def test_source_checkpoint_rejects_conflicting_explicit_dataset_json_name(tmp_path):
+    args, plans, dataset_json = _fixture(tmp_path)
+    dataset_json["name"] = "Dataset999_Wrong"
+    args.dataset_json.write_text(json.dumps(dataset_json), encoding="utf-8")
+    checkpoint = torch.load(args.source_checkpoint, map_location="cpu", weights_only=False)
+    checkpoint["init_args"]["dataset_json"] = dataset_json
+    torch.save(checkpoint, args.source_checkpoint)
+
+    with pytest.raises(RuntimeError, match="must identify Dataset508_ISLES2022DWI"):
+        calibrator._validate_source_checkpoint_metadata(
+            args, plans, dataset_json, _FakePlansManager(plans))
+
+
 def test_calibration_output_rejects_raw_preprocessed_and_source_experiment_roots(tmp_path, monkeypatch):
     args, _plans, _dataset_json = _fixture(tmp_path)
     raw_root = tmp_path / "raw"

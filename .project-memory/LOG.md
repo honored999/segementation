@@ -35,3 +35,9 @@
 - Fresh parent focused/affected CPU suite: 51 passed in 22.23s; independent Level 3 review PASS after fixing five initial blockers.
 - Production source/tests were delegated to leaf implementation/fixer workers; parent handled coordination and acceptance only.
 - No real data, CUDA calibration/training, production checkpoint or formal evaluation; raw data/splits and main checkout unchanged. Project-memory updates here are branch-local; master integration/push not performed.
+
+## 2026-10-12 - CKPD optional dataset name fix
+
+- Server diagnostic confirmed valid Dataset508 plans with dataset.json name omitted. Corrected calibrator's optional-field guard without changing data or source identity contracts.
+- Leaf fixer added missing/null/conflicting-name regressions: RED 2 failures / 1 pass; GREEN calibrator 10 passed. Parent affected CPU suite 30 passed in7.96s; independent focused review PASS.
+- No production source/test edits by parent, no patient-data modifications or real calibration/training. State is branch-local, not master integration.
