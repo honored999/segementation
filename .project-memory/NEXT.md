@@ -27,3 +27,7 @@
 4. Evaluate original full-volume metrics and preserve per-case provenance. Fold-0 is development evidence, not five-fold OOF.
 
 Blockers to real-server evidence: source weight path and patient-cohort provenance are not verified locally; actual server data and CUDA execution are unavailable in this checkout.
+
+## 2026-10-13 CKPD immediate recovery
+
+Update the server worktree using fast-forward-only pull, then use the existing CKPD result root and --val --val_best to validate the saved best checkpoint. Do not restart training for this metadata compatibility issue. After validation, evaluate original full-volume metrics and compare with the same-source-checkpoint full-tuning control; cohort provenance and formal five-fold evidence remain distinct requirements.

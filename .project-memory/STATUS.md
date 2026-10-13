@@ -41,3 +41,7 @@ On codex/nnunet-ckpd-finetune (base 414cdac), the opt-in ordinary 2D Dataset501 
 Fresh parent synthetic CPU validation: 51 passed; independent Level 3 review PASS. No real-data/CUDA/full-model training or formal evaluation. This is branch-local acceptance, not master integration. Source checkpoint for historical fine-tuning is unverified; use a same-checkpoint full-tuning control and independently verify cohort provenance.
 
 - 2026-10-12 CKPD compatibility patch: source dataset.json name is optional as in official nnU-Net 2.8.1; absent/null accepted, explicit conflict rejected. Checkpoint metadata and plans/path identity guards remain. Fresh parent 30 synthetic CPU tests passed and independent focused review PASS; real server calibration/training still pending.
+
+## 2026-10-13 CKPD checkpoint compatibility
+
+Server reported calibration success and training completion; subsequent best-checkpoint validation was blocked by Python-only EMA scalar validation. Fixed compatibility with finite NumPy real scalars without altering checkpoint fields or training/selection semantics. Fresh parent affected CPU suite63 passed; focused independent review PASS. Real full-volume validation remains pending, and fold-0 evidence must remain separate from formal OOF. This state is branch-local.

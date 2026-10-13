@@ -305,6 +305,62 @@ def test_calibration_rejects_encoder_semantics_and_patch_size_mismatch(tmp_path,
         trainer._load_and_validate_calibration()
 
 
+
+def _standard_resume_metadata_fixture(best_ema=0.5, early_best=0.5):
+    from nnUNetTrainerCKPDTopK10EarlyStopping import nnUNetTrainerCKPDTopK10EarlyStopping as Trainer
+
+    trainer = object.__new__(Trainer)
+    trainer.num_epochs = 10
+    trainer.configuration_name = "2d"
+    trainer.fold = 0
+    trainer.grad_scaler = None
+    checkpoint = {
+        "trainer_name": Trainer.__name__,
+        "current_epoch": 0,
+        "logging": {},
+        "_best_ema": best_ema,
+        "init_args": {"configuration": "2d", "fold": 0},
+        "inference_allowed_mirroring_axes": None,
+        "early_stopping_state": {
+            "best_monitored_ema_dice": early_best,
+            "epochs_without_improvement": 0,
+            "triggered": False,
+        },
+        "grad_scaler_state": None,
+    }
+    return trainer, checkpoint
+
+
+@pytest.mark.parametrize("field", ["_best_ema", "best_monitored_ema_dice"])
+@pytest.mark.parametrize("value", [None, 0, 0.5, np.float32(0.5), np.float64(0.5)])
+def test_resume_metadata_accepts_finite_real_scalars_and_none(field, value):
+    from nnUNetTrainerCKPDTopK10EarlyStopping import nnUNetTrainerCKPDTopK10EarlyStopping as Trainer
+
+    trainer, checkpoint = _standard_resume_metadata_fixture()
+    if field == "_best_ema":
+        checkpoint["_best_ema"] = value
+    else:
+        checkpoint["early_stopping_state"]["best_monitored_ema_dice"] = value
+    Trainer._validate_standard_resume_metadata(trainer, checkpoint)
+
+
+@pytest.mark.parametrize("field", ["_best_ema", "best_monitored_ema_dice"])
+@pytest.mark.parametrize("value", [
+    True, np.bool_(True), np.nan, np.inf, -np.inf, "0.5", 0.5 + 0j,
+    np.array(0.5), np.array([0.5]), torch.tensor(0.5),
+])
+def test_resume_metadata_rejects_nonfinite_or_nonreal_ema_values(field, value):
+    from nnUNetTrainerCKPDTopK10EarlyStopping import nnUNetTrainerCKPDTopK10EarlyStopping as Trainer
+
+    trainer, checkpoint = _standard_resume_metadata_fixture()
+    if field == "_best_ema":
+        checkpoint["_best_ema"] = value
+    else:
+        checkpoint["early_stopping_state"]["best_monitored_ema_dice"] = value
+    with pytest.raises(RuntimeError, match="invalid"):
+        Trainer._validate_standard_resume_metadata(trainer, checkpoint)
+
+
 def test_checkpoint_resume_restores_next_optimizer_update_and_exports_plain_weights(tmp_path, monkeypatch):
     import json
     from nnunetv2.training.logging.nnunet_logger import MetaLogger
@@ -396,11 +452,17 @@ def test_checkpoint_resume_restores_next_optimizer_update_and_exports_plain_weig
 
     update(source)
     source.lr_scheduler.step()
+    source.logger.log("mean_fg_dice", np.float32(0.6), step=0)
+    source._best_ema = source.logger.get_value("ema_fg_dice", step=0)
+    source._early_stopping_best_ema = np.float64(0.59)
+    assert isinstance(source._best_ema, np.float32)
     checkpoint_path = tmp_path / "checkpoint_latest.pth"
     source.save_checkpoint(str(checkpoint_path))
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     assert all(".parametrizations.weight." not in key for key in checkpoint["network_weights"])
     assert set(checkpoint["network_weights"]) == baseline_keys
+    assert isinstance(checkpoint["_best_ema"], np.float32)
+    assert isinstance(checkpoint["early_stopping_state"]["best_monitored_ema_dice"], np.float64)
 
     # --val_best reloads checkpoint_best into the same adapted live Trainer.
     source.load_checkpoint(checkpoint_path)

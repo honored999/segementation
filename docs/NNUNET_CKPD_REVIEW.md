@@ -58,3 +58,11 @@ Three regression nodes: old code 2 failed / 1 passed; repaired calibrator file 1
 Frozen patch SHA256:
 - tools/calibrate_nnunet_ckpd.py: bfdc6bcc2e2fb4734a34923c8e8b75f91b54b20f846f0f32b120086db767c855
 - tools/tests/test_calibrate_nnunet_ckpd.py: ae9b50e3ca632a2e64b301fcd977861237da1cee4366a6e015608797719f81e1
+
+## 2026-10-13 NumPy EMA checkpoint compatibility fix
+
+Server reported training done after early stopping, followed by --val_best load failure at _best_ema metadata validation. Official validation computes np.nanmean and MetaLogger retains numeric scalar type; CKPD saves _best_ema unchanged. Validator now accepts finite numbers.Real scalars (including NumPy), still rejects bool/np.bool_, NaN/Inf and non-real containers or values. No saved fields, optimizer, early-stopping or checkpoint selection semantics changed; no real checkpoint edited.
+
+Leaf-fixer RED: 3 failing new regressions, 28 passing. GREEN affected Trainer file:40 passed. Fresh parent newconda CPU Trainer+early-stop+composed suite:63 passed,5 upstream warnings in26.95s. Preflight CPU19%,RAM58%/7GiB free,GPU12%/1028 of6144MiB; tests hid CUDA and used one CPU thread. Independent focused review PASS. Actual server full-volume validation still pending; recover using --val --val_best on the existing checkpoint, not continuation training.
+
+Frozen source SHA256: Trainer898c7db8e129df2285a9f030000dc60dab4fde8c574afdecc353bb3afc43d191; test9765e0275a2cce194245d2cb6b6970d02ff685c3d23e76c2b6c47cc9bc39ef61. Implementation/tests delegated; parent handled review, documentation and Git only.

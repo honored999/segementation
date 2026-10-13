@@ -102,3 +102,7 @@ nnUNetv2_train Dataset501_StrokeLesion 2d 0 ^
 ```
 
 必须同时带 `--val --val_best`；只有 `--val_best` 会进入训练。推理使用相同扩展目录和普通合并权重，详细命令见英文说明。
+
+## 6. 训练结束后的 NumPy EMA 加载兼容性
+
+若日志已显示 Training done，随后报 CKPD checkpoint _best_ema is invalid，旧校验可能拒绝官方 logger 保存的 NumPy 实数标量。更新 CKPD 工作树后，沿用原结果根目录和扩展目录，使用第 5 节的 --val --val_best 命令加载现有最佳权重进行验证。该恢复步骤不需要重新校准或重新训练，不修改 checkpoint 或原始数据。EMA pseudo Dice 仍是训练监控值，正式比较使用完整体积评估结果。

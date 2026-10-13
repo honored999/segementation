@@ -41,3 +41,9 @@
 - Server diagnostic confirmed valid Dataset508 plans with dataset.json name omitted. Corrected calibrator's optional-field guard without changing data or source identity contracts.
 - Leaf fixer added missing/null/conflicting-name regressions: RED 2 failures / 1 pass; GREEN calibrator 10 passed. Parent affected CPU suite 30 passed in7.96s; independent focused review PASS.
 - No production source/test edits by parent, no patient-data modifications or real calibration/training. State is branch-local, not master integration.
+
+## 2026-10-13 - CKPD NumPy EMA compatibility accepted
+
+- Fixed checkpoint scalar validation to accept finite Python/NumPy real values, preserving rejection of invalid types and values; no checkpoint/data rewrite or training semantics changes.
+- Real MetaLogger NumPy EMA save/live/fresh reload regressions reproduce old failures. Leaf RED3fail/28pass, GREEN40pass; fresh parent affected CPU63pass in26.95s; independent focused reviewPASS.
+- Server training completed but full-volume best validation is pending. Leaf owned all source/tests; parent updated branch-local coordination and Git. No master integration.

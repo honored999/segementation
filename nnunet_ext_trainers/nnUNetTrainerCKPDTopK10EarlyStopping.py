@@ -7,11 +7,13 @@ import hashlib
 import json
 import math
 import os
+from numbers import Real
 from pathlib import Path
 from typing import Mapping, Union
 
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_raw, nnUNet_results
 
+import numpy as np
 import torch
 from torch._dynamo import OptimizedModule
 from torch.nn.utils import parametrize
@@ -601,10 +603,14 @@ class nnUNetTrainerCKPDTopK10EarlyStopping(nnUNetTrainerTopK10EarlyStopping):
             raise RuntimeError("CKPD checkpoint logging state is malformed")
 
         def finite_or_none(value: object) -> bool:
-            return value is None or (
-                isinstance(value, (int, float)) and not isinstance(value, bool)
-                and math.isfinite(float(value))
-            )
+            if value is None:
+                return True
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+                return False
+            try:
+                return math.isfinite(float(value))
+            except (OverflowError, TypeError, ValueError):
+                return False
 
         if not finite_or_none(checkpoint["_best_ema"]):
             raise RuntimeError("CKPD checkpoint _best_ema is invalid")
