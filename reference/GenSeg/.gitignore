@@ -1,0 +1,7 @@
+checkpoint*
+wandb
+model_soups*
+soup_result
+*/__pycache__
+*.pth
+
