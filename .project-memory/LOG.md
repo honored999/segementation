@@ -1,5 +1,19 @@
 # Log
 
+## 2026-10-14 - GenSeg30 fold0 slice augmentation prepared (branch-local)
+
+- Changed: offline train-only conditional-GAN preparation and a separate
+  GenSeg30 EarlyStopping Trainer; adds exactly ceil(30% of training 2D slices),
+  retaining original patient IDs and untouched real validation/full-volume path.
+- Validation: parent fresh serial CPU synthetic and affected suite 74 passed; affected
+  EarlyStopping tests included (11); final independent 15-file snapshot review PASS.
+  Counts, provenance, source safety, checkpoints, QA and CLI guards covered.
+- Result: engineering preparation only, prepared for branch publication; no real-data generation,
+  server training or effect metrics. Requires original Blosc2 backend, fixed
+  Dataset501 fold0 split and explicit generated-image quality review.
+- Next: server compatibility preflight, train/export/QA, then matched A/B fold0.
+  Canonical master memory and baseline source/splits remain unchanged.
+
 ## 2026-10-14 - GenSeg reference source snapshot (branch-local)
 
 - Changed: downloaded 342 upstream source/config/documentation files under

@@ -33,3 +33,8 @@ Updated: 2026-09-21
 
 - Lite-UPerNet implementation is accepted. No real-data training, preflight,
   fold evaluation, or formal five-fold OOF evaluation has been run.
+
+## Branch-local GenSeg30 preparation (2026-10-14)
+
+- codex/genseg-reference contains a synthetic-validated offline GenSeg30 slice-pool workflow and separate plain EarlyStopping Trainer. Adds ceil(30% of training-only 2D slices), retaining patient-level fold0 grouping and real validation geometry.
+- Local engineering evidence: 74 combined synthetic and EarlyStopping tests passed; final independent 15-file snapshot PASS. Server compatibility, generated-image QA, training and quantitative benefit remain unverified. Original Blosc2 preprocessed backend required.

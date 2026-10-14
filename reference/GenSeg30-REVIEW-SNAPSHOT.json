@@ -1,0 +1,62 @@
+[
+  {
+    "path": "experiments/genseg30/cli.py",
+    "sha256": "a1fece0189ec201c41a12e2a7e4a1194788597259181b8eaf43e2db32a729420"
+  },
+  {
+    "path": "experiments/genseg30/contract.py",
+    "sha256": "914d63f5d5d148decfa4080b5567512ba490aa1e649fbbcc7ec65af46e9f6816"
+  },
+  {
+    "path": "experiments/genseg30/dataset.py",
+    "sha256": "979a9ff2750e6664c8a06eae0ec668df227b5a27f48b41ae5ee8d3ce0e9a9407"
+  },
+  {
+    "path": "experiments/genseg30/models.py",
+    "sha256": "583089af0dedd76d5f2483116e234247259781c4929ae6f09fe162f9f983d900"
+  },
+  {
+    "path": "experiments/genseg30/pipeline.py",
+    "sha256": "a3d9558e0b36d1cfb35fcff9d09be81a11a22f5b2537aea90c0a00d9440ae6c8"
+  },
+  {
+    "path": "experiments/genseg30/README.md",
+    "sha256": "3449c089633d18b0ede58bd3e96363c671933e06d364e114ceeafb2a8ea3a37f"
+  },
+  {
+    "path": "experiments/genseg30/tests/conftest.py",
+    "sha256": "f51353a3499d3abd5ad181ab5fe041ba89f708ef2b0287bc67754a1e4aa2e62d"
+  },
+  {
+    "path": "experiments/genseg30/tests/run_guarded.py",
+    "sha256": "48200a0b37a6e00ba9dd2e3c1092a42383f1edf4f07264f987a7740b3455f56b"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_cli.py",
+    "sha256": "2c4a99f0df5ceb51cfc17a3c136bfdf059b870474d29e07a09491e281b0ad495"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_contract.py",
+    "sha256": "bc4a4ccb2e30bf34b6735eaa9c966ebd36977e9d88588af72e64d16b25ff5247"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_models.py",
+    "sha256": "994541c298c2aea41bc8815d5f7ac7f00427dfe31c3668b59737ac4f7155a9fc"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_pipeline.py",
+    "sha256": "3029f5b987426b436801e806e4e94d10c3572e6811f73575aa894e6f5614f464"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_review_guards.py",
+    "sha256": "179be7d6783dc8b0647520a50b4b4d6e17ce5ab8a0307bbcada9ba0f30d61053"
+  },
+  {
+    "path": "experiments/genseg30/tests/test_trainer.py",
+    "sha256": "816a3f1551a64385e5eae485ec6aa8d65b1a5280ec781a450769da290950db81"
+  },
+  {
+    "path": "nnunet_ext_trainers/nnUNetTrainerGenSeg30EarlyStopping.py",
+    "sha256": "a2fbb2a6188729c29cd6642583b23fd48af9cf1e53670aa068814232e4b6b80b"
+  }
+]
