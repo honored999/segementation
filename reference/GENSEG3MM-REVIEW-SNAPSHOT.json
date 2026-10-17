@@ -1,0 +1,22 @@
+{
+  "baseline_commit": "909df3ec131d9ac323576428e5b206a05f4fd8f6",
+  "worktree": "C:\\Users\\Windows\\.codex\\worktrees\\genseg3mm-preview\\segementation",
+  "branch": "codex/genseg3mm-preview",
+  "files": {
+    "experiments/genseg3mm/__init__.py": "ee282e5b269a44275ad8a59eb46f0d4d43ab756f168896b5dd035fc4abedc03d",
+    "experiments/genseg3mm/cli.py": "47dabf923cb9fa5ce9251a673e64c0b5a12c57ee833931e319b3a018c3993436",
+    "experiments/genseg3mm/targets.py": "b24cec1c12a7471c70c22faba59141926168bc3df93a0675cb83b4cef2d2f2e7",
+    "experiments/genseg3mm/tests/test_cli.py": "84b65701535edbbdd80127634bf93abbd6c539888d42b848e1d4a31d54c6acfc",
+    "experiments/genseg3mm/tests/test_targets.py": "2eae4ea19d4597f232bd3f355b2d53690ffa70f1fc01632217450b86ee2c0fd1",
+    "reference/GENSEG3MM-PREVIEW-PLAN.md": "aa7018fc4219c00a501d0deda6246a8f9bfc91f0c475ae94ccf2784ec2b25074",
+    "reference/GENSEG3MM-RUNBOOK.md": "270b2a9e0e847c6d0537970f2e9b8f930a9a9c1344c8854b29ab5c43f2edd1f1"
+  },
+  "revision": 2,
+  "focused_validation": "15 passed, 4 existing SciPy deprecation warnings; CPU synthetic only",
+  "resource_preflight": {
+    "cpu_percent": 9.4,
+    "ram_percent": 66.8,
+    "gpu_percent": 12,
+    "vram_percent": 18.3
+  }
+}
