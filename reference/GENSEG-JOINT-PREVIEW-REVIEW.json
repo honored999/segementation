@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-18",
+  "baseline": "6bec68e922a0915016bbd41d01d88529974ae1fb",
+  "branch": "codex/genseg-reference",
+  "scope": "Completed current joint.pt -> four-panel inner61-only qualitative PNG preview; no training dataset export",
+  "review": "Independent Level3 PASS on final frozen three-file snapshot; hashes checked before/after",
+  "reviewer": "01a14df7-5c6e-78d0-8a21-2c156e579c37",
+  "profile": "Inherited model per platform; no LunaMax profile claim",
+  "tests": {
+    "worker_focused": "32 passed2.90s",
+    "worker_affected_joint": "105 passed17.63s",
+    "parent_final_focused": "32 passed2.52s",
+    "parent_CLI": "preview --help PASS after resource preflight",
+    "zero_preview_RED": "1 failed31deselected before adding failure receipt/no-success guard"
+  },
+  "resources": "newconda, serial CPU, fresh run_guarded.ps1 before tests; parent final CPU5percent/RAM69.28percent/GPU2percent/VRAM1212of6144MiB",
+  "visual": "Parent inspected actual renderer + tiny pinned generator synthetic example, native four panels/common window/red alpha0.6 overlay acceptable; not patient evidence",
+  "synthetic_image_sha256": "5477eb0a6ac26ee94394d8136888be372590057014f28ff2fc65ad81674d5ac2",
+  "limits": [
+    "Target-PC real patient/CUDA preview NOT RUN locally",
+    "Supports current phase=joint protocols; no blanket historical-format compatibility",
+    "D/S CPU tensors deserialize with joint payload; no D/S model or optimizer constructed",
+    "PNG is qualitative8bit display, not NIfTI or generated training dataset",
+    "Only trained1+1 reported by user; no image-quality or segmentation-benefit claim"
+  ],
+  "ownership": "Sole leaf implementation; parent docs/Git/validation; no direct parent source/test implementation or nested agents",
+  "files": {
+    "experiments/genseg_joint/preview.py": "0d155571ae2e7f15908713acec58be96cc6329528cb2a9e14be7704c47c8e5e0",
+    "experiments/genseg_joint/cli.py": "7bb18186a2e1d4b18820933b9225dfcb429468035b8b5882bd6a5690a923b3c4",
+    "experiments/genseg_joint/tests/test_preview.py": "530ef0b02f9584640756b55bcb288faf152d52083b57351b77f0cc5ebe8b8f51"
+  }
+}

@@ -44,5 +44,11 @@ Updated: 2026-09-21
 - User confirmed Dataset501 still95 (94 was a typo); fixed76/19 and inner61/15 remain unchanged.
 - Added inner61-only G/D pretraining with frozen architecture/BN, completed gan.pt receipt and strict same-protocol handoff to fresh author U-Net/alphaAdam. Cold-start remains supported; interrupted-run resume is absent.
 - Worker guarded CPU tests73 joint +15 target +63 offline passed separately; parent43 key tests and three CLI helps passed. Independent Level3 review PASS on the exact five-file snapshot in reference/GENSEG-JOINT-PRETRAIN-REVIEW.json.
-- Target-PC native512x512 one-step cold-start pilot success was user-reported; new real-data CUDA pretrain-to-joint handoff remains unverified. First new trial is1+1 updates in fresh output directories. No performance/OOF claim.
+- Target-PC native512x512 one-step cold-start pilot success was user-reported; user subsequently reported completed1+1 pretrain-to-joint CUDA receipts with finite alpha change; those remote files were not read locally. No performance/OOF claim.
 - This is feature-branch state only; master canonical memory not modified.
+
+## Branch-local joint preview (2026-10-18)
+
+- Added completed-joint-checkpoint preview: only G inference, saved learned alpha/scaling, deterministic first4 inner61 cases, native four-panel PNG and provenance manifest. No inner15/external19 image reads or training/data-export changes.
+- Guarded worker32 focused/105 joint affected PASS; parent32 focused and CLI PASS. Parent synthetic visual inspection and final exact-three-file independent Level3 PASS; receipt reference/GENSEG-JOINT-PREVIEW-REVIEW.json.
+- Target-PC real-patient/CUDA preview not run locally. User can view PNGs after pulling branch and executing PREVIEW-RUNBOOK. PNG output is qualitative only, not a generated training dataset or formal metric.

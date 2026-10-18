@@ -17,20 +17,36 @@ def rate(value):
     return number
 
 
+def patient_limit(value):
+    number=int(value)
+    if not 1<=number<=61: raise argparse.ArgumentTypeError('Patient limit must be 1..61')
+    return number
+
+
+def digest(value):
+    import re
+    if not re.fullmatch('[0-9a-f]{64}',value): raise argparse.ArgumentTypeError('Lowercase SHA256 required')
+    return value
+
+
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='command',required=True)
-    for command in ('check','train','pretrain'):
+    for command in ('check','train','pretrain','preview'):
         a=sub.add_parser(command)
         for field in ('source','raw-root','targets','baseline-run','output'):
             a.add_argument('--'+field,required=True,type=Path)
         a.add_argument('--targets-sha256',default=TARGET_SHA256,choices=[TARGET_SHA256])
         a.add_argument('--seed',type=int,default=20261018)
         a.add_argument('--gpu',required=command!='check',type=int,help='physical index; check telemetry only, train binds UUID')
+        if command=='preview':
+            a.add_argument('--run',required=True,type=Path)
+            a.add_argument('--checkpoint-sha256',required=True,type=digest)
+            a.add_argument('--patient-limit',type=patient_limit,default=4)
         if command in ('check','train'):
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256')
-        if command!='check':
+        if command not in ('check','preview'):
             a.add_argument('--steps',required=True,type=positive)
             if command=='train':
                 a.add_argument('--pretrain-steps',type=int,default=0,choices=[0],help='legacy cold-start flag; only 0 accepted, no combined phase/resume')
@@ -45,14 +61,14 @@ def main(argv=None):
     args=parser().parse_args(argv)
     from experiments.genseg30.contract import require
     require(args.seed==20261018,'Fixed inner61/15 seed 20261018 required')
-    if args.command!='pretrain':
+    if args.command in ('check','train'):
         require((args.pretrained_run is None)==(args.pretrained_sha256 is None),'Paired pretrained-run and pretrained-sha256 required')
         if args.pretrained_sha256 is not None:
             import re
             require(re.fullmatch('[0-9a-f]{64}',args.pretrained_sha256) is not None,'Explicit lowercase checkpoint SHA256 required')
     if args.gpu is not None:
         from .runtime import gpu_guard
-        guard_options={} if args.command=='check' else dict(min_free_vram_gib=args.min_free_vram_gib,min_free_ram_gib=args.min_free_ram_gib)
+        guard_options={} if args.command in ('check','preview') else dict(min_free_vram_gib=args.min_free_vram_gib,min_free_ram_gib=args.min_free_ram_gib)
         gpu_guard(args.gpu,**guard_options)  # telemetry only; no CUDA/model load
     from experiments.genseg30.contract import Source,require,check_output
     from experiments.genseg3mm.targets import TargetDataset
@@ -68,6 +84,10 @@ def main(argv=None):
     check_output(args.output,protected)
     split=inner_split(target.train,target.val,args.seed)
     identity=source_identity()
+    if args.command=='preview':
+        from .preview import run_preview
+        run_preview(target,args.run,args.checkpoint_sha256,args.output,gpu=args.gpu,patient_limit=args.patient_limit)
+        return 0
     if args.command=='check':
         if args.pretrained_run is not None:
             from .pretrain import audit_pretrained,policy

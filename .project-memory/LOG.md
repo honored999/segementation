@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - Joint checkpoint qualitative preview (branch-local)
+
+- Changed: strict completed-joint G/alpha restoration, inner61-only deterministic native four-panel PNG preview, shared saved display scale, final provenance receipt; zero-valid-plane failure preserves diagnostics.
+- Validation: guarded newconda worker32 focused/105 joint affected PASS; parent32 focused, CLI and synthetic visual inspection PASS; independent Level3 PASS on final three hashes.
+- Result: engineering preview capability accepted; real-patient/CUDA preview not locally run. User-reported1+1 joint run is separate runtime evidence, not an image-quality/performance result. Source/tests delegated leaf, no nested agents.
+- Next: pull on data computer, run PREVIEW-RUNBOOK and review PNGs. Canonical master memory unchanged.
+
 ## 2026-10-18 - GD pretraining and joint handoff (branch-local)
 
 - Changed: inner61-only frozen-alpha GAN pretraining, phase checkpoint/receipt, safe same-protocol initialization of fresh author U-Net joint run; no resume.

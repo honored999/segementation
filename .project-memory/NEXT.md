@@ -30,3 +30,9 @@
 1. Publish reviewed feature branch locally, then data computer git pull --ff-only; follow reference/GENSEG-JOINT-PRETRAIN-RUNBOOK.md.
 2. In fresh HD-BET_outputs directories, run1 GD pretrain update, audit completed gan.pt/receipt hash, then1 joint update from that same-inner61 checkpoint. Preserve raw data, original splits and all old runs/weights.
 3. Inspect target-PC receipts/resources/finite alpha change. Long budgets and train-only generated-image QA follow only after the phase check; no external19 final-test claim and no arbitrary old76 warm start.
+
+## Branch-local immediate action: joint preview (2026-10-18)
+
+1. Data computer pull --ff-only, then reference/GENSEG-JOINT-PREVIEW-RUNBOOK.md to preview the completed1+1 joint checkpoint in a new HD-BET_outputs directory.
+2. Inspect lesion/empty PNGs and preview.json for anatomy, label alignment and artifacts. No generated dataset has been exported; no image-quality approval or segmentation benefit yet.
+3. Confirm multi-step resource behavior and define a small longer budget separately; no training/guard/resume changes were included in this preview task.
