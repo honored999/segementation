@@ -64,3 +64,9 @@ Updated: 2026-09-21
 - Server user evidence: GD3 completed; joint3 stopped beforestep2 at81percent selectedGPUutil whileVRAM5.4percent. No completejoint3/500+100success; utilization attribution unresolved.
 - Typed util-only finite retry only between completed steps (6attempts/5x1sec); all non-util guards checked first, no initial/first-step wait. Events/failed diagnostics recorded; thresholds/numerical protocol unchanged.
 - Parent/workerAST3files+diffcheck and independent Level3 PASS STATIC; localruntime NOT RUN per user. ReusecompletedGD3, freshjointtrial02, retainfailedtrial01; no resume.
+## Branch-local GD500 preview comparison (2026-10-18; static)
+
+- User reported GD500 and joint100 completed; copied joint preview receipt confirms same initialization/protocol and selected slices. Reviewed PNGs remain nearly constant gray; no image-quality or segmentation-benefit claim. BN/optimizer causality remains unverified.
+- Added explicit preview phase gan_pretrain for completed gan.pt, reusing G-only restoration, saved scale and inner61 selection; default joint retained. Training, raw/splits/targets and old weights unchanged.
+- Leaf/parent/reviewer final three-file AST/diff checks PASS; independent Level3 PASS STATIC. No local tests/imports/model/numerical/CUDA/resource probes per user. Target-PC new GAN-preview runtime pending.
+- Branch-local state only; canonical master memory absent/not modified. Leaf implementation, no nested agents.

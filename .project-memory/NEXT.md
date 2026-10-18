@@ -25,25 +25,10 @@
 2. If Blosc2/fixed fold0 checks pass, train generator, export exactly 30% extra train slices and inspect/approve image-mask quality.
 3. Run matched plain EarlyStopping A and GenSeg30 B fold0 and evaluate best checkpoints on the original 19 real patients. No server access or real-data run was performed locally; historical A protocol is unverified.
 
-## Branch-local immediate action: GD pretraining handoff (2026-10-18)
+## Branch-local immediate action: GD500 vs joint100 preview (2026-10-18)
 
-1. Publish reviewed feature branch locally, then data computer git pull --ff-only; follow reference/GENSEG-JOINT-PRETRAIN-RUNBOOK.md.
-2. In fresh HD-BET_outputs directories, run1 GD pretrain update, audit completed gan.pt/receipt hash, then1 joint update from that same-inner61 checkpoint. Preserve raw data, original splits and all old runs/weights.
-3. Inspect target-PC receipts/resources/finite alpha change. Long budgets and train-only generated-image QA follow only after the phase check; no external19 final-test claim and no arbitrary old76 warm start.
+1. Data computer pull --ff-only, then follow reference/GENSEG-JOINT-GD-PREVIEW-RUNBOOK.md to preview completed GD500 gan.pt into fresh genseg_gd_preview_500steps_trial01 using --phase gan_pretrain and the receipt's exact hash.
+2. Compare same-name PNG third panels against existing joint500plus100 preview; copy new preview folder locally for read-only review. If GD already gray, prioritize pretraining diagnosis; if only joint gray, prioritize joint diagnosis. Neither pattern proves BN/optimizer causality by itself.
+3. Pause budget expansion pending stage localization; no training settings/threshold/split changes. Keep all old runs and end-only-save/no-resume limits. Local verification remains STATIC ONLY; first new preview runtime belongs on data computer.
 
-## Branch-local immediate action: joint preview (2026-10-18)
-
-1. Data computer pull --ff-only, then reference/GENSEG-JOINT-PREVIEW-RUNBOOK.md to preview the completed1+1 joint checkpoint in a new HD-BET_outputs directory.
-2. Inspect lesion/empty PNGs and preview.json for anatomy, label alignment and artifacts. No generated dataset has been exported; no image-quality approval or segmentation benefit yet.
-3. Confirm multi-step resource behavior and define a small longer budget separately; no training/guard/resume changes were included in this preview task.
-
-## Branch-local immediate action: increased training (2026-10-18)
-
-1. Pull code on data computer, follow reference/GENSEG-JOINT-SHORT-RUNBOOK.md for fresh-directory GD3/joint3 preflight; stop on any resource/numerical error.
-2. Only after that succeeds, fresh GD500 -> new joint100 -> same-slice preview. Preserve1+1 baseline, raw/splits/targets and all old weights. Budget is exploratory, no performance claim.
-3. Local checks remain STATIC ONLY per user; all runtime validation uses data computer. Current code saves weights only at successful run end and cannot resume interruptions.
-
-## Branch-local immediate action: joint3 retry (2026-10-18)
-
-1. Pull bounded-utilization cooldown fix, reuse completedGD3, start NEW genseg_joint_3steps_trial02 using SHORT-RUNBOOK retry section; preservefailedtrial01.
-2. Collect3step logs/complete receipt, or guard_events.jsonl plus failed.json.resource_guard. No500+100untiljoint3complete. Do not raise limits/disable checks; all localreview remainsstaticonly.
+Current evidence: user reported continuous joint3 and GD500/joint100 steps; local copied final joint preview confirms 500-step pretrain initialization and 100 joint steps, and inspected images lack useful anatomy. This is engineering/exploratory evidence, not formal evaluation.

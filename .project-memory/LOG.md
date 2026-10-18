@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - Completed G/D qualitative preview (branch-local; static)
+
+- Changed: explicit preview --phase gan_pretrain, strict completed gan.pt audit/CPU safe load, G-only restoration and existing same-slice rendering; joint default retained.
+- Validation: final three-file stdlib AST/diff checks and independent Level3 PASS STATIC; tests/model/CUDA/numerical runs NOT RUN per user. First data-computer GAN preview pending.
+- Result: leaf source/tests, parent docs/branch memory/Git, no nested agents. User GD500/joint100 preview remains gray; no efficacy or proven BN-cause claim. Raw/splits/old weights unchanged, master memory absent/untouched.
+- Next: fresh GD500 preview and same-name third-panel comparison using GD-PREVIEW-RUNBOOK; no budget increase pending diagnosis.
+
 ## 2026-10-18 - Selected-GPU utilization sampling retry (branch-local; static)
 
 - Changed: typed util-only six-attempt guard between completedsteps; permanentguardsfirst, finite wait/event diagnostics, initialguardunchanged.

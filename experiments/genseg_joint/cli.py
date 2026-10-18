@@ -40,6 +40,7 @@ def parser():
         a.add_argument('--seed',type=int,default=20261018)
         a.add_argument('--gpu',required=command!='check',type=int,help='physical index; check telemetry only, train binds UUID')
         if command=='preview':
+            a.add_argument('--phase',choices=('joint','gan_pretrain'),default='joint')
             a.add_argument('--run',required=True,type=Path)
             a.add_argument('--checkpoint-sha256',required=True,type=digest)
             a.add_argument('--patient-limit',type=patient_limit,default=4)
@@ -86,7 +87,7 @@ def main(argv=None):
     identity=source_identity()
     if args.command=='preview':
         from .preview import run_preview
-        run_preview(target,args.run,args.checkpoint_sha256,args.output,gpu=args.gpu,patient_limit=args.patient_limit)
+        run_preview(target,args.run,args.checkpoint_sha256,args.output,gpu=args.gpu,patient_limit=args.patient_limit,phase=args.phase)
         return 0
     if args.command=='check':
         if args.pretrained_run is not None:

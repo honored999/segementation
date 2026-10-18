@@ -31,7 +31,8 @@ def test_cli_preview_contract():
     base=['preview','--source','a','--raw-root','b','--targets','c','--baseline-run','d','--output','e',
           '--run','r','--checkpoint-sha256','a'*64,'--gpu','1']
     args=parser().parse_args(base)
-    assert args.patient_limit==4
+    assert args.patient_limit==4 and args.phase=='joint'
+    assert parser().parse_args(base+['--phase','gan_pretrain']).phase=='gan_pretrain'
     for value in ('0','62'):
         with pytest.raises(SystemExit): parser().parse_args(base+['--patient-limit',value])
     with pytest.raises(SystemExit): parser().parse_args(base[:-3]+['bad','--gpu','1'])
@@ -179,15 +180,19 @@ def test_safe_cpu_load_and_receipt_binding(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='receipt'):preview.load_joint(folder,sha256(folder/'joint.pt'),r)
 
 
+@pytest.mark.parametrize('phase',['joint','gan_pretrain'])
 @pytest.mark.parametrize('tamper',[None,'target','receipt','png'])
-def test_orchestration_inner61_and_completion(tmp_path,monkeypatch,tamper):
-    t=Target(tmp_path);folder,r=run_files(tmp_path,t);out=tmp_path/'output'
+def test_orchestration_inner61_and_completion(tmp_path,monkeypatch,tamper,phase):
+    t=Target(tmp_path)
+    folder,r=gan_run_files(tmp_path,t) if phase=='gan_pretrain' else run_files(tmp_path,t)
+    out=tmp_path/'output';options={} if phase=='joint' else {'phase':phase}
     monkeypatch.setattr(preview,'gpu_guard',lambda *a,**k:{'allocator_fraction':.1})
     monkeypatch.setattr(torch.cuda,'is_initialized',lambda:False)
     monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
     monkeypatch.setattr(torch.cuda,'set_per_process_memory_fraction',lambda *a:None)
     # Substitute hardware/model size only; real metadata, cohort, role gate, audits, renderer execute.
     monkeypatch.setattr(preview,'load_joint',lambda *a:{})
+    monkeypatch.setattr(preview,'load_gan',lambda *a:{})
     monkeypatch.setattr(preview,'Generator',lambda **k:object())
     monkeypatch.setattr(preview,'restore_generator',lambda *a:None)
     monkeypatch.setattr(preview,'generate',lambda g,y,s:(np.full(y.shape,123.,np.float32),[256,256]))
@@ -202,17 +207,21 @@ def test_orchestration_inner61_and_completion(tmp_path,monkeypatch,tamper):
         return result
     monkeypatch.setattr(preview,'render',render)
     if tamper:
-        with pytest.raises(ValueError):preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0,patient_limit=1)
+        with pytest.raises(ValueError):preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0,patient_limit=1,**options)
         assert not (out/'preview.json').exists()
     else:
-        preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0)
+        preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0,**options)
         manifest=json.loads((out/'preview.json').read_text())
         assert manifest['complete'] and len(manifest['previews'])==12
+        assert manifest['phase']==phase and manifest['checkpoint']==r['checkpoint']
+        assert 'weights_only=True, map_location=cpu' in manifest['cpu_payload']
+        assert [(v['z'],v['category']) for v in manifest['previews']]==[(2,'lesion'),(1,'empty'),(3,'empty')]*4
+        assert all(v['display']['window']==[-5.,500.] for v in manifest['previews'])
         assert t.reads==sorted(r['protocol']['split']['train'])[:4]
         assert set(t.reads).isdisjoint(r['protocol']['split']['validation']+r['protocol']['split']['external'])
         assert manifest['scaling']==r['protocol']['scaling']
         assert all(v['native_shape']==[9,11] for v in manifest['previews'])
-        with pytest.raises(ValueError,match='Fresh'):preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0)
+        with pytest.raises(ValueError,match='Fresh'):preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0,**options)
 
 
 def test_protected_paths_before_arrays(tmp_path):
@@ -274,3 +283,90 @@ def test_all_selected_ignore_never_complete(tmp_path,monkeypatch,capsys):
     assert failure['complete'] is False and failure['patients'][0]['missing_categories']==[
         'lesion','empty_1','empty_2','all_planes_ignore']
     assert failure['patients'][0]['all_ignore_planes']==[0,1]
+
+
+def gan_run_files(tmp_path,target):
+    from experiments.genseg_joint.pretrain import policy
+    folder,r=run_files(tmp_path,target);p=r['protocol']
+    (folder/'gan.pt').write_bytes(b'safe metadata fixture only')
+    r.update(phase='gan_pretrain',classification=policy()['classification'],checkpoint='gan.pt',
+        checkpoint_sha256=sha256(folder/'gan.pt'),protocol=dict(policy(),
+            **{k:p[k] for k in ('steps','seed','split','target_identity','target_manifest_sha256','scaling','implementation_files_sha256')},
+            model_config={'G':{'width':64,'downs':8,'seed':20261018},'D_width':64}))
+    (folder/'complete.json').write_text(json.dumps(r))
+    return folder,r
+
+
+@pytest.mark.parametrize('damage',['complete','phase','hash','scaling','model_config','rates'])
+def test_gan_receipt_rejected_before_model_or_arrays(tmp_path,monkeypatch,damage):
+    t=Target(tmp_path);folder,r=gan_run_files(tmp_path,t);out=tmp_path/'output'
+    if damage=='hash': (folder/'gan.pt').write_bytes(b'changed')
+    elif damage in ('complete','phase'): r[damage]=False if damage=='complete' else 'joint'
+    else: r['protocol'][damage]='wrong'
+    (folder/'complete.json').write_text(json.dumps(r))
+    monkeypatch.setattr(torch,'load',lambda *a,**k:pytest.fail('loaded tensors'))
+    monkeypatch.setattr(preview,'Generator',lambda *a,**k:pytest.fail('constructed G'))
+    monkeypatch.setattr(preview,'gpu_guard',lambda *a,**k:pytest.fail('reached GPU guard'))
+    with pytest.raises(ValueError):
+        preview.run_preview(t,folder,r['checkpoint_sha256'],out,gpu=0,phase='gan_pretrain')
+    assert not t.reads and not out.exists()
+
+def test_gan_safe_cpu_load_same_handle_and_receipt(tmp_path,monkeypatch):
+    t=Target(tmp_path);folder,r=gan_run_files(tmp_path,t);path=folder/'gan.pt'
+    payload={k:r[k] for k in ('format','phase','classification','steps','protocol')}
+    payload.update(G={'weight':torch.ones(1)},D={},arch={},rng={},optimizers={
+        k:{'algorithm':'stateless_SGD','lr':v,'momentum':0.,'weight_decay':0.,'steps':r['steps'],'state':{}}
+        for k,v in r['protocol']['rates'].items()})
+    torch.save(payload,path);r['checkpoint_sha256']=sha256(path)
+    (folder/'complete.json').write_text(json.dumps(r))
+    preview.audit_gan(t,folder,r['checkpoint_sha256'])
+    original=torch.load;original_hash=preview.hash_stream;loads=[];hashes=[]
+    def load(stream,**kw):loads.append((stream,kw));return original(stream,**kw)
+    def stream_hash(stream):hashes.append(stream);return original_hash(stream)
+    monkeypatch.setattr(torch,'load',load);monkeypatch.setattr(preview,'hash_stream',stream_hash)
+    result=preview.load_gan(folder,r['checkpoint_sha256'],r)
+    assert len(loads)==1 and loads[0][1]=={'map_location':'cpu','weights_only':True}
+    assert hashes==[loads[0][0],loads[0][0]] and result['G']['weight'].device.type=='cpu'
+    result['steps']+=1;torch.save(result,path)
+    with pytest.raises(ValueError,match='receipt'):preview.load_gan(folder,sha256(path),r)
+
+
+@pytest.mark.parametrize('when',['before','during'])
+def test_gan_checkpoint_hash_before_and_after_load(tmp_path,monkeypatch,when):
+    t=Target(tmp_path);folder,r=gan_run_files(tmp_path,t);path=folder/'gan.pt'
+    def load(stream,**kw):
+        assert when=='during'
+        with path.open('ab') as writer:writer.write(b'changed during load')
+        return {}
+    monkeypatch.setattr(torch,'load',load)
+    digest='0'*64 if when=='before' else r['checkpoint_sha256']
+    with pytest.raises(ValueError,match='checkpoint changed'):preview.load_gan(folder,digest,r)
+
+def test_gan_generator_only_restore_preserves_all_alpha_aliases(tmp_path,monkeypatch):
+    from experiments.genseg_joint import models
+    monkeypatch.setattr(Generator,'discriminator',lambda *a,**k:pytest.fail('constructed D'))
+    monkeypatch.setattr(models,'author_unet',lambda *a,**k:pytest.fail('constructed S'))
+    g=Generator(width=1,downs=5,seed=20261018)
+    t=Target(tmp_path);_,r=gan_run_files(tmp_path,t);p=tiny_payload(g,r)
+    for key in ('model_config','S','source'):p.pop(key)
+    p['phase']='gan_pretrain';p['protocol']=deepcopy(r['protocol'])
+    p['protocol']['model_config']['G']=g.config
+    p['arch']['upconv_arch'].add_(.3)
+    preview.restore_generator(g,p);n=g.networks
+    assert all(torch.equal(v,p['G'][k]) for k,v in g.net.state_dict().items())
+    assert torch.equal(n.upconv_arch,p['arch']['upconv_arch'])
+    assert n._conv_arch_parameters[0] is n.conv_arch and n._upconv_arch_parameters[0] is n.upconv_arch
+    assert n._arch_parameters[0] is n.upconv_arch and n._arch_parameters[1] is n.conv_arch
+    assert not n.conv_arch.requires_grad and not n.upconv_arch.requires_grad
+    assert not g.net.training and not any(v.requires_grad for v in g.net.parameters())
+
+
+@pytest.mark.parametrize('phase',['joint','gan_pretrain'])
+def test_wrong_preview_phase_before_load(tmp_path,monkeypatch,phase):
+    t=Target(tmp_path)
+    folder,r=gan_run_files(tmp_path,t) if phase=='joint' else run_files(tmp_path,t)
+    (folder/('joint.pt' if phase=='joint' else 'gan.pt')).write_bytes(b'safe metadata fixture only')
+    monkeypatch.setattr(preview,'gpu_guard',lambda *a,**k:pytest.fail('reached GPU guard'))
+    with pytest.raises(ValueError):
+        preview.run_preview(t,folder,r['checkpoint_sha256'],tmp_path/'output',gpu=0,phase=phase)
+    assert not t.reads

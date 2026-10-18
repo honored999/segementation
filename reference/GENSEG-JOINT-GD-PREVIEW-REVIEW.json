@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-18",
+  "branch": "codex/genseg-reference",
+  "baseline": "161985670b413bf475cdb0061ab8ce2afb014870",
+  "scope": "Completed gan.pt preview via explicit phase selector; default joint retained; G inference only",
+  "result": "PASS STATIC",
+  "reviewer": "01a14f0b-8a67-7140-a822-8ba090b2b89f",
+  "implementer": "01a14efd-97c1-7cc3-9001-a4b05fafc0eb",
+  "profile": "Inherited platform model; xhigh requested; no LunaMax identity claim",
+  "blocking": [],
+  "validation": [
+    "Leaf and parent final three-file newconda -I -S stdlib AST PASS",
+    "Independent reviewer final hashes, AST, source/CLI/test-source/runbook inspection PASS STATIC",
+    "git diff --check PASS"
+  ],
+  "not_run": [
+    "pytest or other tests",
+    "production/module/model imports or loading",
+    "numerical/CUDA/resource probes",
+    "target-PC real gan.pt preview"
+  ],
+  "invariants": [
+    "Raw data/fixed splits/old weights/upstream/training and resource guards unchanged",
+    "Only G constructed; D and joint S may deserialize on CPU; no D/S models or optimizers",
+    "Same deterministic inner61 slices and saved scale; no inner15/external19 patient image reads",
+    "Fresh protected output; explicit completed receipt/hash/schema validation and final audits"
+  ],
+  "ownership": "Leaf source/tests; parent coordination docs/branch memory/Git; no nested agents or direct parent source/test implementation",
+  "files": {
+    "experiments/genseg_joint/cli.py": "243b7e5aa05025c11712174fee8a97fbedeaca2c873eb02d8783557b5a3dba15",
+    "experiments/genseg_joint/preview.py": "79d7d3e7a9f9f9c7c7b5b3670c53764e43af73c58497b1760a392a0fd43b79a8",
+    "experiments/genseg_joint/tests/test_preview.py": "0abb1c67832db2a208783c559d3a23c85ca70e87b4ee48f80074542a086b78e4"
+  }
+}

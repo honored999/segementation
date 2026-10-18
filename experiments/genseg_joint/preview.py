@@ -1,6 +1,6 @@
-"""Qualitative inner61-only joint preview; never a training dataset or metric.
+"""Qualitative inner61-only G preview; never a training dataset or metric.
 
-Safe CPU joint deserialization includes D/S tensors, but only G is constructed.
+Safe CPU deserialization includes D (and joint S) tensors; only G is constructed.
 """
 import hashlib
 import math
@@ -12,6 +12,7 @@ from experiments.genseg30.contract import (require, read_json, write_json, sha25
 from .data import Cohort, inner_split
 from .models import Generator, source_identity
 from .runtime import audit, gpu_guard, CLASSIFICATION
+from .pretrain import audit_pretrained, validate_protocol
 
 TITLE_HEIGHT=24
 CLASSES={CLASSIFICATION,'engineering_genseg_joint_pretrained_GD_fresh_UNet_not_formal'}
@@ -65,12 +66,42 @@ def audit_joint(target,run,digest):
     return receipt,identities
 
 
-def load_joint(run,digest,receipt):
+def audit_gan(target,run,digest):
+    """Reuse the completed-pretrain policy audit without constructing D or S."""
+    run=Path(run).resolve()
+    paths=[checked_file(run,'complete.json'),checked_file(run,'gan.pt')]
+    identities=capture_identities(paths)
+    receipt=audit_pretrained(run,digest,expected={
+        'seed':20261018,'split':inner_split(target.train,target.val,20261018),
+        'target_identity':target.identity,'target_manifest_sha256':target.manifest_sha256,
+        'model_config':{'G':{'width':64,'downs':8,'seed':20261018},'D_width':64}})
+    protocol=receipt['protocol']
+    require(type(receipt.get('steps')) is int,'Invalid pretrain receipt step count')
+    require(all(type(v) in (int,float) for v in protocol['rates'].values()) and
+        type(protocol['l1_weight']) in (int,float),'Invalid saved pretrain rates/L1')
+    require(all(type(protocol['scaling'][k]) in (int,float) for k in ('min','max')),
+        'Saved inner61 scaling required')
+    saved=protocol.get('implementation_files_sha256')
+    require(isinstance(saved,dict) and bool(saved) and
+        all(isinstance(k,str) and isinstance(v,str) and re.fullmatch('[0-9a-f]{64}',v) for k,v in saved.items()),
+        'Missing saved implementation identities')
+    target.verify_identity(target.identity)
+    assert_identities(identities)
+    return receipt,identities
+
+
+def load_checkpoint(run,filename,digest):
     import torch
-    with (Path(run)/'joint.pt').open('rb') as stream:
-        require(hash_stream(stream)==digest,'Joint checkpoint changed')
+    path=checked_file(run,filename)
+    with path.open('rb') as stream:
+        require(hash_stream(stream)==digest,'Preview checkpoint changed')
         stream.seek(0); payload=torch.load(stream,map_location='cpu',weights_only=True)
-        stream.seek(0); require(hash_stream(stream)==digest,'Joint checkpoint changed')
+        stream.seek(0); require(hash_stream(stream)==digest,'Preview checkpoint changed')
+    return payload
+
+
+def load_joint(run,digest,receipt):
+    payload=load_checkpoint(run,'joint.pt',digest)
     require(isinstance(payload,dict) and set(payload)=={'format','classification','steps','G','D','S','arch','model_config','optimizers','protocol','rng','source'},'Joint checkpoint schema mismatch')
     for key in ('format','classification','steps','protocol'):
         require(payload[key]==receipt[key],'Checkpoint/receipt mismatch: '+key)
@@ -80,21 +111,37 @@ def load_joint(run,digest,receipt):
     return payload
 
 
+def load_gan(run,digest,receipt):
+    payload=load_checkpoint(run,'gan.pt',digest)
+    require(isinstance(payload,dict) and set(payload)=={'format','phase','classification','steps','G','D','arch','optimizers','protocol','rng'},
+        'Invalid GAN checkpoint schema')
+    for key in ('format','phase','classification','steps','protocol'):
+        require(payload[key]==receipt[key],'Checkpoint/receipt mismatch: '+key)
+    validate_protocol(payload['protocol'])
+    require(payload['phase']=='gan_pretrain' and payload['protocol']['model_config']=={
+        'G':{'width':64,'downs':8,'seed':20261018},'D_width':64},'GAN checkpoint phase/model configuration mismatch')
+    expected_opt={k:{'algorithm':'stateless_SGD','lr':v,'momentum':0.,'weight_decay':0.,
+        'steps':payload['steps'],'state':{}} for k,v in payload['protocol']['rates'].items()}
+    require(payload['optimizers']==expected_opt,'Pretrain optimizer policy/count mismatch')
+    require(isinstance(payload['rng'],dict),'Missing pretrain RNG record')
+    return payload
+
+
 def restore_generator(generator,payload):
     """Validate and stage every tensor before changing any G state or alpha alias."""
     import torch
-    require(payload['model_config']['G']==generator.config,'Generator configuration mismatch')
+    config=payload['protocol']['model_config'] if payload.get('phase')=='gan_pretrain' else payload['model_config']
+    require(config['G']==generator.config,'Generator configuration mismatch')
     refs={'G':generator.net.state_dict(), 'arch':{k:getattr(generator.networks,k) for k in ('conv_arch','upconv_arch')}}
-    staged={}
     for name,reference in refs.items():
         values=payload[name]
         require(isinstance(values,dict) and values.keys()==reference.keys(),'Generator state keys mismatch: '+name)
-        staged[name]={}
         for k,r in reference.items():
             v=values[k]
             require(isinstance(v,torch.Tensor) and v.layout==torch.strided and v.shape==r.shape and
                 v.dtype==r.dtype and bool(torch.isfinite(v).all()),'Invalid generator tensor: '+name+'.'+k)
-            staged[name][k]=v.to(r.device).clone()
+    staged={name:{k:payload[name][k].to(r.device).clone() for k,r in reference.items()}
+        for name,reference in refs.items()}
     with torch.no_grad():
         for k,v in generator.net.state_dict().items(): v.copy_(staged['G'][k])
     generator.restore_arch(staged['arch'])
@@ -153,28 +200,32 @@ def render(path,target,label,generated,scale):
     return report
 
 
-def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4):
+def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase='joint'):
+    require(phase in ('joint','gan_pretrain'),'Invalid preview phase')
+    checkpoint_file='joint.pt' if phase=='joint' else 'gan.pt'
     require(type(patient_limit) is int and 1<=patient_limit<=61,'Patient limit must be 1..61')
     run=Path(run).resolve()
     output=check_output(output,list(target.protected)+[run])
     target.require_no_unpack_writes()
-    receipt,identities=audit_joint(target,run,checkpoint_sha256)
+    auditor=audit_joint if phase=='joint' else audit_gan
+    receipt,identities=auditor(target,run,checkpoint_sha256)
     inventory={p:target.inventory(p) for p in target.train}
     source=source_identity(); implementation=sha256(__file__)
     def final_audit():
         assert_identities(identities); audit(target,inventory)
         require(source_identity()==source and sha256(__file__)==implementation,'Preview source changed')
-        require(sha256(run/'joint.pt')==checkpoint_sha256,'Joint checkpoint changed')
+        require(sha256(checked_file(run,checkpoint_file))==checkpoint_sha256,'Preview checkpoint changed')
     initial=gpu_guard(gpu)
     import torch
     require(not torch.cuda.is_initialized(),'GPU binding must precede CUDA initialization')
     require(torch.cuda.is_available(),'CUDA-enabled PyTorch required')
     torch.cuda.set_per_process_memory_fraction(initial['allocator_fraction'],0)
-    payload=load_joint(run,checkpoint_sha256,receipt)
+    loader=load_joint if phase=='joint' else load_gan
+    payload=loader(run,checkpoint_sha256,receipt)
     final_audit()
     generator=Generator(seed=20261018,device='cuda:0')
     restore_generator(generator,payload)
-    del payload  # D/S tensors were deserialized on CPU; no D/S models instantiated.
+    del payload  # D (and joint S) tensors stayed on CPU; no D/S models instantiated.
     cohort=Cohort(target,20261018)
     require(cohort.split==receipt['protocol']['split'],'Cohort changed')
     scale=receipt['protocol']['scaling']
@@ -200,10 +251,13 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4):
         raise ValueError('No renderable planes in selected inner61 patients; see failed.json for missing/all-ignore categories')
     for record in records: require(sha256(output/record['file'])==record['sha256'],'Preview PNG changed')
     write_json(output/'preview.json',{'format':1,'complete':True,'classification':CLASS,
-        'run':str(run),'checkpoint_sha256':checkpoint_sha256,'receipt_sha256':sha256(run/'complete.json'),
+        'run':str(run),'phase':phase,'checkpoint':checkpoint_file,
+        'checkpoint_sha256':checkpoint_sha256,'receipt_sha256':sha256(checked_file(run,'complete.json')),
         'source':source,'target_identity':target.identity,'target_manifest_sha256':target.manifest_sha256,
         'input_inventory':inventory,'saved_protocol':receipt['protocol'],'scaling':scale,
         'preview_implementation_sha256':implementation,'patients':patients,'previews':records,
-        'initial_resources':initial,'D_S':'CPU payload tensors only; no D/S models or optimizers constructed'})
+        'initial_resources':initial,
+        'cpu_payload':'weights_only=True, map_location=cpu; '+('G/D/S' if phase=='joint' else 'G/D')+' tensors; only G restored on GPU',
+        'D_S':('D/S' if phase=='joint' else 'D (no S in GAN checkpoint)')+' CPU payload tensors only; no D/S models or optimizers constructed'})
     print(f'PREVIEW COMPLETE: {len(records)} PNGs; output={output}',flush=True)
     return output
