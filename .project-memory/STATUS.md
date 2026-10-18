@@ -68,5 +68,11 @@ Updated: 2026-09-21
 
 - User reported GD500 and joint100 completed; copied joint preview receipt confirms same initialization/protocol and selected slices. Reviewed PNGs remain nearly constant gray; no image-quality or segmentation-benefit claim. BN/optimizer causality remains unverified.
 - Added explicit preview phase gan_pretrain for completed gan.pt, reusing G-only restoration, saved scale and inner61 selection; default joint retained. Training, raw/splits/targets and old weights unchanged.
-- Leaf/parent/reviewer final three-file AST/diff checks PASS; independent Level3 PASS STATIC. No local tests/imports/model/numerical/CUDA/resource probes per user. Target-PC new GAN-preview runtime pending.
+- Leaf/parent/reviewer final three-file AST/diff checks PASS; independent Level3 PASS STATIC. No local tests/imports/model/numerical/CUDA/resource probes per user. User subsequently supplied completed GD500 preview; receipt/hash/same slices/scale verified locally, inspected images already gray before joint.
 - Branch-local state only; canonical master memory absent/not modified. Leaf implementation, no nested agents.
+
+## Branch-local fixed-slice diagnostic (2026-10-18; static)
+
+- Added diagnose-single-slice: exact completed GD500 G/D initialization, fixed inner61 first lesion plane, unchanged PretrainEngine/BN/rates/L1/alpha and saved scale. Before/after scalar probes and PNGs; no saved weights or formal learning claim.
+- Final three-file AST/diff checks and independent Level3 PASS STATIC after moving identity audit before resource sampling. No local tests/imports/models/CUDA/numerical/resource probes. Server3 then fresh100 diagnostic pending.
+- Source/test implementation and fix leaf-owned, no nested agents; parent branch records/docs/Git only. Raw/splits/old weights and master untouched.

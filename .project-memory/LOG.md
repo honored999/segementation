@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - Fixed training slice diagnostic (branch-local; static)
+
+- Changed: exact GD500 warm start, deterministic inner61 lesion slice, existing G/D updates and before/after pure functional probes/PNG; diagnostic-only receipt, no checkpoint weights.
+- Validation: final three-file AST/diff checks, independent Level3 PASS STATIC and focused re-review after resource-sampling order fix. Tests/production/model/numerical/CUDA/resource runs NOT RUN locally; server3 then100 pending.
+- Result: raw/splits/targets/old weights/training core unchanged; leaf implementation/fix, parent coordination/Git, no nested agents. Copied GD500 PNGs were already gray; no proven BN cause or efficacy claim.
+- Next: run SINGLE-SLICE-RUNBOOK on data computer, preserve outputs, return diagnostic folder. Master memory absent/untouched.
+
 ## 2026-10-18 - Completed G/D qualitative preview (branch-local; static)
 
 - Changed: explicit preview --phase gan_pretrain, strict completed gan.pt audit/CPU safe load, G-only restoration and existing same-slice rendering; joint default retained.
@@ -80,11 +87,3 @@
   consistency, and scope; no production code or real-data run.
 - Result: implementation remains not started and requires manual worker dispatch.
 - Next: collect and inspect the implementation worker HANDOFF.
-
-## 2026-09-20 - Lite UPerNet decoder design
-
-- Changed: documented two independent single-output Lite-UPerNet model variants.
-- Validation: design checked against current model, supervision, and checkpoint
-  contracts; no production code or real-data run.
-- Result: design approved in conversation and pending written-spec review.
-- Next: create the implementation plan after user review.

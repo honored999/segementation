@@ -25,10 +25,10 @@
 2. If Blosc2/fixed fold0 checks pass, train generator, export exactly 30% extra train slices and inspect/approve image-mask quality.
 3. Run matched plain EarlyStopping A and GenSeg30 B fold0 and evaluate best checkpoints on the original 19 real patients. No server access or real-data run was performed locally; historical A protocol is unverified.
 
-## Branch-local immediate action: GD500 vs joint100 preview (2026-10-18)
+## Branch-local immediate action: fixed-slice diagnostic (2026-10-18)
 
-1. Data computer pull --ff-only, then follow reference/GENSEG-JOINT-GD-PREVIEW-RUNBOOK.md to preview completed GD500 gan.pt into fresh genseg_gd_preview_500steps_trial01 using --phase gan_pretrain and the receipt's exact hash.
-2. Compare same-name PNG third panels against existing joint500plus100 preview; copy new preview folder locally for read-only review. If GD already gray, prioritize pretraining diagnosis; if only joint gray, prioritize joint diagnosis. Neither pattern proves BN/optimizer causality by itself.
-3. Pause budget expansion pending stage localization; no training settings/threshold/split changes. Keep all old runs and end-only-save/no-resume limits. Local verification remains STATIC ONLY; first new preview runtime belongs on data computer.
+1. Data computer pull --ff-only and follow reference/GENSEG-JOINT-SINGLE-SLICE-RUNBOOK.md: first fresh3-step diagnose-single-slice from the approved GD500 checkpoint, keeping all original settings.
+2. On diagnostic-only complete=true/completed_steps=3 with finite probes and no resource/audit error, run a NEW100-step diagnostic from the same original GD500 (not from3); no weights are saved and no resume exists.
+3. Copy before.png/after.png/diagnostic.json/logs locally. Compare image structure, normalized L1, spatial variation and layer gradients; gray GD500 is already confirmed. Do not expand joint budget or change BN/optimizer/split until evidence supports a controlled next experiment.
 
-Current evidence: user reported continuous joint3 and GD500/joint100 steps; local copied final joint preview confirms 500-step pretrain initialization and 100 joint steps, and inspected images lack useful anatomy. This is engineering/exploratory evidence, not formal evaluation.
+Local verification remains STATIC ONLY. Single-training-sample observations do not prove generalization, model incapacity or a BN root cause. Master canonical memory is absent/unmodified; this is branch-local continuation.

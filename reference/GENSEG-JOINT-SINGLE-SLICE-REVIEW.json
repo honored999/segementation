@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-18",
+  "branch": "codex/genseg-reference",
+  "baseline": "b9df51a192d59d4d4aeafdddb55b6fbe87eb6de8",
+  "scope": "Fixed inner61 lesion-plane diagnostic initialized from exact completed GD500; same PretrainEngine/settings; before/after observational probes; no saved weights",
+  "result": "PASS STATIC",
+  "reviewer": "01a14f20-31a9-7ef1-92e2-c3737aa19bef",
+  "implementer": "01a14f1d-9364-7cd1-a397-4916843c73d5",
+  "profile": "Inherited platform model; xhigh requested; no LunaMax identity claim",
+  "blocking": [],
+  "resolved": [
+    "Moved expensive identity audit ahead of synchronization/cache release/resource sample; guard stays adjacent to compute",
+    "Added source for actual audit/sync/cache/guard/probe/update order assertion"
+  ],
+  "validation": [
+    "Leaf and parent final three-file newconda -I -S stdlib AST PASS",
+    "Independent Level3 final three-hash review and focused re-review PASS STATIC",
+    "git diff --check PASS"
+  ],
+  "not_run": [
+    "pytest or any tests",
+    "production or torch/model imports or loading",
+    "numerical/CUDA/resource probes",
+    "server three-step diagnostic"
+  ],
+  "invariants": [
+    "Fixed same inner61 first patient and first lesion plane; no random sampling/flips/refit or inner15/external19 arrays",
+    "Exact GD500 SHA and strict default-policy G/D handoff; existing training modules unchanged",
+    "Temporary scalar-only forward hooks removed in finally; parameter/gradient identity/version, buffer values, RNG and modes checked",
+    "Same resource thresholds/UUID/headroom/allocator ceiling; first probe and first update share guard; bounded waiting only after completed updates",
+    "Fresh protected outputs, final source/input/checkpoint/PNG audits; diagnostic-only completion last; no gan.pt/joint.pt or training receipt"
+  ],
+  "ownership": "Leaf source/tests/fix; parent coordination docs/branch memory/Git; no nested agents or direct parent source/test implementation",
+  "files": {
+    "experiments/genseg_joint/diagnostic.py": "ea15198c0f542f450415fb954f405536ad04a13ba4e224b03e796ecb7e6812bc",
+    "experiments/genseg_joint/cli.py": "4bc3cb317b0569261a2ca773d3f131a4c854a94ca0ff6f3a85a3a32478a2505f",
+    "experiments/genseg_joint/tests/test_single_slice.py": "ac7b00a9c8b087988e0678eb34edc763ed18909d90a52216f9c67a8d7f3313ad"
+  }
+}
