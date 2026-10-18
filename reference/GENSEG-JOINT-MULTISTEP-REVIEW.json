@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-18",
+  "baseline": "b5b795e506a253c44508f499eba3e87ff69047f4",
+  "branch": "codex/genseg-reference",
+  "user_override": "Local static review only; runtime validation on data computer",
+  "scope": "Synchronize -> release unused own CUDA cache -> original resource guard; allocator ceiling no greater than initial/pre-model minimum; short GD500joint100 proposal after server3+3",
+  "review": "Independent Level3 PASS(STATIC); exact3hashes rechecked",
+  "reviewer": "01a14e11-3218-70c2-89f2-65d2189522c7",
+  "profile": "Inherited platform model; no LunaMax claim",
+  "validation": {
+    "AST": "Parent/worker standard-library syntax parsing PASS3files; no production imports",
+    "diff_check": "PASS",
+    "pytest": "NOT RUN per user; before override one invocation started then interrupted, no result; none after override",
+    "model_numerical_CUDA": "NOT RUN per user",
+    "server3step": "NOT RUN; must validate before proposed500+100"
+  },
+  "evidence_boundary": "Inactive allocator-cache headroom refusal is static risk analysis, not a reproduced server failure; no claim of numerical equivalence or continuous runtime success",
+  "unchanged": "80percent thresholds,12GiB headroom,selectedUUID,CPU/RAM guards,raw/split/oldweights,seed,BN,loss,rates,optimizer/updateorder",
+  "ownership": "Sole leaf production/test edits; parent docs/staticacceptance/Git; no nested agents",
+  "files": {
+    "experiments/genseg_joint/runtime.py": "87d6df0f14c1fcc4e655d30b36886d389eecdb4b6e415ce912dfd37e4b0f0c52",
+    "experiments/genseg_joint/tests/test_multistep.py": "3349a26f52f4887d32065dd314b974f909769655920ef553aaecd4411bb8771f",
+    "experiments/genseg_joint/tests/test_pretrain.py": "a0f10024fba44784ba1aee3150235ac286e81ca88b79fdb3ba32478f2d8864ae"
+  }
+}

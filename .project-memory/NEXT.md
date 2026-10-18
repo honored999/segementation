@@ -36,3 +36,9 @@
 1. Data computer pull --ff-only, then reference/GENSEG-JOINT-PREVIEW-RUNBOOK.md to preview the completed1+1 joint checkpoint in a new HD-BET_outputs directory.
 2. Inspect lesion/empty PNGs and preview.json for anatomy, label alignment and artifacts. No generated dataset has been exported; no image-quality approval or segmentation benefit yet.
 3. Confirm multi-step resource behavior and define a small longer budget separately; no training/guard/resume changes were included in this preview task.
+
+## Branch-local immediate action: increased training (2026-10-18)
+
+1. Pull code on data computer, follow reference/GENSEG-JOINT-SHORT-RUNBOOK.md for fresh-directory GD3/joint3 preflight; stop on any resource/numerical error.
+2. Only after that succeeds, fresh GD500 -> new joint100 -> same-slice preview. Preserve1+1 baseline, raw/splits/targets and all old weights. Budget is exploratory, no performance claim.
+3. Local checks remain STATIC ONLY per user; all runtime validation uses data computer. Current code saves weights only at successful run end and cannot resume interruptions.

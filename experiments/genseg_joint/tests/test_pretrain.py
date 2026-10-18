@@ -208,6 +208,7 @@ def test_phase_orchestration_cpu_arrays_and_immutable_handoff(tmp_path,monkeypat
         monkeypatch.setattr(torch.cuda,name,lambda v=value:v)
     monkeypatch.setattr(torch.cuda,'set_per_process_memory_fraction',lambda *a:None)
     monkeypatch.setattr(torch.cuda,'synchronize',lambda:None)
+    monkeypatch.setattr(torch.cuda,'empty_cache',lambda:None)
     original_to=torch.Tensor.to
     def cpu_to(self,*a,**kw):
         if a and a[0]=='cuda:0': a=('cpu',)+a[1:]

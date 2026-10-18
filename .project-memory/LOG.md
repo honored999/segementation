@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - Short multi-step run preparation (branch-local; static)
+
+- Changed: release only unused CUDA cache before unchanged strict step guard, cap allocator budget at initial/pre-model minimum; no seed/split/loss/BN/optimizer changes.
+- Validation: AST3files/diffcheck and independent Level3 PASS(STATIC). Pytest/model/CUDA/numerical execution NOT RUN per user; earlier invocation interrupted without result.
+- Result: code statically accepted, real multi-step unverified. Leaf owns source/tests, parent coordination only; canonical master memory unchanged.
+- Next: target-PC3+3 then proposed GD500joint100, separate output dirs and same-slice image review; no resume claim.
+
 ## 2026-10-18 - Joint checkpoint qualitative preview (branch-local)
 
 - Changed: strict completed-joint G/alpha restoration, inner61-only deterministic native four-panel PNG preview, shared saved display scale, final provenance receipt; zero-valid-plane failure preserves diagnostics.

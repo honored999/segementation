@@ -139,7 +139,7 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         'derivative':'full_autodiff_direct_alpha_in_Gprime_forward_plus_indirect_virtualG_route; Eq9_interpretation',
         'BN':'eval_frozen_buffers_all_virtual_and_actual_calls_deviation',
         'actual_order':'alpha_then_G_D_gradients_using_new_alpha_then_S_using_updated_G',
-        'guard':'80percent_all_resources_and_free_headroom_before_models_and_every_step; fail_no_cooldown_no_interference',
+        'guard':'80percent_all_resources_and_free_headroom_before_models_and_every_step; synchronize_then_empty_cache_before_step_guard; fail_no_cooldown_no_interference',
         'selection':'last_complete_step_only; no_outer19_reads_or_metrics; no_resume',
         'runtime':{'torch':str(torch.__version__),'numpy':np.__version__},
         'repository_commit':subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()}
@@ -173,7 +173,9 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
             handoff_expected['scaling']=scale
         final_audit()
         snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
-        torch.cuda.set_per_process_memory_fraction(snap['allocator_fraction'],0)
+        # Recheck before models; never raise the initially permitted ceiling.
+        allocator_ceiling=min(initial['allocator_fraction'],snap['allocator_fraction'])
+        torch.cuda.set_per_process_memory_fraction(allocator_ceiling,0)
         if phase=='gan_pretrain':
             from .models import Generator
             from .core import PretrainEngine
@@ -187,7 +189,12 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         with (output/'steps.jsonl').open('x',encoding='utf-8') as log:
             for index in range(steps):
                 torch.cuda.synchronize()
+                # Previous inputs were deleted; release only unused own allocator cache.
+                # Live model/optimizer tensors remain counted by the unchanged guard.
+                torch.cuda.empty_cache()
                 snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
+                snap['applied_allocator_fraction']=allocator_ceiling
+                snap['cache_policy']='synchronize_then_empty_cache; no_retry'
                 final_audit()
                 tx,ty,train_record=cohort.sample('train',rng,scale)
                 if phase=='gan_pretrain':
