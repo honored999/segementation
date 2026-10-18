@@ -1,0 +1,37 @@
+{
+  "baseline_commit": "89e1bf29dc50b7ba3aef5a92c9cac827100f7318",
+  "branch": "codex/genseg-joint-unet",
+  "review": "independent Level3 PASS on revision1; all15 frozen file hashes verified",
+  "snapshot_sha256": "dd56ea379c19e60b438deba610ac2b42e2024c24e494a5fc01656ccb7e0f522f",
+  "validation": "27 guarded CPU affected tests PASS; root/check/train CLI help PASS",
+  "actual_network_test": "pinned generator width1/downs5 + PatchGAN width1 + exact author UNet width64, default rates, CPU synthetic: alpha grad2.03679e-13 delta2.03914e-9",
+  "not_run": [
+    "real patient joint training",
+    "CUDA higher-order chain",
+    "native full-width GPU peak",
+    "full-volume segmentation evaluation"
+  ],
+  "protocol": "coldstart0 pretraining; inner61weights/15architecture; original19 excluded THIS run, historical development cohort, not pristine test",
+  "source_changes": "new experiments/genseg_joint only; no existing source/raw/upstream/splits/checkpoint modifications",
+  "ownership": "implementation delegated leaf worker; separate read-only reviewer; parent coordination/documents/packaging only; no nested workers",
+  "completion_note": "Only complete.json TOP-LEVEL complete=true is completion. Nested protocol complete=false is the original started-protocol snapshot. Zero/nonfinite gradient/update refuses success.",
+  "git_at_packaging": "not committed or pushed; original codex/genseg-reference checkout untouched; server-first sync retained",
+  "memory": "canonical unchanged; isolated unintegrated engineering delivery",
+  "files": {
+    "experiments/genseg_joint/__init__.py": "bade15b23973864b7bc233f19b8b9e83b342d4787a7f8edd5855a38f21fc4081",
+    "experiments/genseg_joint/cli.py": "cb0179be4511b70df2a145b827df2c2ab7feb3c051cd3b4b4dfa241f931ded41",
+    "experiments/genseg_joint/core.py": "3122400198062f80cac64f836d3ee48d0606a4af9c080e20a4e18e93b0e444b7",
+    "experiments/genseg_joint/data.py": "3d3f2ae3142b097080fea59b40fb6a5b417b1735353dbbac44b39a3d89da55a5",
+    "experiments/genseg_joint/models.py": "9868ae8dc5da295e70ccde5e894f49578daff08d5ef0fdea5bf994ab02345f46",
+    "experiments/genseg_joint/runtime.py": "36babdc8cfd8ee2605065180393549a98a7b565e79cf05ee13bbe9533fa5a905",
+    "experiments/genseg_joint/tests/run_guarded.ps1": "b89ab859f12760fa4ea0562c2275843d038d481a309f37c1947d22476cdc1411",
+    "experiments/genseg_joint/tests/test_core.py": "968d817f56b0e7249ce946c75631c895b39edca5c2bc0e764d73d7cfc2672aea",
+    "experiments/genseg_joint/tests/test_data.py": "6a473cb5888217ed08e89c0aff102140607c8bfce81db2c889a641eeb8ab32d8",
+    "experiments/genseg_joint/tests/test_models.py": "c97fe0b95a126ac5339bcde385a78d708981430764850c384ca132e703aec7f0",
+    "experiments/genseg_joint/tests/test_runtime.py": "3021c3a39ee81d267708321c7789185950be5ccf64469e5fd76707438241f6ae",
+    "reference/GENSEG-JOINT-IMPLEMENTATION.md": "aabd8e9f927f4bfb04025c73de67d64f885211f7b30e2db173dbcee6568841fc",
+    "reference/GENSEG-JOINT-PLAN.md": "603b5952bdc13cb1af05f66f7e6a62e2470fff0c30247d268b9c988ca4f59984",
+    "reference/GENSEG-JOINT-PROTOCOL.md": "71a6adb5c5d7be6a8b3b5e8ca6ec855d681c5ec8879264c339f5185da58c30a1",
+    "reference/GENSEG-JOINT-RUNBOOK.md": "0cafe00ce1bed0fb5a54f15c6a8e80103bc1baa4da94897b1a3037f6a99f5ae3"
+  }
+}
