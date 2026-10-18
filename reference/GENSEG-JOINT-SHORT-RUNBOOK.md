@@ -1,6 +1,6 @@
 # GenSeg 增加训练：先3步验证，再500+100步观察
 
-状态：本地仅做源码/语法检查及独立静态审阅，不执行pytest、模型或数值运行；真实连续多步验证按用户要求放到数据电脑。本次独立Level3静态审阅PASS；运行结果尚未验证，见GENSEG-JOINT-MULTISTEP-REVIEW.json。此预算是本项目的短程探索设定，不是论文默认值，不承诺图像质量或分割收益。保持原95例固定五折和fold0的76/19，内部61权重训练/15架构优化不变。
+状态：本地仅做源码/语法检查及独立静态审阅，不执行pytest、模型或数值运行；真实连续多步验证按用户要求放到数据电脑。缓存清理和本次有界重采样均获独立Level3静态审阅PASS；服务器联合3步尚未通过，当前修正见GENSEG-JOINT-COOLDOWN-REVIEW.json，历史缓存修正见MULTISTEP-REVIEW.json。此预算是本项目的短程探索设定，不是论文默认值，不承诺图像质量或分割收益。保持原95例固定五折和fold0的76/19，内部61权重训练/15架构优化不变。
 
 ## 同步与通用路径（Anaconda Prompt / CMD）
 
@@ -22,7 +22,7 @@ cd /d "%REPO%"
 
 本地仅静态检查，使用newconda做AST语法解析而不导入模型；数据电脑沿用已验证的CUDA环境nnunet5090；不要仅为环境名升级依赖。若git pull或输出目录冲突，保留已有修改/结果，核对后再处理，不reset/覆盖。以下所有输出目录均必须全新，已存在则换attempt02等后缀。旧5000步生成器只作来源核验，不能加载为这轮61例训练初始化。
 
-步间修正仅在同步后释放本进程未使用的PyTorch缓存，再沿用原资源检查；固定显存分配上限不超过启动时允许值。不会清除模型/优化器活跃张量、不改80%阈值、不自动重试忙碌GPU。若GPU利用率采样仍记为繁忙，保留报错与资源记录，先核对服务器实况再决定；不把本地静态通过当作服务器已可稳定多步。
+步间修正仅在同步后释放本进程未使用的PyTorch缓存，再沿用原资源检查；固定显存分配上限不超过启动时允许值。不会清除模型/优化器活跃张量、不改80%阈值。新补丁仅在步间对利用率超阈值且其余条件全部通过的情况最多等待5次、每次1秒后重采样；持续繁忙仍拒绝，启动前/建模前不等待，CPU/RAM/显存/UUID/遥测异常立即停止。这里5秒仅指累计sleep时间，采样命令本身另需时间；等待不是忽略门禁，也不能证明繁忙来自本进程。不把本地静态通过当作服务器已可稳定多步。
 
 ## 1. 真实GPU连续3步预检
 
@@ -45,6 +45,25 @@ type "%JOINT%\complete.json"
 
 确认joint的steps.jsonl有连续1/2/3三条成功记录，顶层complete=true且steps=3；每步G/D/S损失和梯度有限，架构变化非零。资源拒绝、CUDA OOM、数值错误均保留原输出/错误，不能删除保护/降分辨率冒充同次实验。不把预检3+3结果当作训练效果；后面的500+100是新目录的全新训练，不是续接3步权重。
 
+## 已完成GD3、joint3在第2步前被81%利用率拦住时
+
+保留genseg_joint_3steps_trial01失败目录；本次确认的是利用率门禁拒绝，显存仅5.4%，不是CUDA OOM。使用已有完成的GD3即可，不重训、不加载部分joint结果。更新到有限步间重采样补丁后，在原CMD设置：
+
+```bat
+set "PRETRAIN=C:\lijialin\HD-BET_outputs\genseg_gd_pretrain_3steps_trial01"
+set "JOINT=C:\lijialin\HD-BET_outputs\genseg_joint_3steps_trial02"
+for /f %H in ('powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $env:PRETRAIN gan.pt)).Hash.ToLowerInvariant()"') do set "PRETRAIN_SHA=%H"
+python -m experiments.genseg_joint.cli check --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --pretrained-run "%PRETRAIN%" --pretrained-sha256 "%PRETRAIN_SHA%"
+```
+
+仅CHECK PASS后执行：
+
+```bat
+python -m experiments.genseg_joint.cli train --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --gpu 1 --steps 3 --l1-weight 100 --pretrained-run "%PRETRAIN%" --pretrained-sha256 "%PRETRAIN_SHA%"
+type "%JOINT%\complete.json"
+```
+
+若trial02已存在，换trial03等。仍失败则保留guard_events.jsonl等待日志、failed.json.resource_guard及完整异常，不重复改阈值或立即扩大预算。只有联合3步真正完成再执行下文500+100。
 ## 2. G/D预训练500步
 
 确认3+3在真实GPU通过再执行：

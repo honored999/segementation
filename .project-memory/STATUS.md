@@ -58,3 +58,9 @@ Updated: 2026-09-21
 - Added synchronize/unused-cache release before unchanged per-step guard; fixed allocator ceiling to minimum initial/pre-model budget. No resource thresholds or numerical/data settings changed; no cooldown/retry.
 - Latest user instruction: local static review only. Three files AST/diff checks and independent Level3 PASS(STATIC); pytest/model/CUDA/numerical execution NOT RUN. Pre-override test start interrupted without result.
 - Proposed observation budget: target-PC3+3 first, then new GD500 and joint100 plus same-inner61 previews. Server multi-step success and image-quality benefit unverified; no resume/periodic recovery added.
+
+## Branch-local selected-utilization cooldown (2026-10-18; static only)
+
+- Server user evidence: GD3 completed; joint3 stopped beforestep2 at81percent selectedGPUutil whileVRAM5.4percent. No completejoint3/500+100success; utilization attribution unresolved.
+- Typed util-only finite retry only between completed steps (6attempts/5x1sec); all non-util guards checked first, no initial/first-step wait. Events/failed diagnostics recorded; thresholds/numerical protocol unchanged.
+- Parent/workerAST3files+diffcheck and independent Level3 PASS STATIC; localruntime NOT RUN per user. ReusecompletedGD3, freshjointtrial02, retainfailedtrial01; no resume.

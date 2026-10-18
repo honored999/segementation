@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - Selected-GPU utilization sampling retry (branch-local; static)
+
+- Changed: typed util-only six-attempt guard between completedsteps; permanentguardsfirst, finite wait/event diagnostics, initialguardunchanged.
+- Validation: AST3files/diffcheck and independentLevel3 PASSSTATIC; no localtests/model/CUDA peruser. ServerGD3passed but priorjoint3failed beforestep2 at81percentutil/5.4percentVRAM; newretryunverified.
+- Result: sourceleafowned, no nestedagents; raw/splits/oldweights and numericalprotocol unchanged; canonicalmastermemoryuntouched.
+- Next: reuseGD3, freshjointtrial02; preservetrial01 and inspectruntimebefore500+100.
+
 ## 2026-10-18 - Short multi-step run preparation (branch-local; static)
 
 - Changed: release only unused CUDA cache before unchanged strict step guard, cap allocator budget at initial/pre-model minimum; no seed/split/loss/BN/optimizer changes.

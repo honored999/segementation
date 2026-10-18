@@ -42,3 +42,8 @@
 1. Pull code on data computer, follow reference/GENSEG-JOINT-SHORT-RUNBOOK.md for fresh-directory GD3/joint3 preflight; stop on any resource/numerical error.
 2. Only after that succeeds, fresh GD500 -> new joint100 -> same-slice preview. Preserve1+1 baseline, raw/splits/targets and all old weights. Budget is exploratory, no performance claim.
 3. Local checks remain STATIC ONLY per user; all runtime validation uses data computer. Current code saves weights only at successful run end and cannot resume interruptions.
+
+## Branch-local immediate action: joint3 retry (2026-10-18)
+
+1. Pull bounded-utilization cooldown fix, reuse completedGD3, start NEW genseg_joint_3steps_trial02 using SHORT-RUNBOOK retry section; preservefailedtrial01.
+2. Collect3step logs/complete receipt, or guard_events.jsonl plus failed.json.resource_guard. No500+100untiljoint3complete. Do not raise limits/disable checks; all localreview remainsstaticonly.

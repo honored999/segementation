@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import time
 import numpy as np
 from experiments.genseg30.contract import require, check_output, write_json, sha256, assert_identities
 
@@ -13,8 +14,35 @@ TARGET_SHA256='23d25e2b2a6d7c7ca2a270690a9d4d35116ff4f834458b48a9049ff889894a56'
 CLASSIFICATION='engineering_genseg_joint_author_unet_coldstart_not_formal'
 
 
+class SelectedGPUUtilizationBusy(ValueError):
+    def __init__(self, diagnostic):
+        self.diagnostic=diagnostic
+        super().__init__('Resource guard refused: Physical GPU '+str(diagnostic['index'])+': '
+                         +json.dumps(diagnostic,sort_keys=True)+'; require utilization<80%')
+
+
+def between_step_guard(index, *, emit, **kwargs):
+    for attempt in range(1,7):
+        try:
+            snap=gpu_guard(index,**kwargs)
+        except SelectedGPUUtilizationBusy as exc:
+            event=dict(event='selected_gpu_utilization_busy',attempt=attempt,
+                       waited_seconds=attempt-1,max_waits=5,diagnostic=exc.diagnostic)
+            if attempt==6:
+                event['exhausted']=True
+                emit(event)
+                exc.diagnostic=event
+                raise
+            event['wait_seconds']=1
+            emit(event)
+            time.sleep(1)
+        else:
+            snap.update(guard_attempts=attempt,guard_waited_seconds=attempt-1)
+            return snap
+
+
 def gpu_guard(index, *, expected_uuid=None, min_free_vram_gib=12., min_free_ram_gib=8.):
-    from experiments.genseg3mm.targets import bind_gpu
+    from experiments.genseg3mm.targets import _resource_snapshot
     require(type(index) is int and index>=0,'Physical GPU index must be a nonnegative integer')
     # Query only the requested physical GPU; other cards may run unrelated jobs.
     result=subprocess.run(['nvidia-smi','-i',str(index),
@@ -29,21 +57,38 @@ def gpu_guard(index, *, expected_uuid=None, min_free_vram_gib=12., min_free_ram_
     except ValueError as exc:
         raise ValueError(f'Physical GPU {index}: invalid numeric telemetry {rows[0]!r}') from exc
     require(measured_index==index,f'Physical GPU {index}: telemetry index mismatch ({measured_index})')
-    require(all(math.isfinite(v) and v>=0 for v in (util,used,total)) and total>0,
+    require(all(math.isfinite(v) and v>=0 for v in (util,used,total)) and total>0 and util<=100 and used<=total,
             f'Physical GPU {index}: invalid utilization={util}, memory={used}/{total} MiB; '
             'finite nonnegative metrics and positive total required')
     memory_pct=100*used/total
     context=(f'Physical GPU {index}: utilization={util:g}%, memory={used:g}/{total:g} MiB '
              f'({memory_pct:g}%); require utilization<80% and VRAM<80%')
-    require(util<80 and memory_pct<80,'Resource guard refused: '+context)
-    # Keep the real CPU/RAM/headroom/selected-GPU guard and UUID environment binding.
-    try:
-        snap=bind_gpu(index,min_vram_gib=min_free_vram_gib,min_ram_gib=min_free_ram_gib)
-    except ValueError as exc:
-        raise ValueError(f'{context}: {exc}') from exc
+    require(memory_pct<80,'Resource guard refused: '+context)
+    # Reuse bind_gpu's secondary telemetry; classify busy only after all guards.
+    snap=_resource_snapshot(index)
+    for key in ('cpu_pct','ram_used_pct','gpu_util_pct','ram_available','vram_available'):
+        v=snap[key]
+        require(type(v) in (int,float) and math.isfinite(v) and v>=0,
+                'Resource guard refused: invalid '+key)
+    for key in ('cpu_pct','ram_used_pct','gpu_util_pct'):
+        require(snap[key]<=100,'Resource guard refused: invalid '+key)
     require(bool(uid) and uid==snap['gpu_uuid'],f'Physical GPU {index}: selected telemetry/binding UUID mismatch')
     if expected_uuid is not None:
         require(uid==expected_uuid,f'Physical GPU {index}: UUID changed from {expected_uuid} to {uid}')
+    for key in ('cpu_pct','ram_used_pct'):
+        require(snap[key]<80,'Resource guard refused: '+key+' >= 80 percent')
+    require(snap['ram_available']>=min_free_ram_gib*1024**3,'Resource guard refused: insufficient free RAM')
+    require(snap['vram_available']<=total*1024**2,'Resource guard refused: invalid free VRAM')
+    require((total-used)*1024**2>=min_free_vram_gib*1024**3 and
+            snap['vram_available']>=min_free_vram_gib*1024**3,
+            'Resource guard refused: insufficient free VRAM')
+    require(100*(1-snap['vram_available']/(total*1024**2))<80,
+            'Resource guard refused: secondary VRAM >= 80 percent')
+    if max(util,snap['gpu_util_pct'])>=80:
+        raise SelectedGPUUtilizationBusy(dict(index=index,uuid=uid,primary_util_pct=util,
+            secondary_util_pct=snap['gpu_util_pct'],used_mib=used,total_mib=total,
+            vram_available=snap['vram_available']))
+    os.environ['CUDA_VISIBLE_DEVICES']=uid
     selected={'index':index,'uuid':uid,'util_pct':util,'used_mib':used,'total_mib':total}
     # Compatibility key: a ONE-element list, explicitly scoped to the selected card.
     snap['all_gpus']=[selected]
@@ -139,7 +184,7 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         'derivative':'full_autodiff_direct_alpha_in_Gprime_forward_plus_indirect_virtualG_route; Eq9_interpretation',
         'BN':'eval_frozen_buffers_all_virtual_and_actual_calls_deviation',
         'actual_order':'alpha_then_G_D_gradients_using_new_alpha_then_S_using_updated_G',
-        'guard':'80percent_all_resources_and_free_headroom_before_models_and_every_step; synchronize_then_empty_cache_before_step_guard; fail_no_cooldown_no_interference',
+        'guard':'80percent_all_resources_and_free_headroom_before_models_and_every_step; synchronize_then_empty_cache_before_step_guard; between_completed_steps_only_selected_util_retry_max5x1s; other_failures_immediate_no_interference',
         'selection':'last_complete_step_only; no_outer19_reads_or_metrics; no_resume',
         'runtime':{'torch':str(torch.__version__),'numpy':np.__version__},
         'repository_commit':subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()}
@@ -186,15 +231,23 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
             if receipt is not None:
                 load_pretrained(pretrained_run,pretrained_sha256,g,d,expected=handoff_expected)
             engine=JointEngine(g,d,s,g_lr=g_lr,d_lr=d_lr,s_lr=s_lr,arch_lr=arch_lr,l1_weight=l1_weight)
-        with (output/'steps.jsonl').open('x',encoding='utf-8') as log:
+        with (output/'guard_events.jsonl').open('x',encoding='utf-8') as guard_log, \
+                (output/'steps.jsonl').open('x',encoding='utf-8') as log:
+            def emit_guard(event):
+                guard_log.write(json.dumps(event,allow_nan=False)+'\n'); guard_log.flush()
+                print(json.dumps(event,allow_nan=False),flush=True)
             for index in range(steps):
                 torch.cuda.synchronize()
                 # Previous inputs were deleted; release only unused own allocator cache.
                 # Live model/optimizer tensors remain counted by the unchanged guard.
                 torch.cuda.empty_cache()
-                snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
+                if index>0:
+                    snap=between_step_guard(gpu,emit=emit_guard,expected_uuid=initial['gpu_uuid'],**guard_args)
+                else:
+                    snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
+                    snap.update(guard_attempts=1,guard_waited_seconds=0)
                 snap['applied_allocator_fraction']=allocator_ceiling
-                snap['cache_policy']='synchronize_then_empty_cache; no_retry'
+                snap['cache_policy']='synchronize_then_empty_cache; between_steps_util_only_max5x1s'
                 final_audit()
                 tx,ty,train_record=cohort.sample('train',rng,scale)
                 if phase=='gan_pretrain':
@@ -226,6 +279,7 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         # A failed final audit never writes the complete receipt.
         write_json(output/'failed.json',{'complete':False,'error_type':type(exc).__name__,'error':str(exc),
             'completed_steps':0 if engine is None else engine.steps,
+            'resource_guard':getattr(exc,'diagnostic',None),
             'diagnostics':{} if engine is None else getattr(engine,'last_diagnostics',{})})
         raise
     return output

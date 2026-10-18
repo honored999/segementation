@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-18",
+  "baseline": "2ebbef7266b58d30a242e129990967b0e5058535",
+  "branch": "codex/genseg-reference",
+  "server_evidence": "User reported GD3 successful; joint3 completedstep1 then refused beforestep2 atGPU1util81percent and1759/32607MiB VRAM. Incomplete joint trial retained; origin of utilization unresolved.",
+  "scope": "Typed selected-utilization-only cooldown between completed steps:6attempts/5one-secondwaits; permanentconstraintscheckedfirst; other guardsimmediate",
+  "review": "Independent Level3 PASS STATIC on final3hashes",
+  "reviewer": "01a14e20-579a-76a3-9d06-e76b678a195a",
+  "review_transport": "First reviewer failed429; replaced separate context; no profileclaim",
+  "validation": {
+    "AST": "Worker+parent standardlibrary syntaxparse PASS3files",
+    "diff_check": "PASS",
+    "pytest_model_numerical_CUDA": "NOT RUN per user localSTATICONLY",
+    "server_retry": "NOT RUN; reusecompletedGD3,freshjointtrial02"
+  },
+  "diagnostics": "guard_events.jsonl flushes busyattempts; successlogs attempt/waitcount; exhaustedbusy diagnostic failed.json.resource_guard",
+  "unchanged": "80percent resource limits/headroom/UUID,data/splits/weights,seed/BN/loss/rates/optimizers/updateorder; no resume",
+  "ownership": "Leafsource/testowner; parentcoordination/Git only; no nested agents",
+  "files": {
+    "experiments/genseg_joint/runtime.py": "7696eba6d9cf21e9b1f4ba70ffb5ef2576fba16b7ec82b481d42450d4cc86a1c",
+    "experiments/genseg_joint/tests/test_runtime.py": "e1221cb713b7ecfd4d4f58f06fb133cf9ad87e709cf50a7f6d1448001612ec38",
+    "experiments/genseg_joint/tests/test_multistep.py": "7e891e4b5cecce9387d9189e567f9538675205f8ceb4dc5ba220a99b61ac74d9"
+  }
+}

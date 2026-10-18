@@ -48,7 +48,7 @@ def selected_gpu_fixture(monkeypatch, *, rows=None, resources=None):
     from types import SimpleNamespace
     import experiments.genseg3mm.targets as targets
     import experiments.genseg_joint.runtime as runtime
-    inventory={0:'0, GPU-zero, 95, 90, 100',1:'1, GPU-one, 3, 10, 100'}
+    inventory={0:'0, GPU-zero, 95, 29491.2, 32768',1:'1, GPU-one, 3, 3276.8, 32768'}
     queries=[]
     def query(command,**kwargs):
         queries.append(command)
@@ -60,7 +60,7 @@ def selected_gpu_fixture(monkeypatch, *, rows=None, resources=None):
         return dict(cpu_pct=2.,ram_used_pct=20.,ram_available=32*1024**3,
                     gpu_uuid='GPU-one' if index==1 else 'GPU-zero',gpu_util_pct=3.,
                     vram_available=32*1024**3) | (resources or {})
-    # Substitute measured OS/GPU telemetry only; the REAL bind_gpu enforces CPU/RAM/headroom.
+    # Substitute measured OS/GPU telemetry only; gpu_guard validates both snapshots locally.
     monkeypatch.setattr(targets,'_resource_snapshot',snapshot)
     monkeypatch.setattr(runtime.subprocess,'run',query)
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES','test-original')
@@ -71,15 +71,15 @@ def test_selected_idle_gpu_ignores_busy_other_card(monkeypatch):
     from experiments.genseg_joint.runtime import gpu_guard
     queries=selected_gpu_fixture(monkeypatch)
     snap=gpu_guard(1,expected_uuid='GPU-one')
-    assert snap['all_gpus']==[{'index':1,'uuid':'GPU-one','util_pct':3.,'used_mib':10.,'total_mib':100.}]
+    assert snap['all_gpus']==[{'index':1,'uuid':'GPU-one','util_pct':3.,'used_mib':3276.8,'total_mib':32768.}]
     assert snap['allocator_fraction']==pytest.approx(.69)
     assert all(command[:3]==['nvidia-smi','-i','1'] for command in queries)
     assert all('--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total' in command for command in queries)
-    with pytest.raises(ValueError,match=r'GPU 0.*95.*90.*80'):
+    with pytest.raises(ValueError,match=r'GPU 0.*95.*80'):
         gpu_guard(0)
 
 
-@pytest.mark.parametrize('row', ['1, GPU-one, 80, 10, 100','1, GPU-one, 3, 80, 100'])
+@pytest.mark.parametrize('row', ['1, GPU-one, 80, 3276.8, 32768','1, GPU-one, 3, 26214.4, 32768'])
 def test_selected_gpu_busy_util_or_vram_rejected(monkeypatch,row):
     from experiments.genseg_joint.runtime import gpu_guard
     selected_gpu_fixture(monkeypatch,rows=row)
@@ -87,13 +87,13 @@ def test_selected_gpu_busy_util_or_vram_rejected(monkeypatch,row):
 
 
 @pytest.mark.parametrize('row', [
-    '0, GPU-one, 3, 10, 100','1, GPU-wrong, 3, 10, 100',
+    '0, GPU-one, 3, 3276.8, 32768','1, GPU-wrong, 3, 3276.8, 32768',
     '1, GPU-one, nan, 10, 100','1, GPU-one, 3, inf, 100',
     '1, GPU-one, 3, 10, nan','1, GPU-one, -1, 10, 100',
     '1, GPU-one, 3, -1, 100','1, GPU-one, 3, 10, 0',
     '1, GPU-one, 3, 10, -100','1, GPU-one, invalid, 10, 100',
     '1, GPU-one, 3, 10', '',
-    '1, GPU-one, 3, 10, 100\n0, GPU-zero, 95, 90, 100'])
+    '1, GPU-one, 3, 3276.8, 32768\n0, GPU-zero, 95, 29491.2, 32768'])
 def test_selected_gpu_malformed_metrics_or_identity_rejected(monkeypatch,row):
     from experiments.genseg_joint.runtime import gpu_guard
     selected_gpu_fixture(monkeypatch,rows=row)
@@ -149,3 +149,87 @@ def test_pinned_source_content_tamper_rejected(tmp_path,monkeypatch):
     path=tmp_path/'reference/GenSeg/unet/unet_model.py'
     path.write_bytes(path.read_bytes()+b'\n# tampered')
     with pytest.raises(ValueError,match='Pinned'): models.source_identity()
+
+
+@pytest.mark.parametrize('secondary',[False,True])
+def test_between_steps_busy_then_idle(monkeypatch,secondary):
+    from experiments.genseg_joint import runtime
+    import experiments.genseg3mm.targets as targets
+    selected_gpu_fixture(monkeypatch)
+    calls=[]; waits=[]; events=[]
+    if secondary:
+        original=targets._resource_snapshot
+        def sample(index):
+            snap=original(index); calls.append(index)
+            snap['gpu_util_pct']=81. if len(calls)==1 else 2.
+            return snap
+        monkeypatch.setattr(targets,'_resource_snapshot',sample)
+    else:
+        original=runtime.subprocess.run
+        def sample(command,**kw):
+            result=original(command,**kw); calls.append(command)
+            if len(calls)==1: result.stdout='1, GPU-one, 81, 3276.8, 32768'
+            return result
+        monkeypatch.setattr(runtime.subprocess,'run',sample)
+    monkeypatch.setattr(runtime.time,'sleep',waits.append)
+    snap=runtime.between_step_guard(1,emit=events.append,expected_uuid='GPU-one')
+    assert waits==[1] and snap['guard_attempts']==2 and snap['guard_waited_seconds']==1
+    assert events[0]['attempt']==1 and len(calls)==2
+
+
+def test_persistent_busy_exact_bound(monkeypatch):
+    from experiments.genseg_joint import runtime
+    selected_gpu_fixture(monkeypatch,rows='1, GPU-one, 81, 3276.8, 32768')
+    waits=[]; events=[]
+    monkeypatch.setattr(runtime.time,'sleep',waits.append)
+    with pytest.raises(runtime.SelectedGPUUtilizationBusy) as caught:
+        runtime.between_step_guard(1,emit=events.append,expected_uuid='GPU-one')
+    assert waits==[1]*5 and len(events)==6
+    assert caught.value.diagnostic['exhausted'] and events[-1]['attempt']==6
+
+
+@pytest.mark.parametrize('resources',[
+    {'cpu_pct':80.},{'ram_used_pct':80.},{'cpu_pct':float('nan')},
+    {'gpu_util_pct':float('inf')},{'gpu_util_pct':101.},
+    {'ram_available':7*1024**3},{'vram_available':11*1024**3},
+    {'gpu_uuid':'wrong'},{'vram_available':float('nan')}])
+def test_busy_with_permanent_secondary_fault_never_waits(monkeypatch,resources):
+    from experiments.genseg_joint import runtime
+    selected_gpu_fixture(monkeypatch,rows='1, GPU-one, 81, 3276.8, 32768',resources=resources)
+    waits=[]; events=[]
+    monkeypatch.setattr(runtime.time,'sleep',waits.append)
+    with pytest.raises((ValueError,KeyError)) as caught:
+        runtime.between_step_guard(1,emit=events.append,expected_uuid='GPU-one')
+    assert not isinstance(caught.value,runtime.SelectedGPUUtilizationBusy)
+    assert waits==events==[]
+
+
+@pytest.mark.parametrize('row',[
+    '0, GPU-one, 81, 3276.8, 32768','1, GPU-other, 81, 3276.8, 32768',
+    '1, GPU-one, 81, 27000, 32768','1, GPU-one, 81, 22000, 32768',
+    '1, GPU-one, nan, 3276.8, 32768','1, GPU-one, 101, 3276.8, 32768'])
+def test_busy_with_primary_fault_never_waits(monkeypatch,row):
+    from experiments.genseg_joint import runtime
+    selected_gpu_fixture(monkeypatch,rows=row)
+    waits=[]
+    monkeypatch.setattr(runtime.time,'sleep',waits.append)
+    with pytest.raises(ValueError) as caught:
+        runtime.between_step_guard(1,emit=lambda e:None,expected_uuid='GPU-one')
+    assert not isinstance(caught.value,runtime.SelectedGPUUtilizationBusy) and not waits
+
+
+def test_secondary_busy_initial_guard_is_immediate(monkeypatch):
+    from experiments.genseg_joint import runtime
+    selected_gpu_fixture(monkeypatch,resources={'gpu_util_pct':81.})
+    waits=[]
+    monkeypatch.setattr(runtime.time,'sleep',waits.append)
+    with pytest.raises(runtime.SelectedGPUUtilizationBusy): runtime.gpu_guard(1)
+    assert not waits
+
+
+def test_retry_does_not_catch_interrupt(monkeypatch):
+    from experiments.genseg_joint import runtime
+    selected_gpu_fixture(monkeypatch,rows='1, GPU-one, 81, 3276.8, 32768')
+    def interrupt(seconds): raise KeyboardInterrupt()
+    monkeypatch.setattr(runtime.time,'sleep',interrupt)
+    with pytest.raises(KeyboardInterrupt): runtime.between_step_guard(1,emit=lambda e:None)

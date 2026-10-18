@@ -12,7 +12,7 @@ from experiments.genseg30.contract import read_json
 def harness(monkeypatch, *, phase, fault=None):
     import experiments.genseg3mm.targets as targets
     torch.set_num_threads(1)
-    state={'cache':0, 'live':0, 'steps':0, 'events':[], 'ceilings':[], 'queries':0}
+    state={'cache':0, 'live':0, 'steps':0, 'events':[], 'ceilings':[], 'queries':0, 'waits':[]}
     class Target:
         train=[f't{i:02}' for i in range(76)]; val=[f'e{i:02}' for i in range(19)]
         protected=[]; identity={'synthetic':True}; manifest_sha256='a'*64; _identities={}
@@ -48,6 +48,7 @@ def harness(monkeypatch, *, phase, fault=None):
             if fault=='ram': snap['ram_used_pct']=80.
             if fault=='headroom': snap['vram_available']=11*1024**3
         return snap
+    monkeypatch.setattr(runtime.time,'sleep',state['waits'].append)
     monkeypatch.setattr(runtime.subprocess,'run',query)
     monkeypatch.setattr(targets,'_resource_snapshot',snapshot)
     for name,value in [('is_initialized',False),('is_available',True),('max_memory_allocated',0),
@@ -121,7 +122,10 @@ def test_repeated_guard_still_fails_closed_after_cache_release(tmp_path,monkeypa
     assert state['steps']==1
     assert not (output/'complete.json').exists()
     assert read_json(output/'failed.json')['completed_steps']==1
-    # No retry of persistent busy or malformed/identity/CPU/RAM observations.
+    # Only persistent utilization gets the exact bounded waits.
+    assert state['waits']==([1]*5 if fault=='busy' else [])
+    if fault=='busy':
+        assert read_json(output/'failed.json')['resource_guard']['exhausted']
     assert state['events'].count('release')==2
 
 
@@ -132,6 +136,7 @@ def test_initial_guard_unchanged_no_cache_cleanup_or_output(tmp_path,monkeypatch
         runtime.run(target,output,gpu=1,steps=3,phase='gan_pretrain')
     assert not output.exists() and state['steps']==0
     assert state['events']==['telemetry'] and not state['ceilings']
+    assert not state['waits']
 
 
 def test_premodel_recheck_never_increases_initial_allocator_budget(tmp_path,monkeypatch):
