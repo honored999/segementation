@@ -1,5 +1,12 @@
 # Log
 
+## 2026-10-18 - GD pretraining and joint handoff (branch-local)
+
+- Changed: inner61-only frozen-alpha GAN pretraining, phase checkpoint/receipt, safe same-protocol initialization of fresh author U-Net joint run; no resume.
+- Validation: guarded newconda CPU worker73/15/63 passed; parent43 key tests and CLI helps passed; exact five-file independent Level3 PASS.
+- Result: engineering implementation accepted; no target-PC real-data CUDA phase handoff or formal metrics. Raw/splits/old weights/upstream unchanged. Parent source/test edits none; leaf implementation, no nested workers.
+- Next: publish locally and data-computer1+1 phase trial per PRETRAIN-RUNBOOK. Canonical master memory unchanged.
+
 ## 2026-10-14 - GenSeg30 fold0 slice augmentation prepared (branch-local)
 
 - Changed: offline train-only conditional-GAN preparation and a separate

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-18",
+  "baseline": "22df4843502d4b78894566c8a00bd4d2fa5e5bdf",
+  "branch": "codex/genseg-reference",
+  "scope": "inner61-only GD pretraining -> completed gan.pt handoff -> fresh author UNet joint; first1+1 engineering trial",
+  "review": "Independent Level3 PASS; five frozen hashes verified before and after read-only review",
+  "reviewer": "01a14dda-d8f6-70e2-bd90-c6b79475c810",
+  "reviewer_profile": "Inherited platform model; LunaMax profile not requested/verified because platform limits explicit override",
+  "prior_reviewer_failure": "First independent reviewer stopped with usage-limit transport error; replaced with separate independent context",
+  "tests": {
+    "worker_joint": "73 passed13.71s",
+    "worker_3mm": "15 passed3.46s",
+    "worker_offline": "63 passed92.90s",
+    "parent_pretrain_and_core": "43 passed8.08s",
+    "parent_cli": "pretrain/train/check help PASS after per-command CPU/RAM/GPU preflight"
+  },
+  "validation_scope": "newconda; resource-guarded serial CPU synthetic, tiny pinned GD and exact author UNet numerical handoff; real target-PC CUDA handoff NOT RUN",
+  "unchanged": "raw data, fixed fivefold splits, old weights, upstream reference; external19 not used for fitting",
+  "limitations": [
+    "No interrupted-run resume",
+    "No long budget, image QA or segmentation performance claim",
+    "check handoff uses default GD rates and L1; custom settings must match train"
+  ],
+  "implementation": "Delegated sole leaf; parent coordination/docs/Git only; no nested agents",
+  "files": {
+    "experiments/genseg_joint/cli.py": "9a374aa20b7c5e27e1e2c048e479a6c0c1c424041a88888b17e71f13b2a4fe69",
+    "experiments/genseg_joint/core.py": "4a707122ca10a8db2e2c82925f667742abbd022356d28e16427026252184ceac",
+    "experiments/genseg_joint/runtime.py": "ed99e2ebf103b6b73df245d0217dd182d4523a0dffbadd5f943c933ffc60731a",
+    "experiments/genseg_joint/pretrain.py": "513fc06781048c04934c8bfb07a79f3004651e4be668bef90041cdd1dbca1dd5",
+    "experiments/genseg_joint/tests/test_pretrain.py": "a66a5f76182747ae37476b2fa6bfdb51b54844c446afaf6d8f401705161da73a"
+  }
+}

@@ -64,7 +64,7 @@ def save_checkpoint(output,engine,protocol,rng,*,final_audit=None):
     import torch
     from .models import source_identity
     output=Path(output)
-    payload={'format':1,'classification':CLASSIFICATION,'steps':engine.steps,
+    payload={'format':1,'classification':protocol.get('classification',CLASSIFICATION),'steps':engine.steps,
              'G':engine.g.net.state_dict(),'D':engine.d.state_dict(),'S':engine.s.state_dict(),
              'arch':{k:getattr(engine.g.networks,k).detach().cpu().clone() for k in ('upconv_arch','conv_arch')},
              'model_config':{'G':engine.g.config,'S':'pinned_author_UNet(1,1,bilinear=False)'},
@@ -73,7 +73,7 @@ def save_checkpoint(output,engine,protocol,rng,*,final_audit=None):
     with path.open('xb') as stream: torch.save(payload,stream)
     if final_audit is not None: final_audit()
     # Completion receipt LAST; a failed/partial serialization is never a complete run.
-    write_json(output/'complete.json',{'format':1,'classification':CLASSIFICATION,'complete':True,
+    write_json(output/'complete.json',{'format':1,'classification':protocol.get('classification',CLASSIFICATION),'complete':True,
         'steps':engine.steps,'checkpoint':'joint.pt','checkpoint_sha256':sha256(path),'protocol':protocol})
 
 
@@ -83,9 +83,31 @@ def implementation_identity():
 
 
 def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,arch_lr=1e-4,
-        l1_weight=100.,min_free_vram_gib=12.,min_free_ram_gib=8.,pretrain_steps=0):
-    require(type(steps) is int and steps>0 and pretrain_steps==0,'Positive explicit steps; only recorded coldstart pretrain_steps=0 supported')
-    output=check_output(output,target.protected)
+        l1_weight=100.,min_free_vram_gib=12.,min_free_ram_gib=8.,pretrain_steps=0,
+        pretrained_run=None,pretrained_sha256=None,phase='joint'):
+    require(type(steps) is int and steps>0 and pretrain_steps==0,'Positive explicit steps; no combined pretraining or resume')
+    require(phase in ('joint','gan_pretrain'),'Invalid phase')
+    require(type(seed) is int and seed==20261018,'Fixed inner61/15 seed 20261018 required')
+    require((pretrained_run is None)==(pretrained_sha256 is None),'Paired pretrained-run and pretrained-sha256 required')
+    require(phase=='joint' or pretrained_run is None,'Pretrain phase cannot load prior weights; no resume')
+    require(all(math.isfinite(v) and v>0 for v in (g_lr,d_lr,s_lr,arch_lr)), 'Positive finite rates required')
+    require(math.isfinite(l1_weight) and l1_weight>=0,'Invalid L1 weight')
+    from .pretrain import policy, audit_pretrained, load_pretrained, save_pretrain
+    from .data import inner_split
+    handoff_expected=dict(policy(g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight),seed=seed,
+        split=inner_split(target.train,target.val,seed),target_identity=target.identity,
+        target_manifest_sha256=target.manifest_sha256,
+        model_config={'G':{'width':64,'downs':8,'seed':seed},'D_width':64})
+    receipt=None
+    from experiments.genseg30.contract import capture_identities
+    protected=list(target.protected)
+    pretrain_identities={}
+    if pretrained_run is not None:
+        protected.append(Path(pretrained_run).resolve())
+        pretrain_identities=capture_identities([Path(pretrained_run)/'gan.pt',Path(pretrained_run)/'complete.json'])
+        receipt=audit_pretrained(pretrained_run,pretrained_sha256,expected=handoff_expected)
+        assert_identities(pretrain_identities)
+    output=check_output(output,protected)
     guard_args=dict(min_free_vram_gib=min_free_vram_gib,min_free_ram_gib=min_free_ram_gib)
     initial=gpu_guard(gpu,**guard_args)  # before any model or patient image load
     import torch
@@ -121,45 +143,76 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         'selection':'last_complete_step_only; no_outer19_reads_or_metrics; no_resume',
         'runtime':{'torch':str(torch.__version__),'numpy':np.__version__},
         'repository_commit':subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()}
+    protocol['phase']=phase
+    if phase=='gan_pretrain':
+        protocol.update(handoff_expected)
+        protocol['classification']='engineering_genseg_gd_pretrain_not_formal'
+        # Remove joint-only declarations: no segmenter, virtual chain or alpha Adam exists.
+        for key in ('models','derivative','unroll_steps','segmentation_loss','actual_order','fake_condition'):
+            protocol.pop(key,None)
+        protocol['pretrain_steps']=steps
+    elif receipt is not None:
+        protocol['classification']='engineering_genseg_joint_pretrained_GD_fresh_UNet_not_formal'
+        protocol['pretrain_steps']=receipt['steps']
+        protocol['pretrained']={'run':str(Path(pretrained_run).resolve()),'sha256':pretrained_sha256,
+            'steps':receipt['steps'],'rng':'fresh_joint_seed; pretrain_RNG_not_restored',
+            'S':'fresh_author_UNet','alpha_Adam':'fresh_empty_moments','resume':False}
     output.mkdir(parents=True,exist_ok=False)
     write_json(output/'started.json',protocol)
     rng=np.random.default_rng(seed); random.seed(seed); torch.manual_seed(seed)
     engine=None
     def final_audit():
+        assert_identities(pretrain_identities)
         audit(target,inventory)
         require(implementation_identity()==protocol['implementation_files_sha256'],'Implementation source changed during pilot')
         require(source_identity()==protocol['source'],'Pinned model source changed during pilot')
     try:
         scale=cohort.fit_scale(); protocol['scaling']=scale
-        audit(target,inventory)
+        if receipt is not None:
+            require(scale==receipt['protocol']['scaling'],'Pretrain scaling mismatch')
+            handoff_expected['scaling']=scale
+        final_audit()
         snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
         torch.cuda.set_per_process_memory_fraction(snap['allocator_fraction'],0)
-        g,d,s=create_models(seed=seed,device='cuda:0')
-        engine=JointEngine(g,d,s,g_lr=g_lr,d_lr=d_lr,s_lr=s_lr,arch_lr=arch_lr,l1_weight=l1_weight)
+        if phase=='gan_pretrain':
+            from .models import Generator
+            from .core import PretrainEngine
+            g=Generator(seed=seed,device='cuda:0'); d=g.discriminator()
+            engine=PretrainEngine(g,d,g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight)
+        else:
+            g,d,s=create_models(seed=seed,device='cuda:0')
+            if receipt is not None:
+                load_pretrained(pretrained_run,pretrained_sha256,g,d,expected=handoff_expected)
+            engine=JointEngine(g,d,s,g_lr=g_lr,d_lr=d_lr,s_lr=s_lr,arch_lr=arch_lr,l1_weight=l1_weight)
         with (output/'steps.jsonl').open('x',encoding='utf-8') as log:
             for index in range(steps):
                 torch.cuda.synchronize()
                 snap=gpu_guard(gpu,expected_uuid=initial['gpu_uuid'],**guard_args)
                 final_audit()
                 tx,ty,train_record=cohort.sample('train',rng,scale)
-                vx,vy,val_record=cohort.sample('validation',rng,scale)
-                fy=ty.copy(); flip_y=bool(rng.integers(2)); flip_x=bool(rng.integers(2))
-                if flip_y: fy=np.flip(fy,-2)
-                if flip_x: fy=np.flip(fy,-1)
-                arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty,vx,vy,fy)]
-                # Fixed-shape real+fake pairing; numpy occurs ONLY on source masks outside meta graph.
-                metrics=engine.step(*arrays)
+                if phase=='gan_pretrain':
+                    arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty)]
+                    metrics=engine.step(*arrays)
+                    entry={'step':index+1,'phase':phase,'train':train_record}
+                else:
+                    vx,vy,val_record=cohort.sample('validation',rng,scale)
+                    fy=ty.copy(); flip_y=bool(rng.integers(2)); flip_x=bool(rng.integers(2))
+                    if flip_y: fy=np.flip(fy,-2)
+                    if flip_x: fy=np.flip(fy,-1)
+                    arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty,vx,vy,fy)]
+                    metrics=engine.step(*arrays)
+                    entry={'step':index+1,'phase':phase,'train':train_record,'internal_validation':val_record,
+                           'fake_mask':{'source_role':'train','flip_y':flip_y,'flip_x':flip_x}}
                 torch.cuda.synchronize()
-                entry={'step':index+1,'train':train_record,'internal_validation':val_record,
-                       'fake_mask':{'source_role':'train','flip_y':flip_y,'flip_x':flip_x},
-                       'resources_before':snap,'cuda_peak_allocated':torch.cuda.max_memory_allocated(),**metrics}
+                entry.update(resources_before=snap,cuda_peak_allocated=torch.cuda.max_memory_allocated(),**metrics)
                 log.write(json.dumps(entry,allow_nan=False)+'\n'); log.flush()
                 print(json.dumps(entry,allow_nan=False),flush=True)
                 del arrays
         audit(target,inventory)
         write_json(output/'protocol.json',protocol)
         # Serialize RNG and weights without any old checkpoint model load.
-        save_checkpoint(output,engine,protocol,{'numpy':rng.bit_generator.state,'python':random.getstate(),
+        saver=save_pretrain if phase=='gan_pretrain' else save_checkpoint
+        saver(output,engine,protocol,{'numpy':rng.bit_generator.state,'python':random.getstate(),
             'torch_cpu':torch.get_rng_state(),'torch_cuda':torch.cuda.get_rng_state_all()},
             final_audit=final_audit)
     except Exception as exc:

@@ -125,12 +125,9 @@ class JointEngine:
         def forward_g(p,x,a):
             with bind_alpha(self.g,a):
                 return gf(p,x)
-        def adversarial(logits, positive):
-            return F.binary_cross_entropy_with_logits(logits,torch.ones_like(logits) if positive else torch.zeros_like(logits))
         def gl(p,a):
             fake=forward_g(p,condition,a)
-            gan=adversarial(df(dp,torch.cat((condition,fake*valid),1)),True)
-            return gan+self.l1_weight*((fake-real).abs()*valid).sum()/valid.sum()
+            return gan_generator_loss(df,dp,condition,fake,real,valid,self.l1_weight)
         def sl(p,pg,a):
             fake=forward_g(pg,fake_condition,a)
             return segmentation_loss(sf(p,real),label)+segmentation_loss(sf(p,fake*fake_valid),fake_label)
@@ -176,3 +173,51 @@ class JointEngine:
         self._alpha_state=staged_alpha_state
         self.steps+=1
         return metrics
+
+
+class PretrainEngine:
+    """Frozen-alpha, frozen-BN GAN SGD; stage both networks before commit."""
+    def __init__(self, generator, discriminator, *, g_lr=2e-5, d_lr=2e-5, l1_weight=100.):
+        require(all(math.isfinite(v) and v>0 for v in (g_lr,d_lr)), 'Positive finite rates required')
+        require(math.isfinite(l1_weight) and l1_weight>=0, 'Finite nonnegative L1 weight required')
+        self.g,self.d=generator,discriminator
+        self.rates={'g':g_lr,'d':d_lr}; self.l1_weight=l1_weight; self.steps=0
+        generator.net.eval(); discriminator.eval()
+        generator.restore_arch({k:getattr(generator.networks,k) for k in ('conv_arch','upconv_arch')})
+
+    def optimizer_state(self):
+        return {k:{'algorithm':'stateless_SGD','lr':v,'momentum':0.,'weight_decay':0.,
+                   'steps':self.steps,'state':{}} for k,v in self.rates.items()}
+
+    def step(self, real, label):
+        real=clean(real,label)
+        condition=(label==1).to(real.dtype); valid=(label>=0).to(real.dtype)
+        gf,df=FunctionalModel(self.g.net),FunctionalModel(self.d)
+        gp,dp=gf.parameters(),df.parameters()
+        fake=gf(gp,condition)
+        g_loss=gan_generator_loss(df,dp,condition,fake,real,valid,self.l1_weight)
+        d_loss=.5*(adversarial(df(dp,torch.cat((condition,real*valid),1)),True)+
+                   adversarial(df(dp,torch.cat((condition,fake.detach()*valid),1)),False))
+        require(bool(torch.isfinite(g_loss)) and bool(torch.isfinite(d_loss)), 'Nonfinite GAN loss')
+        gg=torch.autograd.grad(g_loss,tuple(gp.values()))
+        dg=torch.autograd.grad(d_loss,tuple(dp.values()))
+        candidates=[]
+        for net,p,grads,key in ((self.g.net,gp,gg,'g'),(self.d,dp,dg,'d')):
+            values={k:(v-self.rates[key]*grad).detach() for (k,v),grad in zip(p.items(),grads)}
+            require(all(bool(torch.isfinite(v).all()) for v in values.values()), 'Nonfinite SGD candidate; no live update')
+            candidates.append((net,values))
+        metrics={'g_loss':float(g_loss.detach()),'d_loss':float(d_loss.detach()),
+                 'g_gradient_norm':norm(gg),'d_gradient_norm':norm(dg)}
+        with torch.no_grad():
+            for net,values in candidates:
+                for k,p in net.named_parameters(): p.copy_(values[k])
+        self.steps+=1
+        return metrics
+
+
+def adversarial(logits, positive):
+    return F.binary_cross_entropy_with_logits(logits,torch.ones_like(logits) if positive else torch.zeros_like(logits))
+
+
+def gan_generator_loss(df,dp,condition,fake,real,valid,l1_weight):
+    return adversarial(df(dp,torch.cat((condition,fake*valid),1)),True)+l1_weight*((fake-real).abs()*valid).sum()/valid.sum()
