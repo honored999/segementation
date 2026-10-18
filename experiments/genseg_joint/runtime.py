@@ -1,6 +1,7 @@
 """Fresh outputs, immutable inputs and guarded single-GPU pilot orchestration."""
 import csv
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -14,21 +15,39 @@ CLASSIFICATION='engineering_genseg_joint_author_unet_coldstart_not_formal'
 
 def gpu_guard(index, *, expected_uuid=None, min_free_vram_gib=12., min_free_ram_gib=8.):
     from experiments.genseg3mm.targets import bind_gpu
-    # Reuse CPU/RAM/selected GPU and UUID binding, add ALL-GPU and VRAM-percent checks.
-    snap=bind_gpu(index,min_vram_gib=min_free_vram_gib,min_ram_gib=min_free_ram_gib)
-    rows=subprocess.run(['nvidia-smi','--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total',
-                         '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True)
-    all_gpu=[]
-    for row in csv.reader(rows.stdout.strip().splitlines()):
-        idx,uid,util,used,total=[v.strip() for v in row]
+    require(type(index) is int and index>=0,'Physical GPU index must be a nonnegative integer')
+    # Query only the requested physical GPU; other cards may run unrelated jobs.
+    result=subprocess.run(['nvidia-smi','-i',str(index),
+                           '--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total',
+                           '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True)
+    rows=list(csv.reader(result.stdout.strip().splitlines()))
+    require(len(rows)==1 and len(rows[0])==5,f'Physical GPU {index}: expected one five-field telemetry row')
+    try:
+        idx,uid,util,used,total=[v.strip() for v in rows[0]]
+        measured_index=int(idx)
         util,used,total=float(util),float(used),float(total)
-        require(total>0 and util<80 and used/total<.8,'Resource guard refused: GPU utilization or VRAM >=80%')
-        all_gpu.append({'index':int(idx),'uuid':uid,'util_pct':util,'used_mib':used,'total_mib':total})
-    require(any(g['index']==index and g['uuid']==snap['gpu_uuid'] for g in all_gpu),'Selected GPU inventory mismatch')
+    except ValueError as exc:
+        raise ValueError(f'Physical GPU {index}: invalid numeric telemetry {rows[0]!r}') from exc
+    require(measured_index==index,f'Physical GPU {index}: telemetry index mismatch ({measured_index})')
+    require(all(math.isfinite(v) and v>=0 for v in (util,used,total)) and total>0,
+            f'Physical GPU {index}: invalid utilization={util}, memory={used}/{total} MiB; '
+            'finite nonnegative metrics and positive total required')
+    memory_pct=100*used/total
+    context=(f'Physical GPU {index}: utilization={util:g}%, memory={used:g}/{total:g} MiB '
+             f'({memory_pct:g}%); require utilization<80% and VRAM<80%')
+    require(util<80 and memory_pct<80,'Resource guard refused: '+context)
+    # Keep the real CPU/RAM/headroom/selected-GPU guard and UUID environment binding.
+    try:
+        snap=bind_gpu(index,min_vram_gib=min_free_vram_gib,min_ram_gib=min_free_ram_gib)
+    except ValueError as exc:
+        raise ValueError(f'{context}: {exc}') from exc
+    require(bool(uid) and uid==snap['gpu_uuid'],f'Physical GPU {index}: selected telemetry/binding UUID mismatch')
     if expected_uuid is not None:
-        require(snap['gpu_uuid']==expected_uuid,'Physical GPU UUID changed')
-    selected=next(g for g in all_gpu if g['index']==index)
-    snap['all_gpus']=all_gpu
+        require(uid==expected_uuid,f'Physical GPU {index}: UUID changed from {expected_uuid} to {uid}')
+    selected={'index':index,'uuid':uid,'util_pct':util,'used_mib':used,'total_mib':total}
+    # Compatibility key: a ONE-element list, explicitly scoped to the selected card.
+    snap['all_gpus']=[selected]
+    snap['gpu_scope']='selected_physical_gpu_only'
     # This is an allocation ceiling, not a prediction of the unknown peak.
     snap['allocator_fraction']=max(0.,.79-selected['used_mib']/selected['total_mib'])
     require(snap['allocator_fraction']>0,'No guarded GPU allocation budget')

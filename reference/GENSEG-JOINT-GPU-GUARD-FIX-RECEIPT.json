@@ -1,0 +1,12 @@
+{
+  "baseline": "6bb7f1d8f792949f895fd1ad25b64962262f9bdb",
+  "review": "independent Level3 PASS; frozen runtime and test hashes verified",
+  "tests": "RED reproduced; 27 focused PASS; 48 affected PASS9.90s; CPU guarded synthetic/mocked GPU telemetry, real target-PC run not yet performed",
+  "scope": "only selected physical GPU checked; strict80percent CPU/RAM/selectedGPU protections remain",
+  "files": {
+    "experiments/genseg_joint/runtime.py": "1298c323f5c926292db8177cea53d72cfb5dedc6d72c452e90d33b5f1b5a0a28",
+    "experiments/genseg_joint/tests/test_runtime.py": "7734b267223a1092257b4f37f0a111b437d284bd727e43bf5abc830bc58d4fbd",
+    "reference/GENSEG-JOINT-GPU-GUARD-FIX.md": "648d3a3b6a849e0b0c4734c396498f78ba6ed911ff6001e2b6139ab13f42b2be"
+  },
+  "status": "uncommitted isolated fix; manual server-first synchronization"
+}
