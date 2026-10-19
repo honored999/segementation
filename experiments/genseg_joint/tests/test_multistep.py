@@ -86,15 +86,25 @@ def harness(monkeypatch, *, phase, fault=None):
     return Target(),state
 
 
-@pytest.mark.parametrize('phase',['gan_pretrain','joint'])
-def test_three_steps_reclaims_only_unused_cache_and_preserves_roles(tmp_path,monkeypatch,phase):
+@pytest.mark.parametrize('phase,strategy,epochs,cap,count',[
+    ('gan_pretrain','legacy',None,3,3),('joint','legacy',None,3,3),
+    ('gan_pretrain','adam_trainbn_epoch_v1',1,3,3),('gan_pretrain','adam_trainbn_epoch_v1',1,100,2)])
+def test_three_steps_reclaims_only_unused_cache_and_preserves_roles(tmp_path,monkeypatch,phase,strategy,epochs,cap,count):
     target,state=harness(monkeypatch,phase=phase)
     output=tmp_path/phase
-    runtime.run(target,output,gpu=1,steps=3,phase=phase)
+    if cap==100:
+        original=target.load_train; first=inner_split(target.train,target.val,20261018)['train'][0]
+        def planes(*args):
+            x,y,meta=original(*args)
+            x=np.repeat(x,3,axis=1); y=np.repeat(y,3,axis=1); y[:,0]=-1
+            if args[-1]!=first: y[:]=-1
+            return x,y,meta
+        monkeypatch.setattr(target,'load_train',planes)
+    runtime.run(target,output,gpu=1,steps=cap,phase=phase,strategy=strategy,epochs=epochs)
     receipt=read_json(output/'complete.json')
     entries=[json.loads(line) for line in (output/'steps.jsonl').read_text().splitlines()]
-    assert receipt['complete'] and receipt['steps']==state['steps']==3
-    assert [e['step'] for e in entries]==[1,2,3]
+    assert receipt['complete'] and receipt['steps']==state['steps']==count
+    assert [e['step'] for e in entries]==list(range(1,count+1))
     split=inner_split(target.train,target.val,20261018)
     assert all(e['train']['patient'] in split['train'] for e in entries)
     if phase=='joint':
@@ -102,7 +112,7 @@ def test_three_steps_reclaims_only_unused_cache_and_preserves_roles(tmp_path,mon
         assert all(e['alpha_gradient_norm']>0 and e['alpha_change_norm']>0 for e in entries)
     else: assert not any('internal_validation' in e for e in entries)
     assert not set(target.reads)&set(split['external'])
-    assert state['events'].count('release')==3
+    assert state['events'].count('release')==count
     assert all(state['events'][i-1]=='sync' and state['events'][i+1]=='telemetry'
                for i,event in enumerate(state['events']) if event=='release')
     assert len(state['ceilings'])==2 and state['ceilings'][1]<=state['ceilings'][0]
@@ -110,8 +120,53 @@ def test_three_steps_reclaims_only_unused_cache_and_preserves_roles(tmp_path,mon
     assert 'empty_cache' in receipt['protocol']['guard']
     assert all(e['resources_before']['applied_allocator_fraction']==state['ceilings'][-1] for e in entries)
     payload=torch.load(output/receipt['checkpoint'],weights_only=True)
-    assert payload['steps']==3
+    assert payload['steps']==count
     assert all(torch.isfinite(v).all() for key in ('G','D') for v in payload[key].values())
+    if strategy!='legacy':
+        from experiments.genseg_joint import pretrain,preview
+        from experiments.genseg30.contract import sha256,write_json
+        assert receipt['protocol']['pretrain_steps']==count
+        assert read_json(output/'started.json')['epochs']==epochs
+        assert read_json(output/'started.json')['max_steps']==cap
+        progress=receipt['protocol']['epoch_sampling']
+        assert progress['completed_epochs']==(1 if cap==100 else 0)
+        assert progress['total_valid_planes']==(2 if cap==100 else 61)
+        assert progress['epoch_progress']['planes']==count
+        assert len({(e['train']['patient'],e['train']['z']) for e in entries})==count
+        assert all(e['g_bn_forwards']==1 and e['d_bn_forwards']==3 for e in entries)
+        digest=sha256(output/'gan.pt')
+        audited,_=preview.audit_gan(target,output,digest)
+        loaded=preview.load_gan(output,digest,audited)
+        fresh=models.Generator(); fresh.config=loaded['protocol']['model_config']['G']
+        fd=fresh.discriminator()
+        pretrain.load_pretrained(output,digest,fresh,fd,expected={})
+        g2=models.Generator(); g2.config=fresh.config
+        preview.restore_generator(g2,loaded)
+        assert g2.pretrain_strategy==strategy
+        # Actual learned BN survives serialization; both restore paths agree in eval.
+        fresh.net.eval(); x=torch.zeros(1,1,64,64); x[:,:,20:40,20:40]=1
+        saved={k:v.clone() for k,v in g2.net.state_dict().items()}
+        with torch.no_grad():
+            torch.testing.assert_close(fresh.net(x),g2.net(x),rtol=0,atol=0)
+            assert torch.equal(g2.net(x),g2.net(x))
+        assert all(torch.equal(v,saved[k]) for k,v in g2.net.state_dict().items())
+        with pytest.raises(ValueError,match='stage B'):
+            pretrain.audit_pretrained(output,digest,expected={},for_joint=True)
+        with pytest.raises(ValueError,match='stage B'): core.JointEngine(fresh,fd,torch.nn.Conv2d(1,1,1))
+        # Damage actual moments, ownership, BN and sampling: always rejected before restore.
+        from copy import deepcopy
+        for damage in ('moment','step','owner','bn','sampler','rng'):
+            bad=deepcopy(loaded)
+            opt=bad['optimizers']['g']; item=opt['state_dict']['state'][0]
+            if damage=='moment': item['exp_avg'].fill_(float('nan'))
+            elif damage=='step': item['step']+=1
+            elif damage=='owner': opt['parameter_names']=list(reversed(opt['parameter_names']))
+            elif damage=='bn':
+                key=next(k for k in bad['D'] if k.endswith('num_batches_tracked')); bad['D'][key]+=1
+            elif damage=='sampler': bad['sampler']['order']=[0]*len(bad['sampler']['order'])
+            else: bad['rng']['torch_cpu']=torch.zeros(1,dtype=torch.float32)
+            with pytest.raises(ValueError): pretrain.validate_training_state(bad)
+
 
 
 @pytest.mark.parametrize('fault',['busy','vram','cpu','ram','headroom','uuid','malformed'])

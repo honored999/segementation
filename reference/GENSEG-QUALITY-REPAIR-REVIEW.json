@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "date": "2026-10-19",
+  "phase": "B_engineering_only",
+  "result": "PASS_STATIC",
+  "baseline": "fb6f8ca8101ae6fb304d915d55d3215e6b3f04c8",
+  "snapshot_sha256": "0d24569430493b21c3792b0af988f4f72b9a7fa7558747014586262ff40f37e6",
+  "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+  "reviewer_profile": "inherited_model_generic_max_reasoning_not_verified_LunaMax",
+  "files": {
+    "experiments/genseg_joint/tests/test_single_slice.py": "b618116f0461e9fc801af424b3579de463f415853d0a64965fc064446c697149",
+    "experiments/genseg_joint/runtime.py": "97617be587ebb640cae7b66294567311263448eb018d2fa3d6bc2e5887272d78",
+    "reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md": "6f6c88735c997ac9277b0e286cb8416bb7153795b5a382b1df8da11e86da48dc",
+    "experiments/genseg_joint/cli.py": "d7583502f70427749b0dc4cb9203bfcf9ddeae477141aa6b2024056f5cd5c173",
+    "experiments/genseg_joint/tests/test_multistep.py": "d5c8cdc009600a77d43c5008ab0d114566acfac2865963b8d08281e864a4521c",
+    "experiments/genseg_joint/preview.py": "cefcdec12fe9b8fe806b8747190166eca0d44414a93811ebeaeeb8ff0b03d6f0",
+    "experiments/genseg_joint/diagnostic.py": "70715aaf6faaf54730b4d8049fa814ac57011becc0a9db8543d98ffc608918f2",
+    "experiments/genseg_joint/data.py": "b8e0ef737aba6d3f445ccbb8d5163a281da956375915d09c0a29f55e3828ef43",
+    "experiments/genseg_joint/pretrain.py": "8a5ba36f58689b643302374c47a072f6fbb22a25f4295c7aa3ed69bf1c9df1a5",
+    "experiments/genseg_joint/tests/test_pretrain.py": "9a03836fbbd67bbe3c20f5101130313d51bc25781be06b2e9f894fbe767c4787",
+    "experiments/genseg_joint/tests/test_data.py": "930a160fc3d4624679eb5b6fc44b4da65d9763f6c70f366dc54bc6532ad55aa3",
+    "experiments/genseg_joint/core.py": "e55e504ca0b53c5dee5cd696916cd3be321b3a95ed28bd3938f2fb1adfb7d88f"
+  },
+  "validation": {
+    "affected_command": "python -m pytest -q -p no:cacheprovider experiments/genseg_joint/tests --tb=short",
+    "affected_result": "186 passed in 79.94s",
+    "final_focused_command": "python -m pytest -q -p no:cacheprovider experiments/genseg_joint/tests/test_multistep.py -k \"three_steps and gan_pretrain\" --tb=short",
+    "final_focused_result": "3 passed, 10 deselected in 4.63s",
+    "new_test_functions": 0,
+    "ast_files": 11,
+    "diff_check": "PASS",
+    "preflight": "Every pytest guarded, single-thread CPU, CUDA disabled; peak observed RAM 79.4 percent",
+    "independent_pytest_logs": false
+  },
+  "deferred": [
+    "real_native512_CUDA",
+    "actual_new_generation_quality",
+    "manual_structure_and_semantics",
+    "stage_C_actual_virtual_BN_optimizer_adaptation",
+    "long_training"
+  ],
+  "raw_splits_weights": "unchanged",
+  "primary_checkout": "unchanged fb6f8ca codex/genseg-reference",
+  "blockers": []
+}

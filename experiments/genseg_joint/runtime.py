@@ -129,9 +129,14 @@ def implementation_identity():
 
 def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,arch_lr=1e-4,
         l1_weight=100.,min_free_vram_gib=12.,min_free_ram_gib=8.,pretrain_steps=0,
-        pretrained_run=None,pretrained_sha256=None,phase='joint'):
+        pretrained_run=None,pretrained_sha256=None,phase='joint',strategy='legacy',epochs=None):
     require(type(steps) is int and steps>0 and pretrain_steps==0,'Positive explicit steps; no combined pretraining or resume')
     require(phase in ('joint','gan_pretrain'),'Invalid phase')
+    require(strategy in ('legacy','adam_trainbn_epoch_v1'),'Unknown pretraining strategy')
+    repair=strategy=='adam_trainbn_epoch_v1'
+    require(not repair or phase=='gan_pretrain','Repair strategy is stage B pretraining only; joint adaptation pending')
+    require((repair and type(epochs) is int and epochs>0) or (not repair and epochs is None),
+            'Explicit epochs required only for repair strategy')
     require(type(seed) is int and seed==20261018,'Fixed inner61/15 seed 20261018 required')
     require((pretrained_run is None)==(pretrained_sha256 is None),'Paired pretrained-run and pretrained-sha256 required')
     require(phase=='joint' or pretrained_run is None,'Pretrain phase cannot load prior weights; no resume')
@@ -139,7 +144,7 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
     require(math.isfinite(l1_weight) and l1_weight>=0,'Invalid L1 weight')
     from .pretrain import policy, audit_pretrained, load_pretrained, save_pretrain
     from .data import inner_split
-    handoff_expected=dict(policy(g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight),seed=seed,
+    handoff_expected=dict(policy(g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight,strategy=strategy),seed=seed,
         split=inner_split(target.train,target.val,seed),target_identity=target.identity,
         target_manifest_sha256=target.manifest_sha256,
         model_config={'G':{'width':64,'downs':8,'seed':seed},'D_width':64})
@@ -150,7 +155,7 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
     if pretrained_run is not None:
         protected.append(Path(pretrained_run).resolve())
         pretrain_identities=capture_identities([Path(pretrained_run)/'gan.pt',Path(pretrained_run)/'complete.json'])
-        receipt=audit_pretrained(pretrained_run,pretrained_sha256,expected=handoff_expected)
+        receipt=audit_pretrained(pretrained_run,pretrained_sha256,expected=handoff_expected,for_joint=True)
         assert_identities(pretrain_identities)
     output=check_output(output,protected)
     guard_args=dict(min_free_vram_gib=min_free_vram_gib,min_free_ram_gib=min_free_ram_gib)
@@ -194,8 +199,9 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         protocol['classification']='engineering_genseg_gd_pretrain_not_formal'
         # Remove joint-only declarations: no segmenter, virtual chain or alpha Adam exists.
         for key in ('models','derivative','unroll_steps','segmentation_loss','actual_order','fake_condition'):
-            protocol.pop(key,None)
+            if key not in handoff_expected: protocol.pop(key,None)
         protocol['pretrain_steps']=steps
+        if repair: protocol.update(epochs=epochs,max_steps=steps)
     elif receipt is not None:
         protocol['classification']='engineering_genseg_joint_pretrained_GD_fresh_UNet_not_formal'
         protocol['pretrain_steps']=receipt['steps']
@@ -205,14 +211,21 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
     output.mkdir(parents=True,exist_ok=False)
     write_json(output/'started.json',protocol)
     rng=np.random.default_rng(seed); random.seed(seed); torch.manual_seed(seed)
-    engine=None
+    engine=None; sampler=None
     def final_audit():
         assert_identities(pretrain_identities)
         audit(target,inventory)
         require(implementation_identity()==protocol['implementation_files_sha256'],'Implementation source changed during pilot')
         require(source_identity()==protocol['source'],'Pinned model source changed during pilot')
     try:
-        scale=cohort.fit_scale(); protocol['scaling']=scale
+        scale=cohort.fit_scale(skip_all_ignore=True) if repair else cohort.fit_scale()
+        protocol['scaling']=scale
+        if repair:
+            from .data import EpochSampler
+            sampler=EpochSampler(cohort,rng)
+            protocol.update(epochs=epochs,max_steps=steps,steps=min(steps,epochs*len(sampler.planes)),
+                            epoch_sampling=sampler.progress())
+            protocol['pretrain_steps']=protocol['steps']
         if receipt is not None:
             require(scale==receipt['protocol']['scaling'],'Pretrain scaling mismatch')
             handoff_expected['scaling']=scale
@@ -225,18 +238,18 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
             from .models import Generator
             from .core import PretrainEngine
             g=Generator(seed=seed,device='cuda:0'); d=g.discriminator()
-            engine=PretrainEngine(g,d,g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight)
+            engine=PretrainEngine(g,d,g_lr=g_lr,d_lr=d_lr,l1_weight=l1_weight,strategy=strategy)
         else:
             g,d,s=create_models(seed=seed,device='cuda:0')
             if receipt is not None:
-                load_pretrained(pretrained_run,pretrained_sha256,g,d,expected=handoff_expected)
+                load_pretrained(pretrained_run,pretrained_sha256,g,d,expected=handoff_expected,for_joint=True)
             engine=JointEngine(g,d,s,g_lr=g_lr,d_lr=d_lr,s_lr=s_lr,arch_lr=arch_lr,l1_weight=l1_weight)
         with (output/'guard_events.jsonl').open('x',encoding='utf-8') as guard_log, \
                 (output/'steps.jsonl').open('x',encoding='utf-8') as log:
             def emit_guard(event):
                 guard_log.write(json.dumps(event,allow_nan=False)+'\n'); guard_log.flush()
                 print(json.dumps(event,allow_nan=False),flush=True)
-            for index in range(steps):
+            for index in range(protocol['steps']):
                 torch.cuda.synchronize()
                 # Previous inputs were deleted; release only unused own allocator cache.
                 # Live model/optimizer tensors remain counted by the unchanged guard.
@@ -249,11 +262,14 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
                 snap['applied_allocator_fraction']=allocator_ceiling
                 snap['cache_policy']='synchronize_then_empty_cache; between_steps_util_only_max5x1s'
                 final_audit()
-                tx,ty,train_record=cohort.sample('train',rng,scale)
+                tx,ty,train_record=sampler.next(scale) if sampler is not None else cohort.sample('train',rng,scale)
                 if phase=='gan_pretrain':
                     arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty)]
                     metrics=engine.step(*arrays)
                     entry={'step':index+1,'phase':phase,'train':train_record}
+                    if sampler is not None:
+                        protocol['epoch_sampling']=sampler.progress()
+                        entry.update(sampler.progress())
                 else:
                     vx,vy,val_record=cohort.sample('validation',rng,scale)
                     fy=ty.copy(); flip_y=bool(rng.integers(2)); flip_x=bool(rng.integers(2))
@@ -272,9 +288,10 @@ def run(target,output,*,gpu,steps,seed=20261018,g_lr=2e-5,d_lr=2e-5,s_lr=1e-5,ar
         write_json(output/'protocol.json',protocol)
         # Serialize RNG and weights without any old checkpoint model load.
         saver=save_pretrain if phase=='gan_pretrain' else save_checkpoint
+        saver_options={'sampler':sampler.state_dict()} if sampler is not None else {}
         saver(output,engine,protocol,{'numpy':rng.bit_generator.state,'python':random.getstate(),
             'torch_cpu':torch.get_rng_state(),'torch_cuda':torch.cuda.get_rng_state_all()},
-            final_audit=final_audit)
+            final_audit=final_audit,**saver_options)
     except Exception as exc:
         # A failed final audit never writes the complete receipt.
         write_json(output/'failed.json',{'complete':False,'error_type':type(exc).__name__,'error':str(exc),

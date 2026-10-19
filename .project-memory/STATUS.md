@@ -89,3 +89,10 @@ Updated: 2026-09-21
 - User changed the next run from cold-start to original ISLES508 source checkpoint initialization, full-parameter ordinary nnU-Net TopK10+ES/normalDS on stripped Dataset501 fold0. Historical pretrained_ES and CKPD_ES roots are private fine-tuning results, not arbitrary source choices.
 - Added HDBET-NNUNET-FINETUNE-FOLD0-RUNBOOK with historical source path, guarded SERVER CPU identity/architecture audit, exclusive source-hash receipt and pre-train hash recheck; -pretrained_weights with fresh optimizer/stopping, no --c/CKPD/LR change. Separate hdbet3mm_isles508_finetune output; prior builder/source untouched.
 - Parent embedded3snippetAST/diff and independent scientific Level3 STATIC PASS. No local checkpoint/model/import/runtime tests or server execution. New source identity/current files require server verification; old full-tuning source hash is not verified, so causal A/B claims require matched control. Branch memory only, canonical master absent/unchanged.
+
+## Branch-local GenSeg quality repair phase B (2026-10-19)
+
+- Isolated codex/genseg-quality-repair implements explicit v2 Adam/trainBN/epoch candidate, both G/D gradients from pre-update weights, per-layer BN G1/D3, persisted Adam/BN/RNG/sampler. Legacy remains default; no interrupted resume. Live failures poison the engine, no atomic rollback claim.
+- Fixed-slice cold and locked-GD500 recovery diagnostics share eval-pure probes and constant-L1/lesion gates; scalar success leaves manual structure/semantics pending. New pretrained state is explicitly refused by legacy joint/check pending phase C.
+- New user instruction allows local CPU pytest for this task: 186 related tests passed, final focused3 passed; test-function count unchanged. Parent AST11/diff and independent12-file exact STATIC Level3 PASS, receipt reference/GENSEG-QUALITY-REPAIR-REVIEW.json. No real-patient/CUDA/quality/long-run evidence.
+- Source/test edits leaf-owned, no nested agents. Raw/fixed splits/old weights/primary fine-tuning checkout unchanged. Branch-local accepted engineering state only; canonical master memory absent and unchanged.

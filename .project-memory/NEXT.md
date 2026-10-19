@@ -42,3 +42,9 @@ Local verification remains STATIC ONLY. Single-training-sample observations do n
 - Generative original-DWI conditioning/residual and lesion-template transfer remain unvalidated candidate directions, not part of this nnU-Net preprocessing comparison.
 - Original ISLES508 fold0 checkpoint path was recovered from the user's historical chat; actual current existence/content/hash still requires server audit. The supplied nnUNet_results_ISLES508_pretrained_ES and CKPD_ES roots contain private fine-tuning outputs, not the original ISLES checkpoint. Do not initialize from either arbitrarily.
 - Before preparation: run the addendum's read-only source existence check, then guarded SERVER CPU source-metadata/hash audit. Compare same-source originalDWI vs strippedDWI; old ordinary runs have no verified identical source hash, so causal attribution remains limited. No LR/freeze/optimizer/architecture change in this first screen.
+
+## Branch-local repair continuation (2026-10-19)
+
+1. Publish only codex/genseg-quality-repair; server uses a separate checkout per reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md. Never pull shared-runtime changes into the ongoing fine-tuning checkout or alter its recorded hashes.
+2. Run the new fixed-budget cold/GD500-recovery training-slice diagnostics on the data computer, preserve failed gates. Review same-scale structure/lesion alignment and fixed inner61 multi-plane previews before expanding budget.
+3. Phase C remains pending real learning gates and a separate actual/virtual BN/optimizer design. New pretrain cannot enter legacy joint. No automatic long training or efficacy claim; local CPU pytest permission is task-scoped.

@@ -29,8 +29,24 @@ def digest(value):
     return value
 
 
+class ExperimentParser(argparse.ArgumentParser):
+    def parse_args(self,args=None,namespace=None):
+        a=super().parse_args(args,namespace)
+        if a.command in ('pretrain','diagnose-single-slice'):
+            repair=a.strategy=='adam_trainbn_epoch_v1'
+            if a.command=='pretrain' and ((repair and a.epochs is None) or (not repair and a.epochs is not None)):
+                self.error('--epochs is required only with --strategy adam_trainbn_epoch_v1')
+            if a.command=='diagnose-single-slice':
+                if a.initialization=='cold':
+                    if not repair or a.pretrained_run is not None or a.pretrained_sha256 is not None:
+                        self.error('cold requires repair strategy and no pretrained source')
+                elif a.pretrained_run is None or a.pretrained_sha256 is None:
+                    self.error('gd500 requires paired --pretrained-run and --pretrained-sha256')
+        return a
+
+
 def parser():
-    p=argparse.ArgumentParser(description=__doc__)
+    p=ExperimentParser(description=__doc__)
     sub=p.add_subparsers(dest='command',required=True)
     for command in ('check','train','pretrain','preview','diagnose-single-slice'):
         a=sub.add_parser(command)
@@ -44,9 +60,14 @@ def parser():
             a.add_argument('--run',required=True,type=Path)
             a.add_argument('--checkpoint-sha256',required=True,type=digest)
             a.add_argument('--patient-limit',type=patient_limit,default=4)
+        if command in ('pretrain','diagnose-single-slice'):
+            a.add_argument('--strategy',choices=('legacy','adam_trainbn_epoch_v1'),default='legacy')
+        if command=='pretrain':
+            a.add_argument('--epochs',type=positive,help='repair: complete inner61 passes; --steps is max update cap')
         if command=='diagnose-single-slice':
-            a.add_argument('--pretrained-run',required=True,type=Path)
-            a.add_argument('--pretrained-sha256',required=True,type=digest)
+            a.add_argument('--initialization',choices=('gd500','cold'),default='gd500')
+            a.add_argument('--pretrained-run',type=Path)
+            a.add_argument('--pretrained-sha256',type=digest)
             a.add_argument('--steps',required=True,type=positive)
         if command in ('check','train'):
             a.add_argument('--pretrained-run',type=Path)
@@ -92,7 +113,8 @@ def main(argv=None):
     if args.command=='diagnose-single-slice':
         from .diagnostic import run_single_slice
         run_single_slice(target,args.output,pretrained_run=args.pretrained_run,
-            pretrained_sha256=args.pretrained_sha256,gpu=args.gpu,steps=args.steps,seed=args.seed)
+            pretrained_sha256=args.pretrained_sha256,gpu=args.gpu,steps=args.steps,seed=args.seed,
+            strategy=args.strategy,initialization_mode=args.initialization)
         return 0
     if args.command=='preview':
         from .preview import run_preview
@@ -101,7 +123,7 @@ def main(argv=None):
     if args.command=='check':
         if args.pretrained_run is not None:
             from .pretrain import audit_pretrained,policy
-            audit_pretrained(args.pretrained_run,args.pretrained_sha256,expected=dict(policy(),seed=args.seed,
+            audit_pretrained(args.pretrained_run,args.pretrained_sha256,for_joint=True,expected=dict(policy(),seed=args.seed,
                 split=split,target_identity=target.identity,target_manifest_sha256=target.manifest_sha256,
                 model_config={'G':{'width':64,'downs':8,'seed':args.seed},'D_width':64}))
         print('CHECK PASS: inner61/internal15/external19 = '+str(tuple(len(split[k]) for k in ('train','validation','external'))))

@@ -9,7 +9,7 @@ from experiments.genseg30.contract import (require, write_json, sha256, check_ou
     checked_file, assert_identities, validate_arrays)
 from .data import Cohort, inner_split
 from .models import Generator, source_identity
-from .pretrain import policy, load_pretrained
+from .pretrain import policy, load_pretrained, REPAIR, STRATEGIES
 from .preview import audit_gan, select_planes, render, TITLE_HEIGHT
 from .runtime import audit, gpu_guard, between_step_guard, implementation_identity
 
@@ -60,7 +60,8 @@ def tensor_statistics(values):
     values = values.detach()
     require(values.numel() > 0 and bool(torch.isfinite(values).all()), 'Empty/nonfinite diagnostic values')
     return {'count': values.numel(), 'mean': float(values.mean()),
-            'std': float(values.std(unbiased=False)), 'min': float(values.min()), 'max': float(values.max())}
+            'std': float(values.std(unbiased=False)), 'min': float(values.min()), 'max': float(values.max()),
+            'range': float(values.max()-values.min())}
 
 
 def plane_statistics(real, label, fake, native_shape, scale):
@@ -71,6 +72,7 @@ def plane_statistics(real, label, fake, native_shape, scale):
     x, y, f = (v.detach()[0, 0, :h, :w] for v in (real, label, fake))
     require(bool(torch.isfinite(f).all()), 'Nonfinite generated plane')
     groups = {}
+    valid_median=x[y>=0].median()
     for name, mask in (('valid', y >= 0), ('foreground', y == 1), ('background', y == 0)):
         if not bool(mask.any()):
             groups[name] = None
@@ -79,7 +81,11 @@ def plane_statistics(real, label, fake, native_shape, scale):
         to_native = lambda t: (t+1)*.5*(scale['max']-scale['min'])+scale['min']
         groups[name] = {'target_normalized': tensor_statistics(a), 'generated_normalized': tensor_statistics(b),
             'target_native': tensor_statistics(to_native(a)), 'generated_native': tensor_statistics(to_native(b)),
-            'normalized_l1': float((a-b).abs().mean()), 'generated_spatial_std': float(b.std(unbiased=False))}
+            'normalized_l1': float((a-b).abs().mean()), 'generated_spatial_std': float(b.std(unbiased=False)),
+            'optimal_constant_normalized':float(a.median()),'optimal_constant_l1':float((a-a.median()).abs().mean()),
+            'valid_median_constant_normalized':float(valid_median),'valid_median_constant_l1':float((a-valid_median).abs().mean())}
+        # Each subregion's own median is its optimal constant; the common valid
+        # median is separately evaluated inside that same subregion.
     require(groups['valid'] is not None, 'No valid diagnostic pixels')
     native = ((f+1)*.5*(scale['max']-scale['min'])+scale['min']).cpu().numpy().astype(np.float32)
     native[y.cpu().numpy() < 0] = 0
@@ -92,8 +98,6 @@ def probe(engine, real, label, native_shape, scale):
     import torch
     from .core import FunctionalModel, gan_generator_loss, adversarial, clean, norm
     nets = {'G': engine.g.net, 'D': engine.d}
-    require(all(not module.training for net in nets.values() for module in net.modules()),
-            'Probe requires the existing frozen-BN/eval policy')
     refs = {prefix+'.'+name: p for prefix, net in nets.items() for name, p in net.named_parameters()}
     refs.update({'alpha.'+k: getattr(engine.g.networks, k) for k in ('conv_arch', 'upconv_arch')})
     require(all(not refs['alpha.'+k].requires_grad for k in ('conv_arch', 'upconv_arch')), 'Frozen alpha required')
@@ -108,6 +112,8 @@ def probe(engine, real, label, native_shape, scale):
         s = np.random.get_state()
         return (s[0], s[1].tobytes(), *s[2:])
     numpy_state = numpy_rng()
+    optimizer_tensors=[(v,v._version) for opt in getattr(engine,'optimizers',{}).values()
+        for state in opt.state.values() for v in state.values() if isinstance(v,torch.Tensor)]
     handles = []; activations = {}
     def observe(name):
         def hook(module, inputs, output):
@@ -115,6 +121,7 @@ def probe(engine, real, label, native_shape, scale):
             return None
         return hook
     try:
+        for net in nets.values(): net.eval()
         for prefix, net in nets.items():
             for name, module in net.named_modules():
                 if isinstance(module, (torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.BatchNorm2d)):
@@ -134,11 +141,21 @@ def probe(engine, real, label, native_shape, scale):
             require(all(bool(torch.isfinite(g).all()) for g in grads), 'Nonfinite probe gradient')
             gradients[prefix] = {name: norm([g]) for name, g in zip(params, grads)}
         statistics, generated = plane_statistics(real, label, fake, native_shape, scale)
+        with torch.no_grad():
+            repeated=gf(gp,condition)
+        require(torch.equal(fake.detach(),repeated),'Repeated eval output changed')
+        bn_counts={key:{name:int(m.num_batches_tracked) for name,m in net.named_modules()
+            if isinstance(m,torch.nn.BatchNorm2d)} for key,net in nets.items()}
+        adam_steps={key:[int(state['step']) for state in opt.state.values()]
+                    for key,opt in getattr(engine,'optimizers',{}).items()}
         result = {'statistics': statistics, 'g_loss': float(g_loss.detach()), 'd_loss': float(d_loss.detach()),
-                  'parameter_gradient_norms': gradients, 'activations': activations}
+                  'parameter_gradient_norms': gradients, 'activations': activations,
+                  'eval_repeat_exact':True,'bn_counts':bn_counts,'adam_steps':adam_steps}
     finally:
         for handle in handles:
             handle.remove()
+        for module,mode,_ in modules: module.training=mode
+        require(all(v._version==version for v,version in optimizer_tensors),'Probe changed optimizer state')
         current = {prefix+'.'+name: p for prefix, net in nets.items() for name, p in net.named_parameters()}
         current.update({'alpha.'+k: getattr(engine.g.networks, k) for k in ('conv_arch', 'upconv_arch')})
         require(current.keys() == refs.keys(), 'Probe changed live parameter keys')
@@ -160,28 +177,53 @@ def probe(engine, real, label, native_shape, scale):
     return result, generated
 
 
-def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, steps, seed=SEED):
+def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
+                     strategy='legacy',initialization_mode='gd500'):
     require(type(steps) is int and steps > 0, 'Explicit positive diagnostic steps required')
     require(type(seed) is int and seed == SEED, 'Fixed diagnostic seed 20261018 required')
     require(type(gpu) is int and gpu >= 0, 'Physical GPU index must be a nonnegative integer')
-    run = Path(pretrained_run).resolve()
-    output = check_output(output, list(target.protected)+[run])
-    receipt, identities, expected = initialization(target, run, pretrained_sha256)
+    require(strategy in STRATEGIES,'Unknown diagnostic strategy')
+    require(initialization_mode in ('gd500','cold'),'Unknown diagnostic initialization')
+    cold=initialization_mode=='cold'
+    require((pretrained_run is None)==(pretrained_sha256 is None),'Paired diagnostic source required')
+    require((cold and strategy==REPAIR and pretrained_run is None) or (not cold and pretrained_run is not None),
+            'cold requires repair and no source; gd500 requires locked source')
+    run = None if cold else Path(pretrained_run).resolve()
+    output = check_output(output, list(target.protected)+([] if cold else [run]))
+    if cold:
+        receipt=None; identities={}
+        expected=dict(policy(),seed=seed,split=inner_split(target.train,target.val,seed))
+    else:
+        receipt, identities, expected = initialization(target, run, pretrained_sha256)
+    candidate_policy=policy(strategy=strategy)
     target.require_no_unpack_writes()
     inventory = {p: target.inventory(p) for p in target.train}
     source = source_identity(); implementation = implementation_identity()
     protocol = {'format': 1, 'classification': CLASSIFICATION, 'diagnostic_only': True, 'complete': False,
-        'seed': seed, 'steps': steps, 'pretrained_run': str(run), 'pretrained_sha256': pretrained_sha256,
-        'saved_protocol': receipt['protocol'], 'source': source, 'implementation_files_sha256': implementation,
+        'seed': seed, 'steps': steps, 'pretrained_run': None if cold else str(run), 'pretrained_sha256': pretrained_sha256,
+        'saved_protocol': None if cold else receipt['protocol'], 'source': source, 'implementation_files_sha256': implementation,
         'input_inventory': inventory, 'target_identity': target.identity, 'target_manifest_sha256': target.manifest_sha256,
         'rates': expected['rates'], 'l1_weight': expected['l1_weight'], 'BN': expected['BN'],
-        'architecture': expected['architecture'], 'optimizer': expected['optimizer'], 'scaling': expected['scaling'],
+        'architecture': expected['architecture'], 'optimizer': expected['optimizer'], 'scaling': expected.get('scaling'),
         'probe_schedule': 'before probe inside first guarded update unit then engine.step with no intervening util resample; after probe in guarded unit after all completed updates',
         'guard': 'unchanged runtime gpu_guard; same UUID/80percent/headroom/allocator ceiling; synchronize then empty_cache; util-only max5x1s only after completed updates',
         'initialization': 'saved G/D and alpha only; fresh fixed seed; no RNG/optimizer restoration; no S',
         'interpretation': 'Fixed training sample observations only; no generalization/capacity/BN root-cause conclusion or automatic learned/not-learned threshold',
         'weights_saved': False,
         'repository_commit': subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()}
+    if strategy==REPAIR:
+        protocol.update({k:candidate_policy[k] for k in ('strategy','protocol_version','optimizer','BN','actual_order','failure','source_fidelity')})
+        protocol['interpretation']='Fixed training-slice scalar engineering gate only; structure/semantics manual pending; no root-cause, efficacy or paper-reproduction conclusion'
+        protocol['initialization']=('identical_seed_cold_G_D_alpha_buffers' if cold else 'locked_legacy_GD500_G_D_alpha_buffers')+'; fresh_Adam_zero_moments; no_resume'
+        protocol['quality_gates']={'fixed_budget_steps':steps,'suggested_budget_steps':100,
+            'valid_l1':'after_strictly_less_than_valid_target_median_optimal_constant_l1',
+            'lesion_l1':'after_less_or_equal_before; foreground_is_label1',
+            'state':'eval_repeat_exact; BN_delta_per_layer_G_steps_D_3steps; every_Adam_step_exact',
+            'std_range':'report_only; cannot_establish_structure_or_semantics',
+            'constant_baselines':'valid_median_global; each_subregion_own_median_optimum_and_valid_median_reference',
+            'structure_semantics':'manual_pending_fixed_inner61_lesion_and_empty_previews',
+            'failure':'keep_results_no_auto_retry_budget_expansion_or_joint',
+            'automatic_budget_expansion':False,'automatic_joint':False}
     output.mkdir(parents=True, exist_ok=False)
     engine = None
     def final_audit():
@@ -189,7 +231,8 @@ def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, 
         audit(target, inventory)
         require(source_identity() == source and implementation_identity() == implementation,
                 'Diagnostic source/implementation changed')
-        require(sha256(checked_file(run, 'gan.pt')) == pretrained_sha256, 'GD500 checkpoint changed')
+        if run is not None:
+            require(sha256(checked_file(run, 'gan.pt')) == pretrained_sha256, 'GD500 checkpoint changed')
     try:
         write_json(output/'started.json', protocol)
         with (output/'guard_events.jsonl').open('x', encoding='utf-8') as guard_log, \
@@ -208,9 +251,12 @@ def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, 
             final_audit()
             cohort = Cohort(target, seed)
             require(cohort.split == expected['split'], 'Diagnostic cohort changed')
-            # Recheck immediately before the sole patient-array load. Never fit scale.
+            # Legacy/recovery reuse the saved scale; cold fits only inner61.
             snap = gpu_guard(gpu, expected_uuid=initial['gpu_uuid'])
             emit({'unit': 'before_patient_arrays', 'resources': snap})
+            if cold:
+                expected['scaling']=cohort.fit_scale(skip_all_ignore=True)
+                protocol['scaling']=expected['scaling']
             x, y, native_image, native_label, selection = fixed_plane(cohort, expected['scaling'])
             protocol['selection'] = selection
             final_audit()
@@ -220,8 +266,9 @@ def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, 
             torch.cuda.set_per_process_memory_fraction(ceiling, 0)
             protocol['applied_allocator_fraction'] = ceiling
             generator = Generator(seed=seed, device='cuda:0'); discriminator = generator.discriminator()
-            load_pretrained(run, pretrained_sha256, generator, discriminator, expected=expected)
-            engine = PretrainEngine(generator, discriminator)  # SAME default G/D update, BN, alpha, L1
+            if run is not None:
+                load_pretrained(run, pretrained_sha256, generator, discriminator, expected=expected)
+            engine = PretrainEngine(generator, discriminator,strategy=strategy)  # SAME default G/D update, BN, alpha, L1
             records = {}
             arrays = None
             def guarded_unit(unit):
@@ -267,9 +314,10 @@ def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, 
         log_hashes = {name: sha256(checked_file(output, name)) for name in ('started.json', 'steps.jsonl', 'guard_events.jsonl')}
         final_audit()
         # This diagnostic-only receipt is LAST. Never emit a valid GAN/joint completion receipt.
+        quality={'quality_assessment':assess_quality(records,steps)} if strategy==REPAIR else {}
         write_json(output/'diagnostic.json', {'format': 1, 'complete': True, 'diagnostic_only': True,
             'classification': CLASSIFICATION, 'completed_steps': engine.steps, 'weights_saved': False,
-            'protocol': protocol, 'observations': records, 'output_logs_sha256': log_hashes})
+            'protocol': protocol, 'observations': records, 'output_logs_sha256': log_hashes,**quality})
     except BaseException as exc:
         # Remove only our own possibly partial success marker in this freshly created output.
         (output/'diagnostic.json').unlink(missing_ok=True)
@@ -278,3 +326,23 @@ def run_single_slice(target, output, *, pretrained_run, pretrained_sha256, gpu, 
             'error_type': type(exc).__name__, 'error': str(exc), 'resource_guard': getattr(exc, 'diagnostic', None)})
         raise
     return output
+
+
+def assess_quality(records,steps):
+    """Fixed engineering scalar gate; manual image/semantic review always pending."""
+    before,after=records['before'],records['after']
+    a,b=before['statistics'],after['statistics']
+    state=all(record['eval_repeat_exact'] for record in (before,after))
+    for key,count in (('G',steps),('D',3*steps)):
+        state=state and bool(after['bn_counts'][key]) and before['bn_counts'][key].keys()==after['bn_counts'][key].keys()
+        state=state and all(value-before['bn_counts'][key][name]==count for name,value in after['bn_counts'][key].items())
+    state=state and set(after['adam_steps'])=={'g','d'} and all(values and all(v==steps for v in values)
+        for values in after['adam_steps'].values())
+    checks={'state':bool(state),
+        'valid_beats_optimal_constant':b['valid']['normalized_l1']<b['valid']['optimal_constant_l1'],
+        'lesion_not_worse':a['foreground'] is not None and b['foreground'] is not None and
+            b['foreground']['normalized_l1']<=a['foreground']['normalized_l1']}
+    return {'scalar_checks':checks,'scalar_pass':all(checks.values()),
+        'status':'MANUAL_STRUCTURE_SEMANTICS_PENDING' if all(checks.values()) else 'FAILED_ENGINEERING_GATE',
+        'learning_quality_passed':False,'structure_semantics':'manual_pending',
+        'automatic_budget_expansion':False,'automatic_joint':False}

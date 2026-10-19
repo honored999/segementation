@@ -26,21 +26,34 @@ def unchanged(g,d,before):
     assert all(all(torch.equal(v,b[k]) for k,v in n.state_dict().items()) for n,b in zip((g.net,d),before))
 
 
-def test_gan_step_frozen_arch_and_transaction(monkeypatch):
+@pytest.mark.parametrize("strategy", ["legacy", "adam_trainbn_epoch_v1"])
+def test_gan_step_frozen_arch_and_transaction(monkeypatch,strategy):
     assert hasattr(core,'PretrainEngine'), 'missing frozen-architecture pretraining engine'
-    g,d=tiny(); engine=core.PretrainEngine(g,d)
+    g,d=tiny(); engine=core.PretrainEngine(g,d,strategy=strategy)
     before=snapshot(g,d); alpha={k:getattr(g.networks,k).clone() for k in ('conv_arch','upconv_arch')}
     x,y=batch(); metrics=engine.step(x,y)
     assert engine.steps==1 and all(torch.isfinite(torch.tensor(v)) for v in metrics.values())
     assert all(any(not torch.equal(v,b[k]) for k,v in n.named_parameters()) for n,b in zip((g.net,d),before))
     assert all(torch.equal(getattr(g.networks,k),v) and not getattr(g.networks,k).requires_grad for k,v in alpha.items())
+    if strategy != 'legacy':
+        for net,old,count in zip((g.net,d),before,(1,3)):
+            tracked=[k for k in old if k.endswith('num_batches_tracked')]
+            assert tracked and all(int(net.state_dict()[k]-old[k])==count for k in tracked)
+        for opt in engine.optimizer_state().values():
+            assert opt['algorithm']=='Adam'
+            assert all(v['step'].item()==1 and torch.isfinite(v['exp_avg']).all()
+                       for v in opt['state_dict']['state'].values())
     before=snapshot(g,d)
     with pytest.raises(ValueError,match='Nonfinite'): engine.step(x*float('nan'),y)
     unchanged(g,d,before); assert engine.steps==1
     def bad(*args,**kwargs): return tuple(torch.full_like(v,float('inf')) for v in args[1])
     monkeypatch.setattr(torch.autograd,'grad',bad)
     with pytest.raises(ValueError,match='Nonfinite'): engine.step(x,y)
-    unchanged(g,d,before); assert engine.steps==1
+    assert engine.steps==1
+    if strategy=='legacy': unchanged(g,d,before)
+    else:
+        assert engine.poisoned
+        with pytest.raises(ValueError,match='poison'): engine.step(x,y)
 
 
 def protocol(g):
@@ -122,6 +135,11 @@ def test_pretrain_cli_and_paired_handoff():
     assert a.steps==1
     a=p.parse_args(['train']+base+['--gpu','1','--steps','1','--pretrained-run','p','--pretrained-sha256','a'*64])
     assert a.pretrained_sha256=='a'*64
+    a=p.parse_args(['pretrain']+base+['--gpu','1','--steps','100','--epochs','1','--strategy','adam_trainbn_epoch_v1'])
+    assert a.epochs==1 and a.steps==100
+    a=p.parse_args(['diagnose-single-slice']+base+['--gpu','1','--steps','100','--strategy','adam_trainbn_epoch_v1','--initialization','cold'])
+    assert a.pretrained_run is None and a.initialization=='cold'
+    with pytest.raises(SystemExit): p.parse_args(['pretrain']+base+['--gpu','1','--steps','100','--strategy','adam_trainbn_epoch_v1'])
 
 
 @pytest.mark.parametrize('extra',[

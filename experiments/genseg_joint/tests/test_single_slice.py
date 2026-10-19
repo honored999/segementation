@@ -1,4 +1,4 @@
-"""Future CPU contract tests. LOCAL STATIC ONLY: not executed by the implementer."""
+"""Synthetic CPU diagnostic contracts; no patient/CUDA execution."""
 from copy import deepcopy
 import json
 import random
@@ -99,7 +99,9 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
     for flag in ('--g-lr', '--d-lr', '--l1-weight', '--arch-lr', '--pretrain-steps', '--min-free-vram-gib'):
         with pytest.raises(SystemExit): parser().parse_args(base+[flag, '1'])
     for flag, value in (('--steps', '0'), ('--steps', '-1'), ('--seed', '1'), ('--pretrained-sha256', 'bad')):
-        changed = list(base); changed[changed.index(flag)+1] = value
+        changed = list(base)
+        if flag in changed: changed[changed.index(flag)+1] = value
+        else: changed += [flag,value]
         with pytest.raises(SystemExit): parser().parse_args(changed)
     for flag in ('--pretrained-run', '--pretrained-sha256', '--gpu', '--steps'):
         changed = list(base); i = changed.index(flag); del changed[i:i+2]
@@ -149,9 +151,10 @@ def state(engine):
     return [{k: v.clone() for k, v in n.state_dict().items()} for n in (engine.g.net, engine.d)]
 
 
-def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch):
+@pytest.mark.parametrize('strategy',['legacy','adam_trainbn_epoch_v1'])
+def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,strategy):
     torch.manual_seed(7)
-    g = TinyGenerator(); engine = PretrainEngine(g, g.discriminator())
+    g = TinyGenerator(); engine = PretrainEngine(g, g.discriminator(),strategy=strategy)
     control = deepcopy(engine)
     real = torch.linspace(-1, 1, 72).reshape(1, 1, 8, 9)
     label = torch.zeros_like(real); label[:, :, 2:4, 3:6] = 1; label[:, :, 0] = -1
@@ -163,6 +166,10 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch):
     assert generated.shape == (8, 9) and (generated[0] == 0).all()
     assert observation['statistics']['valid']['target_normalized']['count'] == 63
     assert observation['statistics']['foreground']['target_normalized']['count'] == 6
+    valid=real[label>=0]; median=valid.median()
+    assert observation['statistics']['valid']['optimal_constant_l1']==float((valid-median).abs().mean())
+    assert observation['eval_repeat_exact']
+    assert all(m.training==(strategy!='legacy') for n in (engine.g.net,engine.d) for m in n.modules())
     assert set(observation['parameter_gradient_norms']['G']) == dict(g.net.named_parameters()).keys()
     assert observation['activations'] and observation['purity']['RNG'] == 'exact_unchanged'
     assert torch.equal(rng, torch.get_rng_state()) and py_rng == random.getstate()
@@ -184,7 +191,7 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch):
     assert all(all(torch.equal(v, old[k]) for k, v in n.state_dict().items()) for n, old in zip((g.net, engine.d), before))
 
 
-def cpu_transport(monkeypatch):
+def cpu_transport(monkeypatch,*,cold=False):
     guards = []; waits = []; order = []
     def guard(index, **kwargs):
         assert index == 0 and kwargs.get('expected_uuid', 'CPU-fixture') == 'CPU-fixture'
@@ -193,7 +200,7 @@ def cpu_transport(monkeypatch):
     monkeypatch.setattr(diag, 'gpu_guard', guard); monkeypatch.setattr(runtime, 'gpu_guard', guard)
     monkeypatch.setattr(runtime.time, 'sleep', waits.append)
     monkeypatch.setattr(diag, 'Generator', TinyGenerator)
-    for name, result in (('is_initialized', False), ('is_available', True), ('max_memory_allocated', 0)):
+    for name, result in (('is_initialized', False), ('is_available', True), ('max_memory_allocated', 0), ('is_current_stream_capturing',False)):
         monkeypatch.setattr(torch.cuda, name, lambda v=result: v)
     for name in ('set_per_process_memory_fraction', 'synchronize', 'empty_cache', 'manual_seed_all'):
         monkeypatch.setattr(torch.cuda, name, lambda *a, event=name: order.append(event)
@@ -203,15 +210,16 @@ def cpu_transport(monkeypatch):
         if args and args[0] == 'cuda:0': args = ('cpu',)+args[1:]
         return original(self, *args, **kwargs)
     monkeypatch.setattr(torch.Tensor, 'to', to_cpu)
-    monkeypatch.setattr(Cohort, 'fit_scale', lambda *a: pytest.fail('refit'))
+    if not cold: monkeypatch.setattr(Cohort, 'fit_scale', lambda *a,**k: pytest.fail('refit'))
     monkeypatch.setattr(Cohort, 'sample', lambda *a: pytest.fail('sample'))
     return guards, waits, order
 
 
+@pytest.mark.parametrize('strategy,init',[('legacy','gd500'),('adam_trainbn_epoch_v1','gd500'),('adam_trainbn_epoch_v1','cold')])
 @pytest.mark.parametrize('tamper', [None, 'input', 'implementation', 'png', 'pretrain', 'receipt_write'])
-def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch, tamper):
+def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch, tamper,strategy,init):
     target = Target(tmp_path); run, digest = metadata_run(tmp_path, target, monkeypatch, weights=True)
-    guards, waits, order = cpu_transport(monkeypatch)
+    guards, waits, order = cpu_transport(monkeypatch,cold=init=="cold")
     original_audit, original_probe, original_step = diag.audit, diag.probe, PretrainEngine.step
     def audit(*args):
         result = original_audit(*args); order.append('audit'); return result
@@ -240,7 +248,10 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         original_write(path, data)
         if tamper == 'receipt_write' and path.name == 'diagnostic.json': raise OSError('receipt write failed')
     monkeypatch.setattr(diag, 'write_json', write)
-    options = dict(pretrained_run=run, pretrained_sha256=digest, gpu=0, steps=3)
+    options = dict(pretrained_run=None if init=='cold' else run,
+        pretrained_sha256=None if init=='cold' else digest, gpu=0, steps=3,strategy=strategy,initialization_mode=init)
+    # A cold run has no dependency on historical GD500 files.
+    if init=='cold' and tamper=='pretrain': tamper=None
     if tamper:
         with pytest.raises((ValueError, OSError)): diag.run_single_slice(target, output, **options)
         assert read_json(output/'failed.json')['complete'] is False
@@ -267,7 +278,13 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
             'audit', 'synchronize', 'empty_cache', 'guard', 'step', 'synchronize',
             'audit', 'synchronize', 'empty_cache', 'guard', 'probe', 'audit']
         assert sha256(run/'gan.pt') == digest
-    assert target.reads == [sorted(inner_split(target.train, target.val, diag.SEED)['train'])[0]]
+    split=inner_split(target.train,target.val,diag.SEED)
+    assert target.reads == (split['train'] if init=='cold' else [])+[sorted(split['train'])[0]]
+    if not tamper and strategy!='legacy':
+        assert r['protocol']['strategy']==strategy and r['protocol']['quality_gates']['fixed_budget_steps']==3
+        quality=r['quality_assessment']
+        assert quality['scalar_checks']['state'] and quality['learning_quality_passed'] is False
+        assert quality['automatic_joint'] is False and quality['automatic_budget_expansion'] is False
     assert not list(output.glob('*.pt')) and not (output/'complete.json').exists()
 
 

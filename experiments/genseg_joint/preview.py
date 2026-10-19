@@ -12,7 +12,7 @@ from experiments.genseg30.contract import (require, read_json, write_json, sha25
 from .data import Cohort, inner_split
 from .models import Generator, source_identity
 from .runtime import audit, gpu_guard, CLASSIFICATION
-from .pretrain import audit_pretrained, validate_protocol
+from .pretrain import audit_pretrained, validate_protocol, validate_payload_schema, validate_training_state
 
 TITLE_HEIGHT=24
 CLASSES={CLASSIFICATION,'engineering_genseg_joint_pretrained_GD_fresh_UNet_not_formal'}
@@ -113,17 +113,11 @@ def load_joint(run,digest,receipt):
 
 def load_gan(run,digest,receipt):
     payload=load_checkpoint(run,'gan.pt',digest)
-    require(isinstance(payload,dict) and set(payload)=={'format','phase','classification','steps','G','D','arch','optimizers','protocol','rng'},
-        'Invalid GAN checkpoint schema')
-    for key in ('format','phase','classification','steps','protocol'):
-        require(payload[key]==receipt[key],'Checkpoint/receipt mismatch: '+key)
+    validate_payload_schema(payload,receipt)
     validate_protocol(payload['protocol'])
     require(payload['phase']=='gan_pretrain' and payload['protocol']['model_config']=={
         'G':{'width':64,'downs':8,'seed':20261018},'D_width':64},'GAN checkpoint phase/model configuration mismatch')
-    expected_opt={k:{'algorithm':'stateless_SGD','lr':v,'momentum':0.,'weight_decay':0.,
-        'steps':payload['steps'],'state':{}} for k,v in payload['protocol']['rates'].items()}
-    require(payload['optimizers']==expected_opt,'Pretrain optimizer policy/count mismatch')
-    require(isinstance(payload['rng'],dict),'Missing pretrain RNG record')
+    validate_training_state(payload)
     return payload
 
 
@@ -145,6 +139,7 @@ def restore_generator(generator,payload):
     with torch.no_grad():
         for k,v in generator.net.state_dict().items(): v.copy_(staged['G'][k])
     generator.restore_arch(staged['arch'])
+    generator.pretrain_strategy=payload['protocol'].get('strategy','legacy')
     generator.net.eval()
     for parameter in generator.net.parameters(): parameter.requires_grad_(False)
 
@@ -164,8 +159,13 @@ def generate(generator,label,scale):
     from experiments.genseg30.models import pad_plane
     condition=np.where(label>=0,label,0).astype(np.float32)
     condition=pad_plane(condition,256,0)
-    with torch.no_grad():
-        out=generator.net(torch.from_numpy(condition[None,None]).to(generator.device))
+    modes=[(m,m.training) for m in generator.net.modules()]
+    try:
+        generator.net.eval()
+        with torch.no_grad():
+            out=generator.net(torch.from_numpy(condition[None,None]).to(generator.device))
+    finally:
+        for module,mode in modes: module.training=mode
     require(tuple(out.shape)==(1,1,*condition.shape) and bool(torch.isfinite(out).all()),'Invalid generator output')
     h,w=label.shape
     native=out[0,0,:h,:w].cpu().numpy()

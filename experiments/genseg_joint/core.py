@@ -1,7 +1,7 @@
-"""Differentiable virtual/ordinary SGD with staged outer-alpha Adam.
+"""Legacy functional SGD/staged alpha Adam and explicit live GAN Adam.
 
-All expensive gradients/candidates and Adam moments are prepared privately before
-any live mutation. Only the outer architecture optimizer differs from Eq8 SGD.
+Legacy updates stage candidates before mutation. The repair pretrainer instead
+uses live trainBN/Adam; failures poison it and do not promise atomic rollback.
 """
 from contextlib import contextmanager
 from copy import deepcopy
@@ -90,6 +90,8 @@ def clean(image, label):
 class JointEngine:
     def __init__(self, generator, discriminator, segmenter, *, g_lr=2e-5, d_lr=2e-5,
                  s_lr=1e-5, arch_lr=1e-4, l1_weight=100.):
+        require(getattr(generator,'pretrain_strategy','legacy')=='legacy',
+                'Repair pretraining cannot enter legacy joint: stage B learning gate and stage C adaptation are pending')
         self.g,self.d,self.s = generator,discriminator,segmenter
         self.rates = dict(g=g_lr,d=d_lr,s=s_lr,alpha=arch_lr)
         require(all(math.isfinite(v) and v > 0 for v in self.rates.values()), 'Positive finite rates required')
@@ -176,21 +178,78 @@ class JointEngine:
 
 
 class PretrainEngine:
-    """Frozen-alpha, frozen-BN GAN SGD; stage both networks before commit."""
-    def __init__(self, generator, discriminator, *, g_lr=2e-5, d_lr=2e-5, l1_weight=100.):
+    """Legacy staged SGD or explicit live Adam/trainBN combination (not atomic)."""
+    def __init__(self, generator, discriminator, *, g_lr=2e-5, d_lr=2e-5, l1_weight=100., strategy="legacy"):
         require(all(math.isfinite(v) and v>0 for v in (g_lr,d_lr)), 'Positive finite rates required')
         require(math.isfinite(l1_weight) and l1_weight>=0, 'Finite nonnegative L1 weight required')
         self.g,self.d=generator,discriminator
         self.rates={'g':g_lr,'d':d_lr}; self.l1_weight=l1_weight; self.steps=0
-        generator.net.eval(); discriminator.eval()
+        require(strategy in ('legacy','adam_trainbn_epoch_v1'),'Unknown pretraining strategy')
+        self.strategy=strategy; self.poisoned=False
+        generator.pretrain_strategy=strategy
+        if strategy=='adam_trainbn_epoch_v1':
+            require(g_lr==d_lr==2e-5 and l1_weight==100.,'Repair uses fixed Adam rates and L1')
+            generator.net.train(); discriminator.train()
+            self.optimizers={key:torch.optim.Adam(net.parameters(),lr=self.rates[key],
+                betas=(.5,.999),eps=1e-8,weight_decay=0.) for key,net in (('g',generator.net),('d',discriminator))}
+        else:
+            generator.net.eval(); discriminator.eval()
         generator.restore_arch({k:getattr(generator.networks,k) for k in ('conv_arch','upconv_arch')})
 
     def optimizer_state(self):
+        require(not self.poisoned,'Cannot save poisoned live Adam engine')
+        if self.strategy!='legacy':
+            return {key:{'algorithm':'Adam','lr':self.rates[key],'betas':(.5,.999),'eps':1e-8,
+                'weight_decay':0.,'steps':self.steps,'parameter_names':list(dict(net.named_parameters())),
+                'state_dict':deepcopy(self.optimizers[key].state_dict())}
+                for key,net in (('g',self.g.net),('d',self.d))}
         return {k:{'algorithm':'stateless_SGD','lr':v,'momentum':0.,'weight_decay':0.,
                    'steps':self.steps,'state':{}} for k,v in self.rates.items()}
 
+    def _adam_step(self,real,label):
+        # G once; D(fake for G), D(real), D(detached fake). Both gradients use
+        # pre-update parameters. BN buffers are live, with G1/D3 per layer.
+        try:
+            require(all(m.training for n in (self.g.net,self.d) for m in n.modules()),'Repair requires train mode')
+            condition=(label==1).to(real.dtype); valid=(label>=0).to(real.dtype)
+            before={key:{name:int(m.num_batches_tracked) for name,m in net.named_modules()
+                if isinstance(m,torch.nn.BatchNorm2d)} for key,net in (('g',self.g.net),('d',self.d))}
+            gp=tuple(self.g.net.parameters()); dp=tuple(self.d.parameters())
+            require(all(len(opt.param_groups)==1 and len(opt.param_groups[0]['params'])==len(params) and
+                all(a is b for a,b in zip(opt.param_groups[0]['params'],params))
+                for opt,params in ((self.optimizers['g'],gp),(self.optimizers['d'],dp))),
+                'Adam parameter ownership changed')
+            fake=self.g.net(condition)
+            g_loss=adversarial(self.d(torch.cat((condition,fake*valid),1)),True)+self.l1_weight*((fake-real).abs()*valid).sum()/valid.sum()
+            d_loss=.5*(adversarial(self.d(torch.cat((condition,real*valid),1)),True)+
+                       adversarial(self.d(torch.cat((condition,fake.detach()*valid),1)),False))
+            require(bool(torch.isfinite(g_loss)) and bool(torch.isfinite(d_loss)),'Nonfinite GAN loss')
+            gg=torch.autograd.grad(g_loss,gp); dg=torch.autograd.grad(d_loss,dp)
+            require(all(bool(torch.isfinite(v).all()) for v in (*gg,*dg)),'Nonfinite Adam gradient')
+            for key,params,grads in (('g',gp,gg),('d',dp,dg)):
+                self.optimizers[key].zero_grad(set_to_none=True)
+                for param,grad in zip(params,grads): param.grad=grad.detach()
+                self.optimizers[key].step()
+            for key,net,count in (('g',self.g.net,1),('d',self.d,3)):
+                require(all(int(m.num_batches_tracked)-before[key][name]==count
+                    for name,m in net.named_modules() if isinstance(m,torch.nn.BatchNorm2d)),
+                    'Unexpected per-layer BN update count')
+                require(all(bool(torch.isfinite(v).all()) for v in net.state_dict().values()),'Nonfinite live Adam/BN state')
+                require(all(bool(torch.isfinite(v).all()) for state in self.optimizers[key].state.values()
+                    for v in state.values() if isinstance(v,torch.Tensor)),'Nonfinite Adam moments')
+            self.steps+=1
+            return {'g_loss':float(g_loss.detach()),'d_loss':float(d_loss.detach()),
+                'g_gradient_norm':norm(gg),'d_gradient_norm':norm(dg),'g_bn_forwards':1,'d_bn_forwards':3}
+        except BaseException:
+            # Some live parameters/buffers/moments may already have changed.
+            # No retry, rollback claim, successful checkpoint or continued updates.
+            self.poisoned=True
+            raise
+
     def step(self, real, label):
+        require(not self.poisoned,'Live Adam engine is poisoned; create a fresh run')
         real=clean(real,label)
+        if self.strategy!='legacy': return self._adam_step(real,label)
         condition=(label==1).to(real.dtype); valid=(label>=0).to(real.dtype)
         gf,df=FunctionalModel(self.g.net),FunctionalModel(self.d)
         gp,dp=gf.parameters(),df.parameters()
