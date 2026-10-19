@@ -74,5 +74,13 @@ Updated: 2026-09-21
 ## Branch-local fixed-slice diagnostic (2026-10-18; static)
 
 - Added diagnose-single-slice: exact completed GD500 G/D initialization, fixed inner61 first lesion plane, unchanged PretrainEngine/BN/rates/L1/alpha and saved scale. Before/after scalar probes and PNGs; no saved weights or formal learning claim.
-- Final three-file AST/diff checks and independent Level3 PASS STATIC after moving identity audit before resource sampling. No local tests/imports/models/CUDA/numerical/resource probes. Server3 then fresh100 diagnostic pending.
+- Final three-file AST/diff checks and independent Level3 PASS STATIC after moving identity audit before resource sampling. No local tests/imports/models/CUDA/numerical/resource probes. Local copied diagnostic receipt subsequently verified complete=true/completed_steps=100/weights_saved=false; no efficacy claim.
 - Source/test implementation and fix leaf-owned, no nested agents; parent branch records/docs/Git only. Raw/splits/old weights and master untouched.
+
+## Branch-local HD-BET nnU-Net fold0 preparation (2026-10-19; static)
+
+- User approved real-DWI fixed95/fold0 76train+19development comparison with ordinary deep supervision, existing Dice+TopK10 and early stopping. GenSeg61/15 roles do not apply to this separate segmentation run.
+- New isolated builder check/prepare/preprocess-check/ready/guard/trainer-check: audited76 native masks reused; remaining19 use frozen HD-BET2.0.1/weights/defaultTTA, native-plane3mm and empty-plane retain. Native geometry/kept pixels and byte-exactGT preserved; fresh derived raw/preprocessed/results below HD-BET_outputs.
+- Original plans/splits retained; baseline fingerprint copied as explicitly inherited compatibility metadata, not newly measured derived statistics. No replanning. Existingconfig/fold paths refused; selectedGPU guards and success-chainedCMD prevent continuing after failures.
+- Leaf implementation; parent coordination/docs/Git only, no nested workers. Parent7PythonAST/diff PASS and exact10file independentLevel3 STATIC PASS, receipt reference/HDBET-NNUNET-FOLD0-REVIEW.json. All pytest/import/model/patient/CUDA/runtime/training/evaluation deferred by local-static-only instruction.
+- Server runbook reference/HDBET-NNUNET-FOLD0-RUNBOOK.md; manual training76 QA before long run, fixed19 original-volume best-checkpoint evaluation, matched originalDWI control needed if prior Trainer differs. No effectiveness claim; canonical master memory absent/unmodified.

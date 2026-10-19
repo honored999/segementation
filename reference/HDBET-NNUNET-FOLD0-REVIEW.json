@@ -1,0 +1,66 @@
+{
+  "base_commit": "a5c35d9c719145748976549a1d47e10888955cea",
+  "classification": "engineering_preparation_static_only_not_run",
+  "validation": "7 Python AST files only; no runtime/tests/models/patient arrays/CUDA",
+  "files": {
+    "experiments/hdbet_nnunet/__init__.py": {
+      "sha256": "2929f6f629763860f79d850af7080913b0d1720eacaa011d02594e61cd3c0187",
+      "lf_sha256": "2929f6f629763860f79d850af7080913b0d1720eacaa011d02594e61cd3c0187"
+    },
+    "experiments/hdbet_nnunet/cli.py": {
+      "sha256": "7ca905bf53713bf4a88fcc75a4d56b67b4ec08c563c5a4c4b2a9efb10178f37c",
+      "lf_sha256": "7ca905bf53713bf4a88fcc75a4d56b67b4ec08c563c5a4c4b2a9efb10178f37c"
+    },
+    "experiments/hdbet_nnunet/native.py": {
+      "sha256": "f015c43d72ef89c10feacb87dd5d16b93b2d9169946078db2402a42be5da9e2d",
+      "lf_sha256": "f015c43d72ef89c10feacb87dd5d16b93b2d9169946078db2402a42be5da9e2d"
+    },
+    "experiments/hdbet_nnunet/tests/test_contract.py": {
+      "sha256": "199500db1f2e24c23dd44c41a9a7bb65fb48db373ef8abfd48e3c4f011c3d562",
+      "lf_sha256": "199500db1f2e24c23dd44c41a9a7bb65fb48db373ef8abfd48e3c4f011c3d562"
+    },
+    "experiments/hdbet_nnunet/tests/test_contract_native.py": {
+      "sha256": "86a44a639bb0128108b1223a982b6cfbf4f7a360f4de6f328612ada33f2e0472",
+      "lf_sha256": "86a44a639bb0128108b1223a982b6cfbf4f7a360f4de6f328612ada33f2e0472"
+    },
+    "nnunet_ext_trainers/nnUNetTrainerTopK10EarlyStopping.py": {
+      "sha256": "d07c43eca6e93a80d90cd8fef0f4d29e76d91fd28b2fa0fcfb371da87d412985",
+      "lf_sha256": "d07c43eca6e93a80d90cd8fef0f4d29e76d91fd28b2fa0fcfb371da87d412985"
+    },
+    "nnunet_ext_trainers/tests/test_trainer_topk10_early_stopping.py": {
+      "sha256": "c65661857846c5987e06492ad89e7033f160a39284bbdf2b7361e3bf2b21d418",
+      "lf_sha256": "c65661857846c5987e06492ad89e7033f160a39284bbdf2b7361e3bf2b21d418"
+    },
+    "reference/HDBET-NNUNET-FOLD0-ACCEPTANCE.md": {
+      "sha256": "86d7617e9f1d7947d2310e22a64f27f98402793060550e167fcaddb9cc1f93a7",
+      "lf_sha256": "86d7617e9f1d7947d2310e22a64f27f98402793060550e167fcaddb9cc1f93a7"
+    },
+    "reference/HDBET-NNUNET-FOLD0-PLAN.md": {
+      "sha256": "94119e61cf19ac1d1ab75304c56c15292084a794c9d22de84a0b9daf5a1d19cd",
+      "lf_sha256": "0c96fe49fc4af07453a7a357737b17e7f3ef2b2618dff35a86ad6c69c2cb5fee"
+    },
+    "reference/HDBET-NNUNET-FOLD0-RUNBOOK.md": {
+      "sha256": "3895a5fdb465e5a1a337944f6257169101431cf3f9c0c676ed41946154d8f016",
+      "lf_sha256": "3895a5fdb465e5a1a337944f6257169101431cf3f9c0c676ed41946154d8f016"
+    }
+  },
+  "independent_review": {
+    "verdict": "PASS STATIC",
+    "reviewer": "01a14f7b-21e8-7ad2-8e98-130f897960c9",
+    "date": "2026-10-19",
+    "files_verified": 10,
+    "hash_items_verified": 20,
+    "blocking_remaining": 0,
+    "reviewed_manifest_sha256": "d67adbcbb9c45033e324aca543b76fadf2b91cfd2d9626c1f65f69dd646072a4",
+    "scope": "Exact files/sha256 and lf_sha256 above; review metadata appended after PASS",
+    "not_run": [
+      "pytest",
+      "production imports locally",
+      "patient arrays locally",
+      "HD-BET inference",
+      "nnU-Net preprocessing",
+      "nnU-Net training",
+      "formal evaluation"
+    ]
+  }
+}

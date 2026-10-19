@@ -1,5 +1,10 @@
 # Log
 
+## 2026-10-19 - HD-BET real-DWI nnU-Net fold0 preparation (branch-local; static)
+- Added fresh isolated95 dataset builder with audited76 masks/frozen19 inference, native3mm rule, rawGT/plans/splits protection, explicitly inherited fingerprint compatibility and ordinary deep-supervision TopK10+early-stop composition.
+- Validation: parent7PythonAST/diff PASS and exact10file independentLevel3 STATIC PASS. No local tests/imports/models/patient arrays/CUDA or server preprocessing/training/evaluation; raw/splits/oldweights untouched. Leaf implementation/fixes, separate reviewer, no nested agents; parent docs/memory/Git only.
+- Next: server pull, metadata check, freshprepare95/train76QA, guarded2d preprocessing, ready/discovery/guard, fixedfold0 --val_best, exact19original-space evaluation. Match originalDWI control settings; no efficacy claim.
+- Canonical master memory absent/unmodified; branch-local state only.
 ## 2026-10-18 - Fixed training slice diagnostic (branch-local; static)
 
 - Changed: exact GD500 warm start, deterministic inner61 lesion slice, existing G/D updates and before/after pure functional probes/PNG; diagnostic-only receipt, no checkpoint weights.
@@ -78,12 +83,3 @@
 - Result: implementation accepted as synthetic engineering evidence only; no
   real medical data, training, preflight, or formal evaluation was performed.
 - Next: run an isolated experiment only if explicitly authorized.
-
-## 2026-09-20 - Lite UPerNet implementation plan
-
-- Changed: corrected PPM normalization for 1x1 pooled features and added the
-  task-by-task TDD implementation plan.
-- Validation: plan checked for spec coverage, placeholders, interface
-  consistency, and scope; no production code or real-data run.
-- Result: implementation remains not started and requires manual worker dispatch.
-- Next: collect and inspect the implementation worker HANDOFF.
