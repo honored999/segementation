@@ -84,3 +84,6 @@
 
 ## 2026-10-19 - GenSeg repeat-eval context correction (branch-local)
 - Matched probe forward grad contexts; exact rejection/state purity retained with failure details. Existing regression RED2/GREEN2 and affected31 CPU passed; independent2-file STATIC PASS. CUDA reproduction and quality still pending. No new tests, no training/data changes; parent coordination/docs/Git only.
+
+## 2026-10-19 - GenSeg repeat-output numerical contract (branch-local)
+- Actual server matched-context CUDA maxdiff7.45e-9 motivated fixed diagnostic atol1e-7/rtol0; true exact/within metrics and pre-probe protocol, strict live-state checks preserved. Existing regression RED2/GREEN2 and affected31 CPU passed; independent2-file STATIC PASS. No new test functions or training/data changes; server quality pending.

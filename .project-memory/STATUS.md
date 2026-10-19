@@ -101,3 +101,7 @@ Updated: 2026-09-21
 
 - Server stopped before its first update on repeated-eval exact comparison. Fixed confirmed context mismatch (grad enabled vs no_grad); both forwards now match, exact/state/RNG checks retained, failure reports numerical/context details. CUDA cause/effect still awaits server evidence.
 - Existing regression RED2 -> GREEN2 and affected31 CPU passed, no new test functions; independent exact2-file STATIC PASS. No training/optimizer/BN protocol, raw/split/weight change; leaf implementation only.
+
+## GenSeg numerical repeatability follow-up (2026-10-19; branch-local)
+- Server matched-context float32 CUDA output differed by7.45058e-9 before update1. Revised only diagnostic output repeatability to predeclared atol1e-7/rtol0 with shape/device/dtype/finite/context guards and truthful exact/within metrics. All live-state purity and learning-quality thresholds unchanged; old failed results retained.
+- Existing regression RED2/GREEN2, affected31 CPU passed; independent exact2-file STATIC PASS. Zero new test functions, leaf implementation; no CUDA/quality pass claimed. Canonical master/current fine-tuning checkout untouched.

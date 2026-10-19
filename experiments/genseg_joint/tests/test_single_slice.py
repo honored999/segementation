@@ -174,7 +174,8 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     assert observation['statistics']['foreground']['target_normalized']['count'] == 6
     valid=real[label>=0]; median=valid.median()
     assert observation['statistics']['valid']['optimal_constant_l1']==float((valid-median).abs().mean())
-    assert observation['eval_repeat_exact']
+    assert observation['eval_repeat_exact'] and observation['eval_repeat_within_tolerance']
+    assert observation['eval_repeat_metrics']['max_abs_diff']==0.
     assert all(m.training==(strategy!='legacy') for n in (engine.g.net,engine.d) for m in n.modules())
     assert set(observation['parameter_gradient_norms']['G']) == dict(g.net.named_parameters()).keys()
     assert observation['activations'] and observation['purity']['RNG'] == 'exact_unchanged'
@@ -189,6 +190,30 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     engine.step(real, label); control.step(real, label)
     assert all(all(torch.equal(v, other[k]) for k, v in n.state_dict().items())
                for n, other in zip((g.net, engine.d), state(control)))
+    # One float32 ULP of repeat-output variation is numerical stability, not
+    # evidence that parameters, buffers or image-quality thresholds may drift.
+    repeated_outputs=[]
+    def tiny_repeat_change(module,inputs,output):
+        changed=torch.nextafter(output,torch.full_like(output,float('inf'))) if repeated_outputs else output
+        repeated_outputs.append(changed.detach().clone())
+        return changed
+    handle=g.net.register_forward_hook(tiny_repeat_change)
+    try:
+        tolerant,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.})
+    finally:
+        handle.remove()
+    measured=float((repeated_outputs[0].double()-repeated_outputs[1].double()).abs().max())
+    assert 0<measured<=1e-7
+    assert tolerant['eval_repeat_within_tolerance'] and not tolerant['eval_repeat_exact']
+    repeat=tolerant['eval_repeat_metrics']
+    assert repeat['max_abs_diff']==measured and repeat['atol']==1e-7 and repeat['rtol']==0.
+    assert repeat['matched_context'] and repeat['first_context']==repeat['repeated_context']
+    assert not repeat['exact'] and repeat['within_tolerance']
+    assert diag.REPEAT_OUTPUT_POLICY['atol']==1e-7 and diag.REPEAT_OUTPUT_POLICY['rtol']==0.
+    assert diag.REPEAT_OUTPUT_POLICY['reference_float32_epsilon']==torch.finfo(torch.float32).eps
+    if strategy!='legacy':
+        quality=diag.assess_quality({'before':observation,'after':tolerant},1)
+        assert quality['scalar_checks']['state'] and quality['learning_quality_passed'] is False
     # Even under matched contexts, changed numerical output must fail closed.
     before=state(engine); calls=[]
     def change_repeat(module,inputs,output):
@@ -206,6 +231,23 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
          "'grad_enabled': True","'all_G_modules_eval': True"))
     assert all(all(torch.equal(v,old[k]) for k,v in net.state_dict().items()) for net,old in zip((g.net,engine.d),before))
     assert all(m.training==(strategy!='legacy') for net in (g.net,engine.d) for m in net.modules())
+    for damage in ('nan','inf','dtype','shape'):
+        calls=[]
+        def invalid_repeat(module,inputs,output):
+            calls.append(True)
+            if len(calls)!=2: return None
+            if damage=='nan': return torch.full_like(output,float('nan'))
+            if damage=='inf': return torch.full_like(output,float('inf'))
+            if damage=='dtype': return output.double()
+            return output[:,:,:1,:]  # broadcastable shape must still be refused
+        handle=g.net.register_forward_hook(invalid_repeat)
+        try:
+            with pytest.raises(ValueError,match='Repeated eval output changed'):
+                diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.})
+        finally:
+            handle.remove()
+        assert all(all(torch.equal(v,old[k]) for k,v in net.state_dict().items()) for net,old in zip((g.net,engine.d),before))
+        assert all(m.training==(strategy!='legacy') for net in (g.net,engine.d) for m in net.modules())
     def fail(*a, **k): raise ValueError('hook observation failure')
     monkeypatch.setattr(diag, 'tensor_statistics', fail)
     before = state(engine)
@@ -285,6 +327,13 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         assert r['complete'] and r['diagnostic_only'] and r['completed_steps'] == 3 and r['weights_saved'] is False
         assert set(r['observations']) == {'before', 'after'} and len(renders) == 2
         assert r['protocol']['rates'] == {'g': 2e-5, 'd': 2e-5} and r['protocol']['l1_weight'] == 100.
+        repeat_policy=r['protocol']['repeat_output_policy']
+        assert repeat_policy['atol']==1e-7 and repeat_policy['rtol']==0.
+        assert repeat_policy['reference_float32_epsilon']==torch.finfo(torch.float32).eps
+        assert 'not a loss/image-quality tolerance' in repeat_policy['interpretation']
+        assert read_json(output/'started.json')['repeat_output_policy']==repeat_policy
+        if strategy!='legacy':
+            assert 'eval_repeat_within_tolerance_atol1e-07_rtol0' in r['protocol']['quality_gates']['state']
         entries = [json.loads(line) for line in (output/'steps.jsonl').read_text().splitlines()]
         assert [e['step'] for e in entries] == [1, 2, 3]
         assert all(e['selection'] == r['protocol']['selection'] for e in entries)

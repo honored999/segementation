@@ -56,5 +56,29 @@
     "resource": "per-command preflight; CPU single-thread; CUDA disabled",
     "CUDA": "server verification pending",
     "new_test_functions": 0
+  },
+  "repeat_output_tolerance_followup": {
+    "baseline": "ebd06fc9914b960226522e338d1c6a5065eb62b5",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/tests/test_single_slice.py": "f47281f38f7f65bbe6ddfc4445f911cb2a21634888c1cfb67e0382ff2cc65e51",
+      "experiments/genseg_joint/diagnostic.py": "42f2b15d8df22ce9379a29accefc416798e0a19ba5347771e2cf880b8c61b7db"
+    },
+    "server_evidence": "matched context float32 CUDA repeat max_abs_diff=7.450580596923828e-09 before first update",
+    "diagnostic_contract": {
+      "atol": 1E-07,
+      "rtol": 0,
+      "requirements": "identical shape/device/dtype; both finite; matched context",
+      "live_state_purity": "unchanged strict checks",
+      "quality_thresholds": "unchanged",
+      "started_policy": "recorded before probe",
+      "exact_flag": "actual bitwise equality, independent of tolerance flag"
+    },
+    "regression": "existing probe test RED2 failed -> GREEN2 passed, 29 deselected",
+    "affected": "test_single_slice.py:31 passed in9.02s",
+    "resource": "per-command guarded newconda single-thread CPU, CUDA disabled; CPU6/8/17 RAM66.68/66.30/66 GPU0/3/2 VRAM1291of6144",
+    "CUDA": "server rerun pending",
+    "new_test_functions": 0
   }
 }

@@ -16,6 +16,13 @@ from .runtime import audit, gpu_guard, between_step_guard, implementation_identi
 SEED = 20261018
 GD500_SHA256 = '33dc65d16c4d03fafa1d2d9884d61e11f298a9621751c126b2b72c1bc08957a6'
 CLASSIFICATION = 'exploratory_fixed_training_slice_diagnostic_only_not_formal'
+REPEAT_ATOL = 1e-7
+REPEAT_RTOL = 0.
+REPEAT_OUTPUT_POLICY = {'atol':REPEAT_ATOL,'rtol':REPEAT_RTOL,
+    'reference_float32_epsilon':1.1920928955078125e-7,
+    'requirements':'same_shape_device_dtype; finite_both; matched_eval_grad_context; no_broadcast; no_equal_nan',
+    'interpretation':'Fixed numerical repeatability near normalized unit-scale float32 epsilon; not a loss/image-quality tolerance; parameter/BN/optimizer/RNG/mode purity remains strict'}
+
 
 
 def initialization(target, run, digest):
@@ -149,20 +156,30 @@ def probe(engine, real, label, native_shape, scale):
                           'all_G_modules_eval':all(not m.training for m in engine.g.net.modules())}
         repeated=gf(gp,condition).detach()
         matched_context=first_context==repeated_context
-        if not (matched_context and torch.equal(fake.detach(),repeated)):
-            max_abs_diff=(float((fake.detach().double()-repeated.double()).abs().max())
-                          if fake.shape==repeated.shape and fake.device==repeated.device else None)
+        compatible=fake.shape==repeated.shape and fake.device==repeated.device and fake.dtype==repeated.dtype
+        finite=compatible and bool(torch.isfinite(fake.detach()).all()) and bool(torch.isfinite(repeated).all())
+        exact=finite and torch.equal(fake.detach(),repeated)
+        max_abs_diff=float((fake.detach().double()-repeated.double()).abs().max()) if finite else None
+        # Fixed absolute comparison (rtol=0), after compatibility/finite guards:
+        # never broadcast, equate NaNs, or relax any live-state purity check.
+        within_tolerance=matched_context and finite and max_abs_diff<=REPEAT_ATOL
+        if not within_tolerance:
             require(False,'Repeated eval output changed: '+
-                f'max_abs_diff={max_abs_diff!r}; dtype={fake.dtype}/{repeated.dtype}; '+
-                f'device={fake.device}/{repeated.device}; shape={tuple(fake.shape)}/{tuple(repeated.shape)}; '+
+                f'max_abs_diff={max_abs_diff!r}; atol={REPEAT_ATOL}; rtol={REPEAT_RTOL}; '+
+                f'dtype={fake.dtype}/{repeated.dtype}; device={fake.device}/{repeated.device}; '+
+                f'shape={tuple(fake.shape)}/{tuple(repeated.shape)}; finite_outputs={finite}; '+
                 f'matched_context={matched_context}; first_context={first_context}; repeated_context={repeated_context}')
+        repeat_metrics={'max_abs_diff':max_abs_diff,'atol':REPEAT_ATOL,'rtol':REPEAT_RTOL,
+            'matched_context':matched_context,'first_context':first_context,'repeated_context':repeated_context,
+            'exact':exact,'within_tolerance':within_tolerance}
         bn_counts={key:{name:int(m.num_batches_tracked) for name,m in net.named_modules()
             if isinstance(m,torch.nn.BatchNorm2d)} for key,net in nets.items()}
         adam_steps={key:[int(state['step']) for state in opt.state.values()]
                     for key,opt in getattr(engine,'optimizers',{}).items()}
         result = {'statistics': statistics, 'g_loss': float(g_loss.detach()), 'd_loss': float(d_loss.detach()),
                   'parameter_gradient_norms': gradients, 'activations': activations,
-                  'eval_repeat_exact':True,'bn_counts':bn_counts,'adam_steps':adam_steps}
+                  'eval_repeat_exact':exact,'eval_repeat_within_tolerance':within_tolerance,
+                  'eval_repeat_metrics':repeat_metrics,'bn_counts':bn_counts,'adam_steps':adam_steps}
     finally:
         for handle in handles:
             handle.remove()
@@ -217,6 +234,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         'input_inventory': inventory, 'target_identity': target.identity, 'target_manifest_sha256': target.manifest_sha256,
         'rates': expected['rates'], 'l1_weight': expected['l1_weight'], 'BN': expected['BN'],
         'architecture': expected['architecture'], 'optimizer': expected['optimizer'], 'scaling': expected.get('scaling'),
+        'repeat_output_policy':dict(REPEAT_OUTPUT_POLICY),
         'probe_schedule': 'before probe inside first guarded update unit then engine.step with no intervening util resample; after probe in guarded unit after all completed updates',
         'guard': 'unchanged runtime gpu_guard; same UUID/80percent/headroom/allocator ceiling; synchronize then empty_cache; util-only max5x1s only after completed updates',
         'initialization': 'saved G/D and alpha only; fresh fixed seed; no RNG/optimizer restoration; no S',
@@ -230,7 +248,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         protocol['quality_gates']={'fixed_budget_steps':steps,'suggested_budget_steps':100,
             'valid_l1':'after_strictly_less_than_valid_target_median_optimal_constant_l1',
             'lesion_l1':'after_less_or_equal_before; foreground_is_label1',
-            'state':'eval_repeat_exact; BN_delta_per_layer_G_steps_D_3steps; every_Adam_step_exact',
+            'state':f'eval_repeat_within_tolerance_atol{REPEAT_ATOL:g}_rtol{REPEAT_RTOL:g}; same_shape_device_dtype_finite_matched_context; BN_delta_per_layer_G_steps_D_3steps; every_Adam_step_exact',
             'std_range':'report_only; cannot_establish_structure_or_semantics',
             'constant_baselines':'valid_median_global; each_subregion_own_median_optimum_and_valid_median_reference',
             'structure_semantics':'manual_pending_fixed_inner61_lesion_and_empty_previews',
@@ -344,7 +362,7 @@ def assess_quality(records,steps):
     """Fixed engineering scalar gate; manual image/semantic review always pending."""
     before,after=records['before'],records['after']
     a,b=before['statistics'],after['statistics']
-    state=all(record['eval_repeat_exact'] for record in (before,after))
+    state=all(record['eval_repeat_within_tolerance'] for record in (before,after))
     for key,count in (('G',steps),('D',3*steps)):
         state=state and bool(after['bn_counts'][key]) and before['bn_counts'][key].keys()==after['bn_counts'][key].keys()
         state=state and all(value-before['bn_counts'][key][name]==count for name,value in after['bn_counts'][key].items())

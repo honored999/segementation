@@ -50,3 +50,4 @@ Local verification remains STATIC ONLY. Single-training-sample observations do n
 3. Phase C remains pending real learning gates and a separate actual/virtual BN/optimizer design. New pretrain cannot enter legacy joint. No automatic long training or efficacy claim; local CPU pytest permission is task-scoped.
 
 - Immediate repair continuation: pull the probe-context follow-up only in the repair checkout, use a fresh diagnostic output (trial02) and rerun the same fixed-budget command. Preserve the failed pre-update trial; if exact check still fails, collect the newly reported max_abs_diff/device/context before changing tolerances.
+- Latest probe contract supersedes the exact-output requirement above: update only repair checkout, then use a fresh cold100 trial03 directory. Repeat numerical comparison is now fixed atol1e-7/rtol0; state purity stays exact. Preserve old failures; wait for actual CUDA diagnostic and quality results before further work.

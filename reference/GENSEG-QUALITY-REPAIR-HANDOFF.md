@@ -20,3 +20,5 @@ HANDOFF
 - 下一条可复制命令: 按reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md先在数据电脑创建独立checkout和路径变量，再运行check及固定100步cold/gd500诊断；不在当前微调checkout pull。
 
 Follow-up: server cf62a91 failed before update1 at the repeat-eval check. Corrected grad-enabled vs no_grad mismatch, retained exact/purity checks and added max_abs_diff/context error details. Existing regression RED2→GREEN2; affected31 CPU passed; independent2-file STATIC PASS. No new test functions, no training/data changes; server CUDA outcome still pending. Pull only the repair checkout and retry into a fresh directory per RUNBOOK.
+
+Numerical follow-up: matched-context CUDA repeat output differed by7.45e-9 before update1. Future runs predeclare output atol1e-7/rtol0, record actual exact and within separately, reject incompatible/nonfinite outputs, and retain strict parameter/BN/optimizer/RNG/mode purity. Existing regression RED2→GREEN2, affected31 CPU passed, independent2-file STATIC PASS. No new test functions or training-quality threshold changes. Preserve prior failed trials; fresh trial03 server rerun remains pending.

@@ -106,3 +106,11 @@ set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_trial02"
 ```
 
 然后重跑上文冷启动诊断命令；若trial02已存在，选择尚不存在的trial03。不要删除/覆盖旧目录，不在微调checkout执行pull。参考split文件若曾按核实的原字节换行为CRLF，则不属于随机重划分；不要用reset/重建split来消除它的状态提示。
+
+## 重复前向数值契约修订（服务器已提供幅度证据）
+
+服务器在两次相同eval/grad条件下报告float32输出最大绝对差`7.450580596923828e-09`。前一次统一上下文并未消除该差异；不能因此认定模型状态改变。PyTorch说明数学相同的浮点运算不保证逐位相等：[官方数值精度说明](https://docs.pytorch.org/docs/2.10/notes/numerical_accuracy.html)。这支持使用明确数值容差，不证明某个CUDA kernel是唯一原因。
+
+下一次运行前固定诊断输出重复性容差`atol=1e-7, rtol=0`，对应单位归一化float32精度量级（epsilon约1.192e-7）；仍要求shape/device/dtype/context匹配且两次输出有限。日志如实保存实际exact、within-tolerance与max_abs_diff，质量状态检查消费within-tolerance。参数、BN、优化器、随机状态和运行模式的不可变检查仍保持完全严格。没有改变训练、学习质量阈值或确定性设置。
+
+这是面向后续独立运行的诊断数值契约修订，不追改旧失败结果。保留trial01/trial02；更新修复checkout后，冷启动输出改为尚不存在的`genseg_repair_cold100_trial03`（若已存在继续新编号），再执行原100步命令。服务器CUDA和生成质量仍需新回执确认。
