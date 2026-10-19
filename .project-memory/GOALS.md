@@ -20,5 +20,5 @@
 
 ## Branch-local priority (2026-10-19)
 
-- First screen fixed HD-BET3mm real-DWI preprocessing with ordinary-deep-supervision TopK10+early stopping on existing fold0 (76/19); use matched baseline and original-space full-volume metrics before any benefit claim.
+- First screen original-ISLES508-initialized full-parameter fine-tuning with fixed HD-BET3mm real-DWI preprocessing with ordinary-deep-supervision TopK10+early stopping on existing fold0 (76/19); use matched baseline and original-space full-volume metrics before any benefit claim.
 - Preserve Dataset501/raw/splits/oldweights and pause expansion of failed gray GenSeg outputs. Original-DWI conditioning/residual or lesion-template synthesis remain candidate future designs after this preprocessing screen.

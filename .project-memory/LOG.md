@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-19 - ISLES508 pretrained initialization steering (branch-local; docs)
+- User requests original-ISLES full fine-tuning on HD-BET3mm privateDWI fold0; added separate source-audit/hash/protocol runbook, reused existing builder and ordinaryDS TopK10+ES. No source/tests/LR/CKPD/fixedsplit edits.
+- Validation: 3 embedded commands AST parsed, official loader checked, independent Level3 STATIC PASS; source checkpoint and all runtime remain server-unverified. Old private fine-tuning roots are reference outputs; same-source hash control needed for attribution.
+- Next: server sync, read-only source existence then guardedCPUmetadata/hash audit, fresh realDWI95 preparation/QA/preprocess, fresh -pretrained_weights fold0 --val_best and fixed19original-space evaluation. Parent docs/memory/Git only; no implementation delegation needed or nested agents. Canonical master unchanged.
 ## 2026-10-19 - HD-BET real-DWI nnU-Net fold0 preparation (branch-local; static)
 - Added fresh isolated95 dataset builder with audited76 masks/frozen19 inference, native3mm rule, rawGT/plans/splits protection, explicitly inherited fingerprint compatibility and ordinary deep-supervision TopK10+early-stop composition.
 - Validation: parent7PythonAST/diff PASS and exact10file independentLevel3 STATIC PASS. No local tests/imports/models/patient arrays/CUDA or server preprocessing/training/evaluation; raw/splits/oldweights untouched. Leaf implementation/fixes, separate reviewer, no nested agents; parent docs/memory/Git only.
@@ -71,15 +75,3 @@
 - Result: reference snapshot recorded on its dedicated branch; no dependency installation, source
   integration, training or formal evaluation. Canonical master memory untouched.
 - Next: inspect/adapt only under a separately defined implementation scope.
-
-## 2026-09-21 - Lite UPerNet variants accepted
-
-- Changed: added isolated H2Former and PlainConvUNet Lite-UPerNet single-output
-  variants, shared decoder, model/checkpoint contracts, tests, and complexity
-  reporting through commit `53472ae`.
-- Validation: fresh main-agent runs reported `424 passed` for
-  `standalone_nnunet2d/tests` and `26 passed` for root `tests/`; independent
-  Level 3 review returned PASS with no blockers.
-- Result: implementation accepted as synthetic engineering evidence only; no
-  real medical data, training, preflight, or formal evaluation was performed.
-- Next: run an isolated experiment only if explicitly authorized.

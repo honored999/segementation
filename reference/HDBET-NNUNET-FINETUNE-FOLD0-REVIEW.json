@@ -1,0 +1,13 @@
+{
+  "base_commit": "40309bdcdc90de9a271d2cf9a4984cc1589b3a63",
+  "date": "2026-10-19",
+  "classification": "engineering_protocol_documentation_static_only",
+  "file": "reference/HDBET-NNUNET-FINETUNE-FOLD0-RUNBOOK.md",
+  "sha256": "bd52c088d1f4bd87ff62e95d1237def625160fa29a2f23107f743aeb7e350569",
+  "independent_reviewer": "01a151da-c6b0-7f00-a076-7fc098213dbc",
+  "verdict": "PASS STATIC",
+  "blocking": 0,
+  "validation": "3 embedded python snippets AST parsed; official installed loader and prior runbook checked; no source/tests changed",
+  "runtime": "Not run locally; server source checkpoint existence/metadata/hash, cohort independence, preparation, initialization and fine-tuning remain unverified",
+  "scope": "Same original76/19; ordinary deep supervision, full-parameter TopK10+ES; sourceDataset508 bestcheckpoint historically recovered; no CKPD/resume or learning-rate change"
+}
