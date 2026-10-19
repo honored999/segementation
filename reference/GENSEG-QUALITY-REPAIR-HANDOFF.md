@@ -18,3 +18,5 @@ HANDOFF
 - project-memory: 仅同步修复分支工程验收/下一步；master canonical记忆不存在，未创建或改动master。
 - 未解决问题: 真实GPU/生成质量、固定多片结构语义、后续联合策略及长训练预算；空mask缺乏解剖条件仍存在。
 - 下一条可复制命令: 按reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md先在数据电脑创建独立checkout和路径变量，再运行check及固定100步cold/gd500诊断；不在当前微调checkout pull。
+
+Follow-up: server cf62a91 failed before update1 at the repeat-eval check. Corrected grad-enabled vs no_grad mismatch, retained exact/purity checks and added max_abs_diff/context error details. Existing regression RED2→GREEN2; affected31 CPU passed; independent2-file STATIC PASS. No new test functions, no training/data changes; server CUDA outcome still pending. Pull only the repair checkout and retry into a fresh directory per RUNBOOK.

@@ -81,3 +81,6 @@
 - Added explicit Adam/liveBN/epoch pretraining, strict versioned state/preview audit and cold/GD500 fixed-slice candidate diagnostics. New state refused by old joint; no resume, no quality claim.
 - Validation: existing tests parameterized, zero new test functions; 186 affected passed, final focused3 passed; parent AST11/diff and exact12-file independent Level3 STATIC PASS.
 - No real-data/CUDA/long training; raw/splits/weights/current fine-tuning checkout untouched. Source/test implementation leaf-owned; canonical master memory absent/unchanged. Continue with isolated server checkout and real learning gates.
+
+## 2026-10-19 - GenSeg repeat-eval context correction (branch-local)
+- Matched probe forward grad contexts; exact rejection/state purity retained with failure details. Existing regression RED2/GREEN2 and affected31 CPU passed; independent2-file STATIC PASS. CUDA reproduction and quality still pending. No new tests, no training/data changes; parent coordination/docs/Git only.

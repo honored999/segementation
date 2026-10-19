@@ -41,5 +41,20 @@
   ],
   "raw_splits_weights": "unchanged",
   "primary_checkout": "unchanged fb6f8ca codex/genseg-reference",
-  "blockers": []
+  "blockers": [],
+  "probe_context_followup": {
+    "baseline": "cf62a914dcbc9caa2ba57368ad57db3e38b5c83f",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/tests/test_single_slice.py": "f18575fc75834686f5d108981c8d2630b382121ca7fc1b0ee00400fef6c947cb",
+      "experiments/genseg_joint/diagnostic.py": "a1dbf6ecf630049ba8d89ed7a64823bc18c09e57bd221204460356d20a2d01d4"
+    },
+    "change": "Match both eval forward grad contexts; retain exact equality and purity; add failure max_abs_diff/context details",
+    "regression": "existing probe test observed RED [True,False], GREEN 2 passed 29 deselected",
+    "affected": "test_single_slice.py: 31 passed in 7.59s",
+    "resource": "per-command preflight; CPU single-thread; CUDA disabled",
+    "CUDA": "server verification pending",
+    "new_test_functions": 0
+  }
 }

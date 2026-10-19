@@ -162,7 +162,13 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         for p in net.parameters(): p.grad = torch.ones_like(p)
     before = state(engine); gradients = [p.grad.clone() for n in (g.net, engine.d) for p in n.parameters()]
     rng = torch.get_rng_state().clone(); py_rng = random.getstate(); np_rng = np.random.get_state()
-    observation, generated = diag.probe(engine, real, label, (8, 9), {'min': 0., 'max': 10.})
+    forward_grad_contexts=[]
+    handle=g.net.register_forward_pre_hook(lambda module,inputs: forward_grad_contexts.append(torch.is_grad_enabled()))
+    try:
+        observation, generated = diag.probe(engine, real, label, (8, 9), {'min': 0., 'max': 10.})
+    finally:
+        handle.remove()
+    assert forward_grad_contexts==[True,True], 'Repeated eval forwards must use the same enabled grad context'
     assert generated.shape == (8, 9) and (generated[0] == 0).all()
     assert observation['statistics']['valid']['target_normalized']['count'] == 63
     assert observation['statistics']['foreground']['target_normalized']['count'] == 6
@@ -183,6 +189,23 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     engine.step(real, label); control.step(real, label)
     assert all(all(torch.equal(v, other[k]) for k, v in n.state_dict().items())
                for n, other in zip((g.net, engine.d), state(control)))
+    # Even under matched contexts, changed numerical output must fail closed.
+    before=state(engine); calls=[]
+    def change_repeat(module,inputs,output):
+        calls.append(torch.is_grad_enabled())
+        return output+.125 if len(calls)==2 else None
+    handle=g.net.register_forward_hook(change_repeat)
+    try:
+        with pytest.raises(ValueError,match='Repeated eval output changed') as error:
+            diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.})
+    finally:
+        handle.remove()
+    assert calls==[True,True]
+    assert all(field in str(error.value) for field in
+        ('max_abs_diff=0.125','dtype=torch.float32/torch.float32','device=cpu/cpu','matched_context=True',
+         "'grad_enabled': True","'all_G_modules_eval': True"))
+    assert all(all(torch.equal(v,old[k]) for k,v in net.state_dict().items()) for net,old in zip((g.net,engine.d),before))
+    assert all(m.training==(strategy!='legacy') for net in (g.net,engine.d) for m in net.modules())
     def fail(*a, **k): raise ValueError('hook observation failure')
     monkeypatch.setattr(diag, 'tensor_statistics', fail)
     before = state(engine)

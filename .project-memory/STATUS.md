@@ -96,3 +96,8 @@ Updated: 2026-09-21
 - Fixed-slice cold and locked-GD500 recovery diagnostics share eval-pure probes and constant-L1/lesion gates; scalar success leaves manual structure/semantics pending. New pretrained state is explicitly refused by legacy joint/check pending phase C.
 - New user instruction allows local CPU pytest for this task: 186 related tests passed, final focused3 passed; test-function count unchanged. Parent AST11/diff and independent12-file exact STATIC Level3 PASS, receipt reference/GENSEG-QUALITY-REPAIR-REVIEW.json. No real-patient/CUDA/quality/long-run evidence.
 - Source/test edits leaf-owned, no nested agents. Raw/fixed splits/old weights/primary fine-tuning checkout unchanged. Branch-local accepted engineering state only; canonical master memory absent and unchanged.
+
+## GenSeg fixed-slice probe follow-up (2026-10-19; branch-local)
+
+- Server stopped before its first update on repeated-eval exact comparison. Fixed confirmed context mismatch (grad enabled vs no_grad); both forwards now match, exact/state/RNG checks retained, failure reports numerical/context details. CUDA cause/effect still awaits server evidence.
+- Existing regression RED2 -> GREEN2 and affected31 CPU passed, no new test functions; independent exact2-file STATIC PASS. No training/optimizer/BN protocol, raw/split/weight change; leaf implementation only.

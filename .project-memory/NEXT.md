@@ -48,3 +48,5 @@ Local verification remains STATIC ONLY. Single-training-sample observations do n
 1. Publish only codex/genseg-quality-repair; server uses a separate checkout per reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md. Never pull shared-runtime changes into the ongoing fine-tuning checkout or alter its recorded hashes.
 2. Run the new fixed-budget cold/GD500-recovery training-slice diagnostics on the data computer, preserve failed gates. Review same-scale structure/lesion alignment and fixed inner61 multi-plane previews before expanding budget.
 3. Phase C remains pending real learning gates and a separate actual/virtual BN/optimizer design. New pretrain cannot enter legacy joint. No automatic long training or efficacy claim; local CPU pytest permission is task-scoped.
+
+- Immediate repair continuation: pull the probe-context follow-up only in the repair checkout, use a fresh diagnostic output (trial02) and rerun the same fixed-budget command. Preserve the failed pre-update trial; if exact check still fails, collect the newly reported max_abs_diff/device/context before changing tolerances.

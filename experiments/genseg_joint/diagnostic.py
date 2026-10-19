@@ -130,6 +130,8 @@ def probe(engine, real, label, native_shape, scale):
         condition = (label == 1).to(real.dtype); valid = (label >= 0).to(real.dtype)
         gf, df = FunctionalModel(engine.g.net), FunctionalModel(engine.d)
         gp, dp = gf.parameters(), df.parameters()
+        first_context={'grad_enabled':torch.is_grad_enabled(),'inference_mode':torch.is_inference_mode_enabled(),
+                       'all_G_modules_eval':all(not m.training for m in engine.g.net.modules())}
         fake = gf(gp, condition)
         g_loss = gan_generator_loss(df, dp, condition, fake, real, valid, engine.l1_weight)
         d_loss = .5*(adversarial(df(dp, torch.cat((condition, real*valid), 1)), True)+
@@ -141,9 +143,19 @@ def probe(engine, real, label, native_shape, scale):
             require(all(bool(torch.isfinite(g).all()) for g in grads), 'Nonfinite probe gradient')
             gradients[prefix] = {name: norm([g]) for name, g in zip(params, grads)}
         statistics, generated = plane_statistics(real, label, fake, native_shape, scale)
-        with torch.no_grad():
-            repeated=gf(gp,condition)
-        require(torch.equal(fake.detach(),repeated),'Repeated eval output changed')
+        # Match the first forward's eval/grad conditions; detach only AFTER the
+        # repeated forward so its unused graph is released without changing dispatch.
+        repeated_context={'grad_enabled':torch.is_grad_enabled(),'inference_mode':torch.is_inference_mode_enabled(),
+                          'all_G_modules_eval':all(not m.training for m in engine.g.net.modules())}
+        repeated=gf(gp,condition).detach()
+        matched_context=first_context==repeated_context
+        if not (matched_context and torch.equal(fake.detach(),repeated)):
+            max_abs_diff=(float((fake.detach().double()-repeated.double()).abs().max())
+                          if fake.shape==repeated.shape and fake.device==repeated.device else None)
+            require(False,'Repeated eval output changed: '+
+                f'max_abs_diff={max_abs_diff!r}; dtype={fake.dtype}/{repeated.dtype}; '+
+                f'device={fake.device}/{repeated.device}; shape={tuple(fake.shape)}/{tuple(repeated.shape)}; '+
+                f'matched_context={matched_context}; first_context={first_context}; repeated_context={repeated_context}')
         bn_counts={key:{name:int(m.num_batches_tracked) for name,m in net.named_modules()
             if isinstance(m,torch.nn.BatchNorm2d)} for key,net in nets.items()}
         adam_steps={key:[int(state['step']) for state in opt.state.values()]

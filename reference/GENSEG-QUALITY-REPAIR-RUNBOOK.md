@@ -91,3 +91,18 @@ python -m experiments.genseg_joint.cli preview --phase gan_pretrain --run "%PRET
 ```
 
 交互CMD用 `%H`，保存为.bat时改为 `%%H`。哈希必须与原完成回执匹配，不能手动回填回执。预览固定inner61排序前4例及既有有病灶/空mask规则，同尺度显示。新预训练进入旧`check --pretrained-run`/`train --pretrained-run`应明确报不兼容；联合短试跑暂不执行，待新联合策略独立实现审阅。
+
+## 2026-10-19：重复 eval 检查报错后的重试
+
+服务器cf62a91在before probe报`Repeated eval output changed`，尚未执行训练更新。代码中原先第一次G前向启用梯度、第二次`no_grad`，不是相同执行条件；后续补丁统一两次eval的梯度模式并保留逐位相等及全部状态纯度检查。若仍失败，错误会报告最大绝对差、dtype/device及梯度模式，用于继续定位；不先放宽容差或改变训练确定性设置。CPU回归不能证明服务器CUDA已通过。
+
+仅在修复checkout更新，保留原失败输出目录：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_trial02"
+```
+
+然后重跑上文冷启动诊断命令；若trial02已存在，选择尚不存在的trial03。不要删除/覆盖旧目录，不在微调checkout执行pull。参考split文件若曾按核实的原字节换行为CRLF，则不属于随机重划分；不要用reset/重建split来消除它的状态提示。
