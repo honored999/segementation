@@ -42,6 +42,17 @@ BN_MODE_COMPARISON_POLICY = {'eval_reference':'original_eval_with_saved_running_
     'output':'statistics_only; original_before_after_PNG_remain_eval; no_automatic_quality_or_BN_causality_claim'}
 
 
+BN_CALIBRATION_POLICY = {'stage':'after_only','method':'one_private_BN_only_train_pass_then_all_G_eval',
+    'calibration_count':1,'momentum':1.0,'weights':'same_private_parameters_frozen; calibration_no_grad; calibrated_eval_matches_original_grad_context; no_Adam_update',
+    'buffers':'one_persistent_cloned_buffer_dict_shared_by_calibration_and_eval; never_live_commit',
+    'variance':'PyTorch_unbiased_running_variance; calibrated_eval_not_assumed_equal_to_batchstats',
+    'calibration_region':'same_fixed_inner61_training_slice_condition_full_padded_forward; no_BN_pixel_mask',
+    'metric_region':'native_valid_label_ge0; padding_ignore_excluded',
+    'scope':'single_training_slice_observation_not_inner61_cohort_calibration_or_inference_policy',
+    'restore':'BN_momentum_and_all_G_modes_try_finally; CPU_selected_CUDA_fork_rng; same_local_backend',
+    'authority':'original_eval_statistics_PNG_activations_quality_unchanged; statistics_only_no_extra_D'}
+
+
 def initialization(target, run, digest):
     """Strict default-policy GD500 metadata audit before models/patient arrays."""
     require(digest == GD500_SHA256, 'This diagnostic requires the approved GD500 SHA256')
@@ -132,10 +143,12 @@ def _probe_backend_snapshot():
     return snapshot
 
 
-def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
+def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False):
     """Locally constrain cuDNN for observation; actual training keeps caller flags."""
     import torch
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
+    require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
+    compare_bn_modes=compare_bn_modes or compare_bn_calibration
     entry=_probe_backend_snapshot()
     backend={'entry':entry}; failure=None
     try:
@@ -149,6 +162,7 @@ def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
             require(backend['active']==dict(entry,deterministic=True,benchmark=False),
                     'Probe changed unrelated backend flags')
             comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
+            if compare_bn_calibration: comparison_options['compare_bn_calibration']=True
             result,generated=_probe(engine,real,label,native_shape,scale,**comparison_options)
     except BaseException as exc:
         failure=exc
@@ -163,7 +177,7 @@ def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
     return result,generated
 
 
-def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
+def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False):
     """Private functional gradients only; hooks never return replacement outputs."""
     import torch
     from .core import FunctionalModel, gan_generator_loss, adversarial, clean, norm
@@ -175,6 +189,8 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
                 for k, p in refs.items()}
     buffers = {prefix+'.'+name: (v, v.detach().clone()) for prefix, net in nets.items() for name, v in net.named_buffers()}
     modules = [(m, m.training, tuple(m._forward_hooks)) for net in nets.values() for m in net.modules()]
+    bn_momenta=[(m,m.momentum) for net in nets.values() for m in net.modules()
+                if isinstance(m,torch.nn.modules.batchnorm._BatchNorm)]
     cpu_rng = torch.get_rng_state().clone()
     cuda_rng = torch.cuda.get_rng_state(real.device).clone() if real.is_cuda else None
     python_rng = random.getstate()
@@ -265,11 +281,40 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
                 'eval_vs_batchstats':{'region':BN_MODE_COMPARISON_POLICY['comparison_region'],
                     'max_abs_diff':float(difference.max()),'mean_abs_diff':float(difference.mean())}}
 
+        if compare_bn_calibration:
+            from torch.func import functional_call
+            for handle in handles: handle.remove()
+            handles.clear()
+            g_modes=[(m,m.training) for m in engine.g.net.modules()]
+            norms=[(m,m.momentum) for m,_ in g_modes if isinstance(m,torch.nn.modules.batchnorm._BatchNorm)]
+            require(bool(norms) and all(m.track_running_stats for m,_ in norms),'Calibration requires tracked G BN')
+            private_buffers={key:value.clone() for key,value in gf.buffers.items()}
+            try:
+                for module,_ in norms: module.training=True; module.momentum=1.0
+                devices=[real.device.index] if real.is_cuda else []
+                with torch.random.fork_rng(devices=devices):
+                    # Persist the updates from this call for the following eval.
+                    with torch.no_grad():
+                        functional_call(engine.g.net,(gp,private_buffers),(condition,),strict=True)
+                    for module,_ in g_modes: module.training=False
+                    with torch.set_grad_enabled(first_context['grad_enabled']):
+                        calibrated=functional_call(engine.g.net,(gp,private_buffers),(condition,),strict=True).detach()
+            finally:
+                for module,momentum in norms: module.momentum=momentum
+                for module,mode in g_modes: module.training=mode
+            calibrated_statistics,_=plane_statistics(real,label,calibrated,native_shape,scale)
+            difference=(fake.detach().double()-calibrated.double()).abs()[label>=0]
+            result['bn_calibration']={'policy':dict(BN_CALIBRATION_POLICY),'bn_layers':len(norms),
+                'calibrated_eval_statistics':calibrated_statistics,
+                'eval_vs_calibrated':{'region':BN_CALIBRATION_POLICY['metric_region'],
+                    'max_abs_diff':float(difference.max()),'mean_abs_diff':float(difference.mean())}}
+
     finally:
         for handle in handles:
             handle.remove()
         for module,mode,_ in modules: module.training=mode
         require(all(v._version==version for v,version in optimizer_tensors),'Probe changed optimizer state')
+        require(all(m.momentum==momentum for m,momentum in bn_momenta),'Probe changed BN momentum')
         current = {prefix+'.'+name: p for prefix, net in nets.items() for name, p in net.named_parameters()}
         current.update({'alpha.'+k: getattr(engine.g.networks, k) for k in ('conv_arch', 'upconv_arch')})
         require(current.keys() == refs.keys(), 'Probe changed live parameter keys')
@@ -292,8 +337,10 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
 
 
 def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
-                     strategy='legacy',initialization_mode='gd500',compare_bn_modes=False):
+                     strategy='legacy',initialization_mode='gd500',compare_bn_modes=False,compare_bn_calibration=False):
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
+    require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
+    compare_bn_modes=compare_bn_modes or compare_bn_calibration
     require(type(steps) is int and steps > 0, 'Explicit positive diagnostic steps required')
     require(type(seed) is int and seed == SEED, 'Fixed diagnostic seed 20261018 required')
     require(type(gpu) is int and gpu >= 0, 'Physical GPU index must be a nonnegative integer')
@@ -343,6 +390,8 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             'automatic_budget_expansion':False,'automatic_joint':False}
     if compare_bn_modes:
         protocol.update(compare_bn_modes=True,bn_mode_comparison_policy=dict(BN_MODE_COMPARISON_POLICY))
+    if compare_bn_calibration:
+        protocol.update(compare_bn_calibration=True,bn_calibration_policy=dict(BN_CALIBRATION_POLICY))
     output.mkdir(parents=True, exist_ok=False)
     engine = None
     def final_audit():
@@ -403,6 +452,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 return state
             def observe(stage, state):
                 comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
+                if compare_bn_calibration and stage=='after': comparison_options['compare_bn_calibration']=True
                 observation, generated = probe(engine, *arrays, selection['native_shape'], expected['scaling'],**comparison_options)
                 observation['resources_before'] = state
                 path = output/(stage+'.png')

@@ -98,7 +98,8 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
             '--pretrained-sha256', diag.GD500_SHA256, '--gpu', '0', '--steps', '3']
     args = parser().parse_args(base)
     assert args.steps == 3 and args.seed == diag.SEED
-    assert args.compare_bn_modes is False
+    assert args.compare_bn_modes is False and args.compare_bn_calibration is False
+    assert parser().parse_args(base+['--compare-bn-calibration']).compare_bn_calibration is True
     assert parser().parse_args(base+['--compare-bn-modes']).compare_bn_modes is True
     for flag in ('--g-lr', '--d-lr', '--l1-weight', '--arch-lr', '--pretrain-steps', '--min-free-vram-gib'):
         with pytest.raises(SystemExit): parser().parse_args(base+[flag, '1'])
@@ -283,7 +284,62 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         assert report['eval_vs_batchstats']['mean_abs_diff']==float(difference.mean())
         assert report['policy']['eval_reference'].endswith('quality_gates_eval_only')
         assert diag.assess_quality({'before':observation,'after':compared},1)==diag.assess_quality({'before':observation,'after':current_eval},1)
+        handle.remove(); handle=None
+        old_momentum=g.net[1].momentum
+        g.net[1].momentum=None if strategy=='legacy' else .1
+        calibration_calls=[]; fail_calibration=None
+        def inspect_calibration(module,inputs,output):
+            index=len(calibration_calls)
+            assert torch.backends.cudnn.deterministic and not torch.backends.cudnn.benchmark
+            assert not module.training and not module.observation_dropout.training
+            assert all(not m.training for m in engine.d.modules())
+            assert module[1].running_var is not bn_live['1.running_var']
+            calibration_calls.append({'train':module[1].training,'grad':torch.is_grad_enabled(),
+                'momentum':module[1].momentum,'var':module[1].running_var,
+                'mean':module[1].running_mean.detach().clone(),'variance':module[1].running_var.detach().clone(),
+                'count':int(module[1].num_batches_tracked),'output':output.detach().clone()})
+            if index in (3,4):
+                assert module[1].momentum==1.0
+                torch.rand(3)  # Calibration and eval share an isolated RNG context.
+                if fail_calibration==index: raise RuntimeError('calibration functional forward failure')
+        calibration_handle=g.net.register_forward_hook(inspect_calibration)
+        try:
+            calibrated,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},compare_bn_calibration=True)
+            assert [c['train'] for c in calibration_calls]==[False,False,True,True,False]
+            assert [c['grad'] for c in calibration_calls]==[True,True,True,False,True]
+            assert calibration_calls[3]['var'] is calibration_calls[4]['var']
+            assert calibration_calls[3]['count']==calibration_calls[4]['count']==int(bn_live['1.num_batches_tracked'])+1
+            # One-layer fixture: stored running variance must be UNBIASED.
+            h=torch.nn.functional.conv2d(condition,weights['0.weight'],weights['0.bias'])
+            mean=h.mean((0,2,3)); variance=h.var((0,2,3),unbiased=True)
+            torch.testing.assert_close(calibration_calls[3]['mean'],mean,atol=1e-7,rtol=1e-6)
+            torch.testing.assert_close(calibration_calls[3]['variance'],variance,atol=1e-7,rtol=1e-6)
+            h=(h-mean[None,:,None,None])*torch.rsqrt(variance[None,:,None,None]+g.net[1].eps)
+            h=h*weights['1.weight'][None,:,None,None]+weights['1.bias'][None,:,None,None]
+            expected=torch.tanh(torch.nn.functional.conv_transpose2d(h,weights['2.weight'],weights['2.bias']))
+            torch.testing.assert_close(calibration_calls[4]['output'],expected,atol=1e-7,rtol=1e-6)
+            expected_stats,_=diag.plane_statistics(real,label,calibration_calls[4]['output'],(8,9),{'min':0.,'max':10.})
+            report=calibrated['bn_calibration']
+            assert report['calibrated_eval_statistics']==expected_stats
+            assert report['policy']['calibration_count']==1 and report['policy']['momentum']==1.0
+            assert report['policy']['stage']=='after_only' and report['bn_layers']==1
+            assert calibrated['statistics']==current_eval['statistics'] and calibrated['activations']==current_eval['activations']
+            assert diag.assess_quality({'before':observation,'after':calibrated},1)==diag.assess_quality({'before':observation,'after':current_eval},1)
+            for fail_calibration in (3,4):
+                calibration_calls.clear()
+                with pytest.raises(RuntimeError,match='calibration functional forward failure') as error:
+                    diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},compare_bn_calibration=True)
+                assert error.value.probe_backend['restored']
+                assert g.net[1].momentum==(None if strategy=='legacy' else .1)
+                assert all(m.training==mode for m,mode in modes)
+                assert torch.equal(saved_rng,torch.get_rng_state())
+                assert all(v._version==version and torch.equal(v,value) for v,version,value in opt_state)
+                assert all(all(torch.equal(v,before[k]) for k,v in net.state_dict().items()) for net,before in zip((g.net,engine.d),saved))
+        finally:
+            calibration_handle.remove()
+            g.net[1].momentum=old_momentum
         fail_batch=True
+        handle=g.net.register_forward_hook(inspect_bn_forward)
         with pytest.raises(ValueError,match='batchstats observation failure') as error:
             diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},compare_bn_modes=True)
         assert error.value.probe_backend['restored']
@@ -438,7 +494,8 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     options = dict(pretrained_run=None if init=='cold' else run,
         pretrained_sha256=None if init=='cold' else digest, gpu=0, steps=3,strategy=strategy,initialization_mode=init)
     compare_bn_modes=init=='cold'
-    if compare_bn_modes: options['compare_bn_modes']=True
+    compare_bn_calibration=compare_bn_modes
+    if compare_bn_calibration: options['compare_bn_calibration']=True
     # A cold run has no dependency on historical GD500 files.
     if init=='cold' and tamper=='pretrain': tamper=None
     if tamper:
@@ -452,6 +509,11 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         assert set(r['observations']) == {'before', 'after'} and len(renders) == 2
         assert ('compare_bn_modes' in r['protocol'])==compare_bn_modes
         assert all(('bn_mode_comparison' in o)==compare_bn_modes for o in r['observations'].values())
+        assert 'bn_calibration' not in r['observations']['before']
+        assert ('bn_calibration' in r['observations']['after'])==compare_bn_calibration
+        assert ('compare_bn_calibration' in r['protocol'])==compare_bn_calibration
+        if compare_bn_calibration:
+            assert read_json(output/'started.json')['bn_calibration_policy']==r['protocol']['bn_calibration_policy']==diag.BN_CALIBRATION_POLICY
         if compare_bn_modes:
             assert read_json(output/'started.json')['bn_mode_comparison_policy']==r['protocol']['bn_mode_comparison_policy']==diag.BN_MODE_COMPARISON_POLICY
         assert r['protocol']['rates'] == {'g': 2e-5, 'd': 2e-5} and r['protocol']['l1_weight'] == 100.

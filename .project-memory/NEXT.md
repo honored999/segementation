@@ -55,4 +55,4 @@ Local verification remains STATIC ONLY. Single-training-sample observations do n
 
 ## Current GenSeg repair continuation (2026-10-20; supersedes earlier pending checks)
 - Deterministic probe cold100 already completed on server; learning-quality gate failed. Preserve that run; no resume/weights available.
-- Pull only repair checkout and run same-seed/same-target/same100-update diagnostic with --compare-bn-modes into a new isolated directory per RUNBOOK. Compare after eval vs private BN batchstats statistics, retain original quality result; no epoch/joint expansion or automatic parameter changes.
+- BN-mode complete100 received: eval/batchstats valid L1=0.5817/0.2315, both above constant0.1392. Next pull only repair checkout, use same seed/target/100 updates and --compare-bn-calibration in a fresh isolated directory per RUNBOOK; compare original eval, batchstats and calibrated eval. No epoch/joint expansion or automatic protocol changes; old diagnostic has no weights/resume.

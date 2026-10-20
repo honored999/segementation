@@ -114,3 +114,7 @@ Updated: 2026-09-21
 ## GenSeg same-weights BN diagnosis (2026-10-20; branch-local)
 - Locally read deterministic cold100 receipt: complete100, state/repeated-output checks passed; learning gate failed. Valid L1 0.6040 exceeds constant 0.1392; no weights saved. Single-slice engineering evidence only.
 - Added opt-in --compare-bn-modes: same private weights/input, only G BN batchstats, private buffers and isolated RNG; original eval PNG/statistics/gates remain authoritative. Existing focused3/affected31 CPU pytest passed; zero new test functions, exact3-file independent STATIC PASS. Actual BN CUDA comparison pending; no causal or quality claim. Source/test leaf-owned; primary checkout/master memory untouched.
+
+## GenSeg private BN calibration (2026-10-20; branch-local)
+- Received complete100 BN-mode diagnostic: after eval/batchstats valid L1=0.5817/0.2315 vs constant0.1392; quality remains failed. Mode affects output, not a unique-cause claim.
+- Added default-off --compare-bn-calibration: after-only same private parameters, one BN-only momentum1 no_grad pass into persistent private buffers, then matched-context eval; original eval/gates/live state unchanged. Existing focused3/affected31 CPU passed; zero new test functions; exact3-file independent STATIC PASS. Real CUDA calibration pending; no formal inference/calibration policy accepted.

@@ -142,3 +142,21 @@ python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%"
 ```
 
 若新目录已存在，改trial02。完成后交回diagnostic.json，重点比较observations.after.statistics.valid.normalized_l1与observations.after.bn_mode_comparison.batchstats_statistics.valid.normalized_l1，同时保留常数基线和原质量判定。这仍是固定单片诊断；此阶段100次更新便于控制变量，完整数据覆盖训练才使用epochs。
+## 冻结权重的单片BN校准诊断（2026-10-20）
+
+上一项BN模式对照已完成100次更新：after eval有效区L1=0.581747，batchstats=0.231518；病灶L1=0.172503/0.136353。两者有效区均未优于常数0.139193；BN模式影响明显，不能据此认定是唯一质量问题。
+
+最小设计与执行顺序：只在after观测额外做一次校准，参数/optimizer/训练预算保持原样；复制BN缓冲区，将G的BN临时设为train、momentum=1，在同一训练片条件输入上no_grad前向一次，随后全G切回eval，使用校准私有缓冲区测量。保留PyTorch running variance的unbiased语义，因此不承诺校准eval逐位等于batchstats。所有临时模式、momentum、RNG和后端均须在成功/异常时恢复，真实BN不回写；原图/统计/gate仍只取原eval。该测量不是inner61全队列校准，也不是新正式推理协议。
+
+实现仅接入原diagnose-single-slice入口，默认关闭，开关为--compare-bn-calibration，并自动包含既有BN模式对照。扩展现有pytest用例核对手算/functional输出、私有缓冲区和异常恢复，随后运行受影响单文件；独立只读审查最终SHA后提交。无需新增训练器、checkpoint/resume或批量测试函数。
+数据电脑仍需新建输出目录：旧诊断未保存权重，无法在已结束进程上补做校准。沿用原CMD环境变量，修复checkout干净后更新：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_bn_calibration_trial01"
+python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%DIAG_COLD%" --gpu 1 --steps 100 --strategy adam_trainbn_epoch_v1 --initialization cold --compare-bn-calibration
+```
+
+保持同seed/同切片/同100更新，不覆盖旧目录，不加学习率或训练预算。完成后交回diagnostic.json：原eval为observations.after.statistics；batchstats为observations.after.bn_mode_comparison.batchstats_statistics；校准后eval为observations.after.bn_calibration.calibrated_eval_statistics。比较三者有效区/病灶区L1及常数基线。校准结果只定位误差来源，不替换原FAILED工程门槛，也不能证明多患者泛化或正式合成数据合格。

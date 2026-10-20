@@ -93,3 +93,6 @@
 
 ## 2026-10-20 - GenSeg optional BN comparison (branch-local)
 - Accepted deterministic cold100 execution evidence, retaining failed learning gate. Added opt-in private BN-only same-weights observation, no eval/gate/training-state change. Existing focused3 and affected31 CPU pytest passed, zero new test functions; exact3-file independent STATIC PASS. Actual CUDA comparison pending. Parent coordination/Git only; canonical master memory absent/untouched.
+
+## 2026-10-20 - GenSeg private BN calibration (branch-local)
+- Added after-only private one-pass BN calibration observation, retaining original eval/quality and strict momentum/state/RNG restoration. Existing RED3/GREEN3 and affected31 CPU passed; zero new test functions; independent exact3-file STATIC PASS. Actual CUDA quality pending; parent docs/Git only, primary/canonical master/raw/splits/oldweights unchanged.

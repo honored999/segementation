@@ -67,6 +67,7 @@ def parser():
         if command=='diagnose-single-slice':
             a.add_argument('--initialization',choices=('gd500','cold'),default='gd500')
             a.add_argument('--compare-bn-modes',action='store_true',help='observe G batchstats with private buffers; eval alone decides quality')
+            a.add_argument('--compare-bn-calibration',action='store_true',help='after-only private one-pass BN calibration; implies BN mode comparison; eval quality unchanged')
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256',type=digest)
             a.add_argument('--steps',required=True,type=positive)
@@ -114,6 +115,7 @@ def main(argv=None):
     if args.command=='diagnose-single-slice':
         from .diagnostic import run_single_slice
         comparison_options={'compare_bn_modes':True} if args.compare_bn_modes else {}
+        if args.compare_bn_calibration: comparison_options['compare_bn_calibration']=True
         run_single_slice(target,args.output,pretrained_run=args.pretrained_run,
             pretrained_sha256=args.pretrained_sha256,gpu=args.gpu,steps=args.steps,seed=args.seed,
             strategy=args.strategy,initialization_mode=args.initialization,**comparison_options)

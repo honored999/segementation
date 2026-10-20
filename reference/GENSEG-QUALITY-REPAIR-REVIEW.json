@@ -116,5 +116,24 @@
     "independent_pytest_logs": false,
     "server_status": "prior deterministic cold100 completed; quality failed; new BN comparison CUDA not run",
     "blockers": []
+  },
+  "bn_calibration_followup": {
+    "baseline": "7e2348a0e6f6f6e72a2ab8875d7061c2f07a41be",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/diagnostic.py": "7d405ef60872d7b26ff7e6467fd05f2cd5b9c0d4fc0c3f508f837314ad15a745",
+      "experiments/genseg_joint/cli.py": "c44be14038c9aade6346ce5db845d6d36de188d5f1b1545c043ccf357e99ce52",
+      "experiments/genseg_joint/tests/test_single_slice.py": "37808c4748b39168fc87c3f3945683aa1517c4275703c98efc84743201184743"
+    },
+    "change": "Opt-in after-only single private BN momentum1 calibration pass; persistent cloned buffers; matched eval grad context; original eval/gates unchanged",
+    "focused": "3 passed, 28 deselected in 3.64s",
+    "affected": "31 passed in 7.58s",
+    "resource": "run_guarded.ps1 newconda single-thread CPU; per-run CPU RAM GPU VRAM preflight; CUDA disabled",
+    "new_test_functions": 0,
+    "independent_pytest_logs": false,
+    "scope": "same-training-slice observation only; not cohort calibration or inference policy",
+    "CUDA": "not run; actual quality pending",
+    "blockers": []
   }
 }
