@@ -83,6 +83,8 @@ def save_pretrain(output,engine,protocol,rng,*,sampler=None,final_audit=None):
     import torch
     validate_protocol(protocol)
     require(not getattr(engine,'poisoned',False),'Cannot save poisoned engine')
+    require(getattr(engine,'g_objective','gan_l1')=='gan_l1',
+            'L1-only G diagnostic ablation cannot be handed off as pretraining')
     require(getattr(engine,'strategy','legacy')==protocol.get('strategy','legacy'),'Engine strategy mismatch')
     require(engine.steps==protocol['steps'],'Only completed pretraining may be handed off')
     require(engine.rates==protocol['rates'] and engine.l1_weight==protocol['l1_weight'],'Engine policy mismatch')

@@ -99,6 +99,16 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
     args = parser().parse_args(base)
     assert args.steps == 3 and args.seed == diag.SEED
     assert args.compare_bn_modes is False and args.compare_bn_calibration is False
+    assert args.g_objective == 'gan_l1'
+    # l1_only is explicit, default-off, and only valid for the repair cold diagnostic.
+    cold = ['diagnose-single-slice', '--source', 's', '--raw-root', 'r', '--targets', 't',
+            '--baseline-run', 'b', '--output', 'o', '--gpu', '0', '--steps', '3',
+            '--strategy', 'adam_trainbn_epoch_v1', '--initialization', 'cold']
+    assert parser().parse_args(cold).g_objective == 'gan_l1'
+    assert parser().parse_args(cold+['--g-objective', 'l1_only']).g_objective == 'l1_only'
+    with pytest.raises(SystemExit): parser().parse_args(cold+['--g-objective', 'bogus'])
+    for rejected in (base, base+['--strategy', 'adam_trainbn_epoch_v1']):
+        with pytest.raises(SystemExit): parser().parse_args(rejected+['--g-objective', 'l1_only'])
     assert parser().parse_args(base+['--compare-bn-calibration']).compare_bn_calibration is True
     assert parser().parse_args(base+['--compare-bn-modes']).compare_bn_modes is True
     for flag in ('--g-lr', '--d-lr', '--l1-weight', '--arch-lr', '--pretrain-steps', '--min-free-vram-gib'):
@@ -196,6 +206,10 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     assert observation['statistics']['valid']['optimal_constant_l1']==float((valid-median).abs().mean())
     assert observation['eval_repeat_exact'] and observation['eval_repeat_within_tolerance']
     assert observation['eval_repeat_metrics']['max_abs_diff']==0.
+    assert observation['g_objective']=='gan_l1' and observation['g_adversarial_coefficient']==1.
+    assert observation['g_l1_coefficient']==100.
+    assert observation['g_optimized_objective'].startswith('adversarial+')
+    assert observation['g_loss']==pytest.approx(observation['g_adversarial_loss']+observation['g_l1_loss'],rel=1e-6)
     trace=observation['probe_backend']
     assert trace['restored'] and trace['entry']==trace['exit']==diag._probe_backend_snapshot()
     assert trace['active']==dict(trace['entry'],deterministic=True,benchmark=False)
@@ -375,6 +389,27 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     if strategy!='legacy':
         quality=diag.assess_quality({'before':observation,'after':tolerant},1)
         assert quality['scalar_checks']['state'] and quality['learning_quality_passed'] is False
+        # l1_only probe: the optimized G gradient is exactly grad(100*valid_L1);
+        # the retained D(fake-for-G) adversarial term is observation only.
+        from experiments.genseg_joint.core import FunctionalModel, norm
+        l1_engine=PretrainEngine(TinyGenerator(),TinyGenerator().discriminator(),strategy=strategy,g_objective='l1_only')
+        condition=(label==1).float(); valid=(label>=0).float()
+        modes=[(m,m.training) for m in l1_engine.g.net.modules()]
+        for module,_ in modes: module.eval()
+        try:
+            gf=FunctionalModel(l1_engine.g.net); gp=gf.parameters()
+            l1=l1_engine.l1_weight*((gf(gp,condition)-real).abs()*valid).sum()/valid.sum()
+            expected={name:norm([grad]) for name,grad in zip(gp,torch.autograd.grad(l1,tuple(gp.values())))}
+        finally:
+            for module,mode in modes: module.training=mode
+        saved=state(l1_engine)
+        observed,_=diag.probe(l1_engine,real,label,(8,9),{'min':0.,'max':10.})
+        assert observed['g_objective']=='l1_only' and observed['g_adversarial_coefficient']==0.
+        assert observed['g_l1_coefficient']==100. and 'adversarial observed' in observed['g_optimized_objective']
+        assert observed['g_loss']==float(l1.detach())==observed['g_l1_loss']
+        assert observed['g_adversarial_loss']>0 and observed['parameter_gradient_norms']['G']==expected
+        assert all(all(torch.equal(v,old[k]) for k,v in net.state_dict().items())
+                   for net,old in zip((l1_engine.g.net,l1_engine.d),saved))
     # Even under matched contexts, changed numerical output must fail closed.
     before=state(engine); calls=[]
     def change_repeat(module,inputs,output):
@@ -458,9 +493,11 @@ def cpu_transport(monkeypatch,*,cold=False):
     return guards, waits, order
 
 
-@pytest.mark.parametrize('strategy,init',[('legacy','gd500'),('adam_trainbn_epoch_v1','gd500'),('adam_trainbn_epoch_v1','cold')])
+@pytest.mark.parametrize('strategy,init,g_objective',[('legacy','gd500','gan_l1'),
+    ('adam_trainbn_epoch_v1','gd500','gan_l1'),('adam_trainbn_epoch_v1','cold','gan_l1'),
+    ('adam_trainbn_epoch_v1','cold','l1_only')])
 @pytest.mark.parametrize('tamper', [None, 'input', 'implementation', 'png', 'pretrain', 'receipt_write'])
-def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch, tamper,strategy,init):
+def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch, tamper,strategy,init,g_objective):
     target = Target(tmp_path); run, digest = metadata_run(tmp_path, target, monkeypatch, weights=True)
     guards, waits, order = cpu_transport(monkeypatch,cold=init=="cold")
     original_audit, original_probe, original_step = diag.audit, diag.probe, PretrainEngine.step
@@ -492,7 +529,8 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         if tamper == 'receipt_write' and path.name == 'diagnostic.json': raise OSError('receipt write failed')
     monkeypatch.setattr(diag, 'write_json', write)
     options = dict(pretrained_run=None if init=='cold' else run,
-        pretrained_sha256=None if init=='cold' else digest, gpu=0, steps=3,strategy=strategy,initialization_mode=init)
+        pretrained_sha256=None if init=='cold' else digest, gpu=0, steps=3,strategy=strategy,
+        initialization_mode=init,g_objective=g_objective)
     compare_bn_modes=init=='cold'
     compare_bn_calibration=compare_bn_modes
     if compare_bn_calibration: options['compare_bn_calibration']=True
@@ -517,6 +555,14 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         if compare_bn_modes:
             assert read_json(output/'started.json')['bn_mode_comparison_policy']==r['protocol']['bn_mode_comparison_policy']==diag.BN_MODE_COMPARISON_POLICY
         assert r['protocol']['rates'] == {'g': 2e-5, 'd': 2e-5} and r['protocol']['l1_weight'] == 100.
+        assert r['protocol']['g_objective'] == g_objective
+        assert r['protocol']['g_adversarial_coefficient'] == (0. if g_objective == 'l1_only' else 1.)
+        assert r['protocol']['g_l1_coefficient'] == 100.
+        assert read_json(output/'started.json')['g_objective'] == g_objective
+        assert read_json(output/'started.json')['g_optimized_objective'] == r['protocol']['g_optimized_objective']
+        assert all(o['g_objective'] == g_objective and
+                   o['g_adversarial_coefficient'] == r['protocol']['g_adversarial_coefficient'] and
+                   o['g_l1_coefficient'] == 100. for o in r['observations'].values())
         repeat_policy=r['protocol']['repeat_output_policy']
         assert repeat_policy['atol']==1e-7 and repeat_policy['rtol']==0.
         assert repeat_policy['reference_float32_epsilon']==torch.finfo(torch.float32).eps
@@ -531,6 +577,13 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
             assert 'eval_repeat_within_tolerance_atol1e-07_rtol0' in r['protocol']['quality_gates']['state']
         entries = [json.loads(line) for line in (output/'steps.jsonl').read_text().splitlines()]
         assert [e['step'] for e in entries] == [1, 2, 3]
+        assert all(e['g_objective'] == g_objective and
+                   e['g_adversarial_coefficient'] == r['protocol']['g_adversarial_coefficient'] and
+                   e['g_l1_coefficient'] == 100. for e in entries)
+        if g_objective == 'l1_only':
+            assert all(e['g_loss'] == e['g_l1_loss'] and e['g_adversarial_loss'] > 0 for e in entries)
+        elif strategy != 'legacy':
+            assert all(e['g_loss'] != e['g_l1_loss'] and e['g_adversarial_loss'] > 0 for e in entries)
         assert all(e['selection'] == r['protocol']['selection'] for e in entries)
         events = [json.loads(line) for line in (output/'guard_events.jsonl').read_text().splitlines()]
         assert [e['unit'] for e in events] == ['initial', 'before_patient_arrays', 'before_models',
@@ -568,3 +621,8 @@ def test_initial_resource_refusal_before_arrays_or_models_and_protected_output(t
     assert read_json(output/'failed.json')['completed_steps'] == 0 and not target.reads
     assert not (output/'diagnostic.json').exists()
     with pytest.raises(ValueError, match='Fresh'): diag.run_single_slice(target, output, **options)
+    with pytest.raises(ValueError, match='l1_only G objective requires'):
+        diag.run_single_slice(target, tmp_path/'ablation', pretrained_run=run, pretrained_sha256=digest,
+            gpu=0, steps=3, strategy='adam_trainbn_epoch_v1', initialization_mode='gd500',
+            g_objective='l1_only')
+    assert not (tmp_path/'ablation').exists() and not target.reads

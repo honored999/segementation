@@ -160,3 +160,27 @@ python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%"
 ```
 
 保持同seed/同切片/同100更新，不覆盖旧目录，不加学习率或训练预算。完成后交回diagnostic.json：原eval为observations.after.statistics；batchstats为observations.after.bn_mode_comparison.batchstats_statistics；校准后eval为observations.after.bn_calibration.calibrated_eval_statistics。比较三者有效区/病灶区L1及常数基线。校准结果只定位误差来源，不替换原FAILED工程门槛，也不能证明多患者泛化或正式合成数据合格。
+
+## 下一项单因素观测：G目标仅保留L1重建项（2026-10-20，本轮未执行）
+
+上一项BN校准诊断（`genseg_repair_cold100_bn_calibration_trial01`）已完成100次更新：同权重after原eval有效区L1=0.5696046、病灶=0.1540500；私有BN校准后eval=0.2556465/0.1405047；batchstats=0.2282112/0.1406347；有效区仍差于常数基线0.1391926。BN影响明显但不是唯一问题。现有诊断不保存权重、不支持resume，故不再追加BN变体。
+
+本轮唯一实验因素是G目标的对抗项：默认`gan_l1`为`adversarial(D(fake-for-G)) + 100*valid_L1`，本轮`--g-objective l1_only`改为仅`100*valid_L1`。保留100系数，不改成裸L1，否则同时改变梯度尺度。D仍按原目标、原Adam和前向顺序训练；D(fake-for-G)前向仍然执行，使每步BN计数仍为G1/D3，只是它的对抗项不再进入G梯度。因此隔离的是“G对抗损失项”，不是删除整个GAN：不删D、不冻结D、不改现有state gate和原质量门槛。
+
+记录解释：protocol、每步`steps.jsonl`和before/after probe都记录`g_objective`、`g_adversarial_coefficient`（1或0）、`g_l1_coefficient`=100、`g_optimized_objective`、`g_adversarial_loss`、`g_l1_loss`。l1_only下`g_loss`就是100*valid_L1（与`g_l1_loss`相等），不能与默认`gan_l1`的总loss直接比较；比较对象仍是原eval/batchstats/校准后eval的valid/lesion/background L1、最优常数基线及before/after图。`--compare-bn-calibration`仍为私有after-only观察，不回写真实BN，不替换质量门槛；`learning_quality_passed`仍不会自动置true。
+
+固定同seed=20261018、同G/D/alpha/buffers初始化、同固定inner61训练片、同条件/目标/归一化/padding/有效区、100更新、lr2e-5、Adam betas(.5,.999)、eps1e-8、无decay、原BN策略/更新时序；不换seed、不加步数、不调参、不自动进入epochs/joint。仅支持`adam_trainbn_epoch_v1`+`cold`，`legacy`或`gd500`组合会被CLI与诊断入口拒绝。
+
+候选命令（本轮只做实现与CPU验证，未在数据电脑执行）：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_L1ONLY=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_l1only_trial01"
+python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%DIAG_L1ONLY%" --gpu 1 --steps 100 --strategy adam_trainbn_epoch_v1 --initialization cold --g-objective l1_only --compare-bn-calibration
+```
+
+若新目录已存在改trial02/trial03，不覆盖。完成后交回diagnostic.json：比较observations.after.statistics（原eval）、observations.after.bn_mode_comparison.batchstats_statistics、observations.after.bn_calibration.calibrated_eval_statistics的valid/lesion L1与常数基线；检查protocol与steps.jsonl的`g_objective`/系数标记，避免把l1_only的`g_loss`与gan_l1总loss直接对比。
+
+边界：这是固定训练片的单因素工程诊断；同片拟合改善不等于合成数据有效、不等于论文复现或泛化提升。内部15/外部19不参与本次诊断或调参。

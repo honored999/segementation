@@ -135,5 +135,26 @@
     "scope": "same-training-slice observation only; not cohort calibration or inference policy",
     "CUDA": "not run; actual quality pending",
     "blockers": []
+  },
+  "l1_only_followup": {
+    "baseline": "3790d750d450205cdd167c25f218572f71de5b3a",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/core.py": "d563c76b89eb787611690aafbbe2f5843fb8e1695cbc109ade89640e50150768",
+      "experiments/genseg_joint/diagnostic.py": "c3f4c3436694e0f4d17f2e84fbae9fdddc28c6629781f6039e3dcfac65a22ad5",
+      "experiments/genseg_joint/cli.py": "db23cebd8dc238e48da1bd18b771b0797c82068196dcc82da9bfc07e7d5eddd0",
+      "experiments/genseg_joint/pretrain.py": "d3513c5844c11c0c6890469591533c9a11d197e82812167f0d17e9990bb3c501",
+      "experiments/genseg_joint/tests/test_pretrain.py": "91d0b7ab5e9c0dfc2406b8a55a6a6f9c7b8d4d011c59f778b2e5dc0f994f97cb",
+      "experiments/genseg_joint/tests/test_single_slice.py": "1670dfb6ccba0f69056fda6224c681005a618607a0134552a6afb89f510f2ebf",
+      "reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md": "e2534704ea1a397722053ea4259cc6f7dca36e8f97f5cd75cbd0fc3f0a87b35d"
+    },
+    "snapshot_sha256": "39524ed31d5d2648468047e17148e60199613352e21b210aaf0981b25a4997eb",
+    "change": "Explicit cold repair diagnostic G objective=100*valid_L1; D update and G1/D3 retained; original gates/private probes unchanged; ablation pretrain handoff rejected",
+    "worker_validation": "User-supplied DSH HANDOFF: affected4 files 96 passed in77.35s; zero new test functions; CPU synthetic only",
+    "parent_validation": "6 key cases passed4.86s; run_guarded newconda CPU single-thread CUDA disabled; CPU16 RAM49.76 GPU5 VRAM951/6144",
+    "default_compatibility": "DSH reports same existing metric values and G/D states for two steps vs HEAD; parent inspected arithmetic association unchanged",
+    "CUDA": "not run; real diagnostic quality pending",
+    "blockers": []
   }
 }

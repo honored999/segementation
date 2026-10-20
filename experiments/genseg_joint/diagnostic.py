@@ -180,7 +180,7 @@ def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,co
 def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False):
     """Private functional gradients only; hooks never return replacement outputs."""
     import torch
-    from .core import FunctionalModel, gan_generator_loss, adversarial, clean, norm
+    from .core import FunctionalModel, adversarial, clean, norm, generator_objective
     nets = {'G': engine.g.net, 'D': engine.d}
     refs = {prefix+'.'+name: p for prefix, net in nets.items() for name, p in net.named_parameters()}
     refs.update({'alpha.'+k: getattr(engine.g.networks, k) for k in ('conv_arch', 'upconv_arch')})
@@ -219,7 +219,10 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
         first_context={'grad_enabled':torch.is_grad_enabled(),'inference_mode':torch.is_inference_mode_enabled(),
                        'all_G_modules_eval':all(not m.training for m in engine.g.net.modules())}
         fake = gf(gp, condition)
-        g_loss = gan_generator_loss(df, dp, condition, fake, real, valid, engine.l1_weight)
+        # The D(fake-for-G) forward is always observed; l1_only never backpropagates it.
+        d_fake_for_g = df(dp, torch.cat((condition, fake*valid), 1))
+        g_loss, objective = generator_objective(d_fake_for_g, ((fake-real).abs()*valid).sum(), valid.sum(),
+            engine.l1_weight, getattr(engine,'g_objective','gan_l1'))
         d_loss = .5*(adversarial(df(dp, torch.cat((condition, real*valid), 1)), True)+
                      adversarial(df(dp, torch.cat((condition, fake.detach()*valid), 1)), False))
         require(bool(torch.isfinite(g_loss)) and bool(torch.isfinite(d_loss)), 'Nonfinite probe loss')
@@ -256,7 +259,7 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
         adam_steps={key:[int(state['step']) for state in opt.state.values()]
                     for key,opt in getattr(engine,'optimizers',{}).items()}
         result = {'statistics': statistics, 'g_loss': float(g_loss.detach()), 'd_loss': float(d_loss.detach()),
-                  'parameter_gradient_norms': gradients, 'activations': activations,
+                  **objective, 'parameter_gradient_norms': gradients, 'activations': activations,
                   'eval_repeat_exact':exact,'eval_repeat_within_tolerance':within_tolerance,
                   'eval_repeat_metrics':repeat_metrics,'bn_counts':bn_counts,'adam_steps':adam_steps}
         if compare_bn_modes:
@@ -337,7 +340,8 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
 
 
 def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
-                     strategy='legacy',initialization_mode='gd500',compare_bn_modes=False,compare_bn_calibration=False):
+                     strategy='legacy',initialization_mode='gd500',g_objective='gan_l1',
+                     compare_bn_modes=False,compare_bn_calibration=False):
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
     compare_bn_modes=compare_bn_modes or compare_bn_calibration
@@ -347,6 +351,9 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
     require(strategy in STRATEGIES,'Unknown diagnostic strategy')
     require(initialization_mode in ('gd500','cold'),'Unknown diagnostic initialization')
     cold=initialization_mode=='cold'
+    require(g_objective in ('gan_l1','l1_only'),'Unknown diagnostic G objective')
+    require(g_objective=='gan_l1' or (cold and strategy==REPAIR),
+            'l1_only G objective requires adam_trainbn_epoch_v1 cold initialization')
     require((pretrained_run is None)==(pretrained_sha256 is None),'Paired diagnostic source required')
     require((cold and strategy==REPAIR and pretrained_run is None) or (not cold and pretrained_run is not None),
             'cold requires repair and no source; gd500 requires locked source')
@@ -361,11 +368,13 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
     target.require_no_unpack_writes()
     inventory = {p: target.inventory(p) for p in target.train}
     source = source_identity(); implementation = implementation_identity()
+    from .core import g_objective_fields
+    objective_fields = g_objective_fields(g_objective, expected['l1_weight'])
     protocol = {'format': 1, 'classification': CLASSIFICATION, 'diagnostic_only': True, 'complete': False,
         'seed': seed, 'steps': steps, 'pretrained_run': None if cold else str(run), 'pretrained_sha256': pretrained_sha256,
         'saved_protocol': None if cold else receipt['protocol'], 'source': source, 'implementation_files_sha256': implementation,
         'input_inventory': inventory, 'target_identity': target.identity, 'target_manifest_sha256': target.manifest_sha256,
-        'rates': expected['rates'], 'l1_weight': expected['l1_weight'], 'BN': expected['BN'],
+        'rates': expected['rates'], 'l1_weight': expected['l1_weight'], **objective_fields, 'BN': expected['BN'],
         'architecture': expected['architecture'], 'optimizer': expected['optimizer'], 'scaling': expected.get('scaling'),
         'repeat_output_policy':dict(REPEAT_OUTPUT_POLICY),
         'probe_backend_policy':dict(PROBE_BACKEND_POLICY),'backend_at_start':_probe_backend_snapshot(),
@@ -436,7 +445,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             generator = Generator(seed=seed, device='cuda:0'); discriminator = generator.discriminator()
             if run is not None:
                 load_pretrained(run, pretrained_sha256, generator, discriminator, expected=expected)
-            engine = PretrainEngine(generator, discriminator,strategy=strategy)  # SAME default G/D update, BN, alpha, L1
+            engine = PretrainEngine(generator, discriminator,strategy=strategy,g_objective=g_objective)  # SAME default G/D update, BN, alpha, L1
             records = {}
             arrays = None
             def guarded_unit(unit):
@@ -467,7 +476,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 metrics = engine.step(*arrays)
                 torch.cuda.synchronize()
                 entry = {'step': engine.steps, 'selection': selection, 'resources_before': state,
-                         'cuda_peak_allocated': torch.cuda.max_memory_allocated(), **metrics}
+                         'cuda_peak_allocated': torch.cuda.max_memory_allocated(), **objective_fields, **metrics}
                 step_log.write(json.dumps(entry, allow_nan=False)+'\n'); step_log.flush()
                 print(json.dumps(entry, allow_nan=False), flush=True)
             observe('after', guarded_unit('after_probe'))

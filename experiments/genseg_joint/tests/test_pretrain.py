@@ -26,13 +26,54 @@ def unchanged(g,d,before):
     assert all(all(torch.equal(v,b[k]) for k,v in n.state_dict().items()) for n,b in zip((g.net,d),before))
 
 
-@pytest.mark.parametrize("strategy", ["legacy", "adam_trainbn_epoch_v1"])
-def test_gan_step_frozen_arch_and_transaction(monkeypatch,strategy):
+@pytest.mark.parametrize("strategy,g_objective", [("legacy","gan_l1"),("adam_trainbn_epoch_v1","gan_l1"),
+    ("adam_trainbn_epoch_v1","l1_only")])
+def test_gan_step_frozen_arch_and_transaction(monkeypatch,strategy,g_objective):
     assert hasattr(core,'PretrainEngine'), 'missing frozen-architecture pretraining engine'
-    g,d=tiny(); engine=core.PretrainEngine(g,d,strategy=strategy)
+    g,d=tiny(); engine=core.PretrainEngine(g,d,strategy=strategy,g_objective=g_objective)
+    x,y=batch()
+    # Independent one-Adam-step reference from the SAME pre-update parameters.
+    # l1_only must equal Adam(grad(100*valid_L1)); D keeps its own unchanged update.
+    reference={}
+    if strategy!='legacy':
+        real=torch.where(y>=0,x,torch.zeros_like(x)); valid=(y>=0).float(); condition=(y==1).float()
+        for objective in ('l1_only','gan_l1'):
+            gc=deepcopy(g.net); dc=deepcopy(d); fake=gc(condition)
+            l1=engine.l1_weight*((fake-real).abs()*valid).sum()/valid.sum()
+            g_loss=l1 if objective=='l1_only' else core.adversarial(dc(torch.cat((condition,fake*valid),1)),True)+l1
+            g_grads=torch.autograd.grad(g_loss,tuple(gc.parameters()))
+            g_opt=torch.optim.Adam(gc.parameters(),lr=2e-5,betas=(.5,.999),eps=1e-8,weight_decay=0.)
+            for p,gr in zip(gc.parameters(),g_grads): p.grad=gr
+            g_opt.step()
+            d_loss=.5*(core.adversarial(dc(torch.cat((condition,real*valid),1)),True)+
+                core.adversarial(dc(torch.cat((condition,fake.detach()*valid),1)),False))
+            d_grads=torch.autograd.grad(d_loss,tuple(dc.parameters()))
+            d_opt=torch.optim.Adam(dc.parameters(),lr=2e-5,betas=(.5,.999),eps=1e-8,weight_decay=0.)
+            for p,gr in zip(dc.parameters(),d_grads): p.grad=gr
+            d_opt.step()
+            reference[objective]={'g':{k:v.detach().clone() for k,v in gc.named_parameters()},
+                'd':{k:v.detach().clone() for k,v in dc.named_parameters()},'norm':core.norm(g_grads),
+                'l1':float(l1.detach()),'loss':float(g_loss.detach())}
     before=snapshot(g,d); alpha={k:getattr(g.networks,k).clone() for k in ('conv_arch','upconv_arch')}
-    x,y=batch(); metrics=engine.step(x,y)
+    metrics=engine.step(x,y)
     assert engine.steps==1 and all(torch.isfinite(torch.tensor(v)) for v in metrics.values())
+    if strategy!='legacy':
+        expected=reference[g_objective]
+        for key,value in g.net.named_parameters():
+            torch.testing.assert_close(value.detach(),expected['g'][key],rtol=1e-6,atol=1e-9)
+        for key,value in d.named_parameters():
+            torch.testing.assert_close(value.detach(),expected['d'][key],rtol=1e-6,atol=1e-9)
+        assert metrics['g_gradient_norm']==pytest.approx(expected['norm'],rel=1e-12)
+        assert metrics['g_l1_loss']==expected['l1'] and metrics['g_loss']==expected['loss']
+        assert metrics['g_adversarial_loss']>0 and metrics['g_l1_loss']>0
+        if g_objective=='l1_only':
+            assert metrics['g_loss']==metrics['g_l1_loss']  # adversarial excluded from the G gradient
+            assert any(not torch.equal(value.detach(),reference['gan_l1']['g'][key])
+                       for key,value in g.net.named_parameters())
+        else:
+            assert metrics['g_loss']!=metrics['g_l1_loss']
+        steps={key:{float(state['step']) for state in opt.state.values()} for key,opt in engine.optimizers.items()}
+        assert steps=={'g':{1.0},'d':{1.0}}
     assert all(any(not torch.equal(v,b[k]) for k,v in n.named_parameters()) for n,b in zip((g.net,d),before))
     assert all(torch.equal(getattr(g.networks,k),v) and not getattr(g.networks,k).requires_grad for k,v in alpha.items())
     if strategy != 'legacy':
@@ -54,6 +95,11 @@ def test_gan_step_frozen_arch_and_transaction(monkeypatch,strategy):
     else:
         assert engine.poisoned
         with pytest.raises(ValueError,match='poison'): engine.step(x,y)
+    # Unsupported G-objective combinations fail closed before any forward.
+    with pytest.raises(ValueError,match='l1_only G objective requires'):
+        core.PretrainEngine(*tiny(),strategy='legacy',g_objective='l1_only')
+    with pytest.raises(ValueError,match='Unknown G objective'):
+        core.PretrainEngine(*tiny(),g_objective='bogus')
 
 
 def protocol(g):
@@ -83,6 +129,9 @@ def test_completed_pretrain_real_joint_handoff(tmp_path):
     metrics=joint.step(x,y,x*.7,torch.flip(y,[-1]),torch.flip(y,[-2]))
     assert joint.steps==1 and metrics['alpha_change_norm']>0
     assert e.steps==1
+    # The diagnostic-only ablation can never be masqueraded as a pretrain handoff.
+    ablation=core.PretrainEngine(*tiny(),strategy='adam_trainbn_epoch_v1',g_objective='l1_only'); ablation.steps=1
+    with pytest.raises(ValueError,match='cannot be handed off'): save_pretrain(tmp_path/'ablation',ablation,p,{})
 
 
 @pytest.mark.parametrize('field',['split','target_identity','target_manifest_sha256','scaling','source','rates','model_config','BN','optimizer','phase'])
@@ -286,7 +335,7 @@ def test_phase_orchestration_cpu_arrays_and_immutable_handoff(tmp_path,monkeypat
         assert sha256(pre/'gan.pt')==digest
 
 
-@pytest.mark.parametrize('flag',['--s-lr','--arch-lr','--pretrain-steps'])
+@pytest.mark.parametrize('flag',['--s-lr','--arch-lr','--pretrain-steps','--g-objective'])
 def test_pretrain_rejects_joint_only_options(flag):
     from experiments.genseg_joint.cli import parser
     base=['pretrain','--source','s','--raw-root','r','--targets','t','--baseline-run','b',

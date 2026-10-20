@@ -96,3 +96,6 @@
 
 ## 2026-10-20 - GenSeg private BN calibration (branch-local)
 - Added after-only private one-pass BN calibration observation, retaining original eval/quality and strict momentum/state/RNG restoration. Existing RED3/GREEN3 and affected31 CPU passed; zero new test functions; independent exact3-file STATIC PASS. Actual CUDA quality pending; parent docs/Git only, primary/canonical master/raw/splits/oldweights unchanged.
+
+## 2026-10-20 - Accept DSH L1-only diagnostic (branch-local)
+- Accepted manual DSH diff: explicit l1_only G objective for cold repair diagnostics, retained D/G1-D3 and protected pretrain handoff. DSH reported96 affected CPU passed; parent6 key cases passed4.86s; exact7-file independent STATIC PASS. No new test functions or actual CUDA run. Parent corrected runbook metric labeling and coordinated integration; raw/splits/oldweights unchanged.

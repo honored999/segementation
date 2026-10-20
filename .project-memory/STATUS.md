@@ -118,3 +118,7 @@ Updated: 2026-09-21
 ## GenSeg private BN calibration (2026-10-20; branch-local)
 - Received complete100 BN-mode diagnostic: after eval/batchstats valid L1=0.5817/0.2315 vs constant0.1392; quality remains failed. Mode affects output, not a unique-cause claim.
 - Added default-off --compare-bn-calibration: after-only same private parameters, one BN-only momentum1 no_grad pass into persistent private buffers, then matched-context eval; original eval/gates/live state unchanged. Existing focused3/affected31 CPU passed; zero new test functions; exact3-file independent STATIC PASS. Real CUDA calibration pending; no formal inference/calibration policy accepted.
+
+## GenSeg G-objective ablation (2026-10-20; branch-local)
+- Received private BN calibration diagnostic: complete100, original/batchstats/calibrated validL1=.5696/.2282/.2556 vs constant.1392; quality remains failed. Calibration explains only part of error.
+- DSH implemented explicit cold+repair l1_only diagnostic: G keeps100*valid_L1; D objective/update/G1-D3 and original gates unchanged; cannot hand off as pretraining. User-supplied96 CPU pytest plus parent6 key cases passed; exact7-file independent STATIC PASS; zero new test functions. CUDA quality pending. Parent source/test unchanged; only docs/receipt/branch memory/Git integration. Master memory untouched.

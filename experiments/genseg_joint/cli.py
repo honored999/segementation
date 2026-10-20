@@ -42,6 +42,8 @@ class ExperimentParser(argparse.ArgumentParser):
                         self.error('cold requires repair strategy and no pretrained source')
                 elif a.pretrained_run is None or a.pretrained_sha256 is None:
                     self.error('gd500 requires paired --pretrained-run and --pretrained-sha256')
+                if a.g_objective=='l1_only' and not (repair and a.initialization=='cold'):
+                    self.error('--g-objective l1_only requires --strategy adam_trainbn_epoch_v1 and --initialization cold')
         return a
 
 
@@ -71,6 +73,8 @@ def parser():
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256',type=digest)
             a.add_argument('--steps',required=True,type=positive)
+            a.add_argument('--g-objective',choices=('gan_l1','l1_only'),default='gan_l1',
+                help='explicit G objective; l1_only excludes the adversarial term from G gradients and is cold+repair diagnostic only')
         if command in ('check','train'):
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256')
@@ -118,7 +122,8 @@ def main(argv=None):
         if args.compare_bn_calibration: comparison_options['compare_bn_calibration']=True
         run_single_slice(target,args.output,pretrained_run=args.pretrained_run,
             pretrained_sha256=args.pretrained_sha256,gpu=args.gpu,steps=args.steps,seed=args.seed,
-            strategy=args.strategy,initialization_mode=args.initialization,**comparison_options)
+            strategy=args.strategy,initialization_mode=args.initialization,
+            g_objective=args.g_objective,**comparison_options)
         return 0
     if args.command=='preview':
         from .preview import run_preview

@@ -179,13 +179,17 @@ class JointEngine:
 
 class PretrainEngine:
     """Legacy staged SGD or explicit live Adam/trainBN combination (not atomic)."""
-    def __init__(self, generator, discriminator, *, g_lr=2e-5, d_lr=2e-5, l1_weight=100., strategy="legacy"):
+    def __init__(self, generator, discriminator, *, g_lr=2e-5, d_lr=2e-5, l1_weight=100., strategy="legacy",
+                 g_objective="gan_l1"):
         require(all(math.isfinite(v) and v>0 for v in (g_lr,d_lr)), 'Positive finite rates required')
         require(math.isfinite(l1_weight) and l1_weight>=0, 'Finite nonnegative L1 weight required')
         self.g,self.d=generator,discriminator
         self.rates={'g':g_lr,'d':d_lr}; self.l1_weight=l1_weight; self.steps=0
         require(strategy in ('legacy','adam_trainbn_epoch_v1'),'Unknown pretraining strategy')
-        self.strategy=strategy; self.poisoned=False
+        require(g_objective in G_OBJECTIVES,'Unknown G objective')
+        require(g_objective=='gan_l1' or strategy=='adam_trainbn_epoch_v1',
+                'l1_only G objective requires adam_trainbn_epoch_v1')
+        self.strategy=strategy; self.poisoned=False; self.g_objective=g_objective
         generator.pretrain_strategy=strategy
         if strategy=='adam_trainbn_epoch_v1':
             require(g_lr==d_lr==2e-5 and l1_weight==100.,'Repair uses fixed Adam rates and L1')
@@ -220,7 +224,12 @@ class PretrainEngine:
                 for opt,params in ((self.optimizers['g'],gp),(self.optimizers['d'],dp))),
                 'Adam parameter ownership changed')
             fake=self.g.net(condition)
-            g_loss=adversarial(self.d(torch.cat((condition,fake*valid),1)),True)+self.l1_weight*((fake-real).abs()*valid).sum()/valid.sum()
+            # D(fake-for-G) is always forwarded: BN stays G1/D3 and D's own update
+            # is untouched. l1_only records it as observation but excludes it from
+            # the G gradient.
+            d_fake_for_g=self.d(torch.cat((condition,fake*valid),1))
+            g_loss,objective=generator_objective(d_fake_for_g,((fake-real).abs()*valid).sum(),valid.sum(),
+                self.l1_weight,self.g_objective)
             d_loss=.5*(adversarial(self.d(torch.cat((condition,real*valid),1)),True)+
                        adversarial(self.d(torch.cat((condition,fake.detach()*valid),1)),False))
             require(bool(torch.isfinite(g_loss)) and bool(torch.isfinite(d_loss)),'Nonfinite GAN loss')
@@ -239,6 +248,7 @@ class PretrainEngine:
                     for v in state.values() if isinstance(v,torch.Tensor)),'Nonfinite Adam moments')
             self.steps+=1
             return {'g_loss':float(g_loss.detach()),'d_loss':float(d_loss.detach()),
+                'g_adversarial_loss':objective['g_adversarial_loss'],'g_l1_loss':objective['g_l1_loss'],
                 'g_gradient_norm':norm(gg),'d_gradient_norm':norm(dg),'g_bn_forwards':1,'d_bn_forwards':3}
         except BaseException:
             # Some live parameters/buffers/moments may already have changed.
@@ -272,6 +282,37 @@ class PretrainEngine:
                 for k,p in net.named_parameters(): p.copy_(values[k])
         self.steps+=1
         return metrics
+
+
+G_OBJECTIVES=('gan_l1','l1_only')
+
+
+def g_objective_fields(g_objective,l1_weight):
+    """Explicit G-objective tags so GAN-total and L1-only G losses are never compared directly."""
+    require(g_objective in G_OBJECTIVES,'Unknown G objective')
+    coefficient=1. if g_objective=='gan_l1' else 0.
+    l1=format(float(l1_weight),'g')
+    return {'g_objective':g_objective,'g_adversarial_coefficient':coefficient,'g_l1_coefficient':float(l1_weight),
+        'g_optimized_objective':('adversarial+'+l1+'*valid_L1' if coefficient else
+            l1+'*valid_L1 only; D(fake-for-G) forward kept for G1/D3 BN parity; adversarial observed, excluded from G gradient')}
+
+
+def generator_objective(d_fake_for_g,l1_sum,valid_count,l1_weight,g_objective='gan_l1'):
+    """Optimized G loss plus explicit component/objective records.
+
+    l1_only still receives D(fake-for-G) so the forward/BN order and D update are
+    unchanged, but that adversarial term is observation only and never a G gradient.
+    The L1 term keeps the historical (l1_weight*sum)/count association so the
+    default gan_l1 update stays numerically identical.
+    """
+    require(g_objective in G_OBJECTIVES,'Unknown G objective')
+    l1=float(l1_weight)*l1_sum/valid_count
+    if g_objective=='gan_l1':
+        adversarial_loss=adversarial(d_fake_for_g,True); optimized=adversarial_loss+l1
+    else:
+        adversarial_loss=adversarial(d_fake_for_g.detach(),True); optimized=l1
+    return optimized,dict(g_objective_fields(g_objective,l1_weight),
+        g_adversarial_loss=float(adversarial_loss.detach()),g_l1_loss=float(l1.detach()))
 
 
 def adversarial(logits, positive):
