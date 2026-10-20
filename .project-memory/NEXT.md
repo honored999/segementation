@@ -56,3 +56,5 @@ Local verification remains STATIC ONLY. Single-training-sample observations do n
 ## Current GenSeg repair continuation (2026-10-20; supersedes earlier pending checks)
 - Deterministic probe cold100 already completed on server; learning-quality gate failed. Preserve that run; no resume/weights available.
 - BN calibration complete100 received: original/batchstats/calibrated valid L1=.5696/.2282/.2556 vs constant.1392, quality failed. Next pull only repair checkout and run same-seed/target/100 updates with --g-objective l1_only --compare-bn-calibration into new l1only_trial01 per RUNBOOK. Preserve old outputs; no resume, epoch/joint expansion or automatic protocol changes.
+
+- Latest accepted continuation2026-10-20: L1-only100 result received and still failed quality. After evidence-patch server pull, run GAN+L1 cold100 --compare-bn-calibration --save-mode-previews in a fresh mode_previews directory. Collect ready.json, diagnostic.json and all4 PNGs; no further training changes or automatic budget expansion.

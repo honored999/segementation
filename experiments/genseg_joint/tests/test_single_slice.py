@@ -1,6 +1,7 @@
 """Synthetic CPU diagnostic contracts; no patient/CUDA execution."""
 from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 import json
 import inspect
 import random
@@ -36,6 +37,23 @@ class TinyGenerator:
     def discriminator(self):
         return torch.nn.Sequential(torch.nn.Conv2d(2, 2, 1), torch.nn.BatchNorm2d(2),
             torch.nn.LeakyReLU(), torch.nn.Conv2d(2, 1, 1))
+
+
+class CountingGenerator(TinyGenerator):
+    """Same tiny fixture, plus G/D forward counts: previews must add none."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.forwards = {'g': 0, 'd': 0}
+        self.net.register_forward_pre_hook(self._count('g'))
+
+    def _count(self, key):
+        def hook(module, inputs): self.forwards[key] += 1
+        return hook
+
+    def discriminator(self):
+        net = super().discriminator()
+        net.register_forward_pre_hook(self._count('d'))
+        return net
 
 
 class Target:
@@ -111,6 +129,14 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
         with pytest.raises(SystemExit): parser().parse_args(rejected+['--g-objective', 'l1_only'])
     assert parser().parse_args(base+['--compare-bn-calibration']).compare_bn_calibration is True
     assert parser().parse_args(base+['--compare-bn-modes']).compare_bn_modes is True
+    # Mode previews are default-off and require an explicit BN comparison switch.
+    assert parser().parse_args(base).save_mode_previews is False
+    assert parser().parse_args(base+['--compare-bn-modes','--save-mode-previews']).save_mode_previews is True
+    assert parser().parse_args(base+['--compare-bn-calibration','--save-mode-previews']).save_mode_previews is True
+    with pytest.raises(SystemExit): parser().parse_args(base+['--save-mode-previews'])
+    preview = ['preview', '--source', 's', '--raw-root', 'r', '--targets', 't', '--baseline-run',
+               'b', '--output', 'o', '--run', 'x', '--checkpoint-sha256', 'a'*64, '--gpu', '0']
+    with pytest.raises(SystemExit): parser().parse_args(preview+['--save-mode-previews'])
     for flag in ('--g-lr', '--d-lr', '--l1-weight', '--arch-lr', '--pretrain-steps', '--min-free-vram-gib'):
         with pytest.raises(SystemExit): parser().parse_args(base+[flag, '1'])
     for flag, value in (('--steps', '0'), ('--steps', '-1'), ('--seed', '1'), ('--pretrained-sha256', 'bad')):
@@ -298,6 +324,16 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         assert report['eval_vs_batchstats']['mean_abs_diff']==float(difference.mean())
         assert report['policy']['eval_reference'].endswith('quality_gates_eval_only')
         assert diag.assess_quality({'before':observation,'after':compared},1)==diag.assess_quality({'before':observation,'after':current_eval},1)
+        assert 'mode_previews' not in compared
+        # Opt-in preview arrays are the discarded native planes of these same forwards.
+        captured=len(captures); previews={}
+        with_previews,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},
+            compare_bn_modes=True,save_mode_previews=True,mode_previews=previews)
+        assert len(captures)==captured+3  # exactly one compared probe: no extra forward
+        _,batchstats_native=diag.plane_statistics(real,label,captures[2][1],(8,9),{'min':0.,'max':10.})
+        assert set(previews)=={'batchstats'} and np.array_equal(previews['batchstats'],batchstats_native)
+        assert 'mode_previews' not in with_previews
+        assert with_previews['statistics']==current_eval['statistics']
         handle.remove(); handle=None
         old_momentum=g.net[1].momentum
         g.net[1].momentum=None if strategy=='legacy' else .1
@@ -339,6 +375,17 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
             assert report['policy']['stage']=='after_only' and report['bn_layers']==1
             assert calibrated['statistics']==current_eval['statistics'] and calibrated['activations']==current_eval['activations']
             assert diag.assess_quality({'before':observation,'after':calibrated},1)==diag.assess_quality({'before':observation,'after':current_eval},1)
+            # The calibrated panel is that same private calibrated eval, not a new forward.
+            captured_calls=len(calibration_calls); calibration_previews={}
+            with_calibrated,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},
+                compare_bn_calibration=True,save_mode_previews=True,mode_previews=calibration_previews)
+            assert len(calibration_calls)==captured_calls+5  # unchanged calibration call count
+            _,calibrated_native=diag.plane_statistics(real,label,calibration_calls[-1]['output'],(8,9),
+                {'min':0.,'max':10.})
+            assert set(calibration_previews)=={'batchstats','calibrated_eval'}
+            assert np.array_equal(calibration_previews['calibrated_eval'],calibrated_native)
+            assert 'mode_previews' not in with_calibrated
+            assert with_calibrated['statistics']==current_eval['statistics']
             for fail_calibration in (3,4):
                 calibration_calls.clear()
                 with pytest.raises(RuntimeError,match='calibration functional forward failure') as error:
@@ -496,10 +543,14 @@ def cpu_transport(monkeypatch,*,cold=False):
 @pytest.mark.parametrize('strategy,init,g_objective',[('legacy','gd500','gan_l1'),
     ('adam_trainbn_epoch_v1','gd500','gan_l1'),('adam_trainbn_epoch_v1','cold','gan_l1'),
     ('adam_trainbn_epoch_v1','cold','l1_only')])
-@pytest.mark.parametrize('tamper', [None, 'input', 'implementation', 'png', 'pretrain', 'receipt_write'])
+@pytest.mark.parametrize('tamper', [None, 'input', 'implementation', 'png', 'pretrain', 'receipt_write', 'ready'])
 def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch, tamper,strategy,init,g_objective):
     target = Target(tmp_path); run, digest = metadata_run(tmp_path, target, monkeypatch, weights=True)
     guards, waits, order = cpu_transport(monkeypatch,cold=init=="cold")
+    built = []
+    def build(**kwargs):
+        order.append('generator'); generator = CountingGenerator(**kwargs); built.append(generator); return generator
+    monkeypatch.setattr(diag, 'Generator', build)
     original_audit, original_probe, original_step = diag.audit, diag.probe, PretrainEngine.step
     def audit(*args):
         result = original_audit(*args); order.append('audit'); return result
@@ -514,18 +565,20 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     original_render = diag.render; original_identity = diag.implementation_identity
     changed = {'implementation': False}; renders = []
     monkeypatch.setattr(diag, 'implementation_identity', lambda: {'diagnostic.py': 'changed'} if changed['implementation'] else original_identity())
-    def render(*args):
-        result = original_render(*args); renders.append(args[0])
+    def render(*args,**kwargs):
+        result = original_render(*args,**kwargs); renders.append(args[0])
         if len(renders) == 2:
             if tamper == 'input': target.changed = True
             elif tamper == 'implementation': changed['implementation'] = True
             elif tamper == 'png': renders[0].write_bytes(renders[0].read_bytes()+b'changed')
             elif tamper == 'pretrain': (run/'complete.json').write_bytes((run/'complete.json').read_bytes()+b'\n')
+            elif tamper == 'ready': (output/'ready.json').write_bytes((output/'ready.json').read_bytes()+b'changed')
         return result
     monkeypatch.setattr(diag, 'render', render)
     original_write = diag.write_json
     def write(path, data):
         original_write(path, data)
+        if path.name == 'ready.json': order.append('ready')
         if tamper == 'receipt_write' and path.name == 'diagnostic.json': raise OSError('receipt write failed')
     monkeypatch.setattr(diag, 'write_json', write)
     options = dict(pretrained_run=None if init=='cold' else run,
@@ -534,17 +587,80 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     compare_bn_modes=init=='cold'
     compare_bn_calibration=compare_bn_modes
     if compare_bn_calibration: options['compare_bn_calibration']=True
+    save_mode_previews=compare_bn_calibration
+    if save_mode_previews: options['save_mode_previews']=True
     # A cold run has no dependency on historical GD500 files.
     if init=='cold' and tamper=='pretrain': tamper=None
     if tamper:
         with pytest.raises((ValueError, OSError)): diag.run_single_slice(target, output, **options)
-        assert read_json(output/'failed.json')['complete'] is False
+        failed = read_json(output/'failed.json')
+        assert failed['complete'] is False
         assert not (output/'diagnostic.json').exists()
+        # Ready evidence is written before models, kept on failure, and referenced
+        # only when it exists; its recorded digest still names the untampered file.
+        assert (output/'ready.json').exists() and failed['ready']['file'] == 'ready.json'
+        recorded = failed['ready']['sha256']
+        assert (recorded != sha256(output/'ready.json')) if tamper == 'ready' else (recorded == sha256(output/'ready.json'))
     else:
         diag.run_single_slice(target, output, **options)
         r = read_json(output/'diagnostic.json')
         assert r['complete'] and r['diagnostic_only'] and r['completed_steps'] == 3 and r['weights_saved'] is False
-        assert set(r['observations']) == {'before', 'after'} and len(renders) == 2
+        assert set(r['observations']) == {'before', 'after'}
+        # F1: immutable readiness evidence bound to the actual scale/selection/arrays.
+        ready = read_json(output/'ready.json')
+        scaling = r['protocol']['scaling']
+        assert ready['protocol']['scaling'] == scaling and ready['protocol']['selection'] == r['protocol']['selection']
+        assert ready['protocol']['seed'] == diag.SEED and ready['protocol']['steps'] == 3
+        assert ready['protocol']['g_objective'] == g_objective and ready['protocol']['rates'] == {'g': 2e-5, 'd': 2e-5}
+        assert ready['stage'] == 'ready_after_fixed_plane_before_models_or_updates'
+        assert ready['policy'] == diag.READY_POLICY and ready['started_sha256'] == sha256(output/'started.json')
+        assert ready['same_training_slice'] is True and ready['formal_data_identity'] is False
+        assert ready['complete'] is False and ready['diagnostic_only'] is True
+        # Ready precedes model construction and every update, then is bound to the receipt.
+        assert order.index('ready') < order.index('generator') < order.index('step')
+        assert order[order.index('ready')-1] == 'audit'
+        assert r['output_logs_sha256']['ready.json'] == sha256(output/'ready.json')
+        # Independent CPU recomputation of the actual model-input digests.
+        image = np.arange(4*9*11, dtype=np.float32).reshape(1, 4, 9, 11)
+        labels = np.zeros_like(image, dtype=np.int16); labels[:, 0] = -1
+        labels[0, 2, 3:5, 4:6] = 1
+        fit = labels >= 0
+        window = ({'min': float(image[fit].min()), 'max': float(image[fit].max())}
+                  if init == 'cold' else {'min': -5., 'max': 500.})
+        from experiments.genseg30.models import pad_plane
+        z = int(np.flatnonzero((labels[0] == 1).any(axis=(1, 2)))[0])
+        plane, plane_label = image[0, z], labels[0, z]
+        normalized = (2*(plane-window['min'])/(window['max']-window['min'])-1).astype(np.float32)
+        normalized = np.where(plane_label >= 0, normalized, 0).astype(np.float32)
+        padded_label = pad_plane(plane_label.astype(np.float32), 256, -1)[None, None]
+        model = {'condition': (padded_label == 1).astype(np.float32),
+                 'normalized_target': pad_plane(normalized, 256, 0)[None, None], 'label': padded_label}
+        assert (scaling['min'], scaling['max']) == (window['min'], window['max'])
+        assert scaling['fit_ids'] == inner_split(target.train, target.val, diag.SEED)['train']
+        for name, values in model.items():
+            assert ready['arrays'][name] == {'dtype': 'float32', 'shape': [1, 1, 256, 256],
+                'c_contiguous': True,
+                'sha256': hashlib.sha256(np.ascontiguousarray(values).tobytes(order='C')).hexdigest()}
+        # F2: optional after-only mode panels, validated on disk like the original PNGs.
+        previews = r['observations']['after'].get('mode_previews', {})
+        assert 'mode_previews' not in r['observations']['before']
+        assert (r['protocol'].get('save_mode_previews') is True) == save_mode_previews
+        assert (previews != {}) == save_mode_previews
+        assert len(renders) == 2 + len(previews)
+        files = sorted(path.name for path in output.glob('*.png'))
+        assert files == (['after.png', 'after_batchstats.png', 'after_calibrated_eval.png', 'before.png']
+                         if save_mode_previews else ['after.png', 'before.png'])
+        for mode, preview in previews.items():
+            spec = diag.MODE_PREVIEWS[mode]
+            assert preview['file'] == spec['file'] and preview['title'] == spec['title']
+            assert preview['mode'] == mode and preview['source_forward'] == spec['source']
+            assert sha256(output/preview['file']) == preview['sha256']
+            assert preview['display']['window'] == [scaling['min'], scaling['max']]
+            assert preview['display']['panel_shape'] == list(r['protocol']['selection']['native_shape'])
+        assert set(previews) == ({'batchstats', 'calibrated_eval'} if save_mode_previews else set())
+        # The switch reuses existing forwards: the counts never depend on it.
+        assert built[0].forwards['g'] == 3 + 4 + 2*int(compare_bn_modes) + 2*int(compare_bn_calibration)
+        assert built[0].forwards['d'] == 3*3 + 2*3
         assert ('compare_bn_modes' in r['protocol'])==compare_bn_modes
         assert all(('bn_mode_comparison' in o)==compare_bn_modes for o in r['observations'].values())
         assert 'bn_calibration' not in r['observations']['before']
@@ -618,9 +734,17 @@ def test_initial_resource_refusal_before_arrays_or_models_and_protected_output(t
         with pytest.raises(ValueError, match='outside'): diag.run_single_slice(target, protected, **options)
     output = tmp_path/'refused'
     with pytest.raises(ValueError, match='Resource guard refused'): diag.run_single_slice(target, output, **options)
-    assert read_json(output/'failed.json')['completed_steps'] == 0 and not target.reads
+    refused = read_json(output/'failed.json')
+    assert refused['completed_steps'] == 0 and not target.reads
+    # An early refusal never writes or references readiness evidence.
+    assert not (output/'ready.json').exists() and 'ready' not in refused
     assert not (output/'diagnostic.json').exists()
     with pytest.raises(ValueError, match='Fresh'): diag.run_single_slice(target, output, **options)
+    # The preview switch is refused before any data read or output creation.
+    with pytest.raises(ValueError, match='Mode previews require'):
+        diag.run_single_slice(target, tmp_path/'previews', pretrained_run=run, pretrained_sha256=digest,
+            gpu=0, steps=3, save_mode_previews=True)
+    assert not (tmp_path/'previews').exists()
     with pytest.raises(ValueError, match='l1_only G objective requires'):
         diag.run_single_slice(target, tmp_path/'ablation', pretrained_run=run, pretrained_sha256=digest,
             gpu=0, steps=3, strategy='adam_trainbn_epoch_v1', initialization_mode='gd500',

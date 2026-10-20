@@ -122,3 +122,7 @@ Updated: 2026-09-21
 ## GenSeg G-objective ablation (2026-10-20; branch-local)
 - Received private BN calibration diagnostic: complete100, original/batchstats/calibrated validL1=.5696/.2282/.2556 vs constant.1392; quality remains failed. Calibration explains only part of error.
 - DSH implemented explicit cold+repair l1_only diagnostic: G keeps100*valid_L1; D objective/update/G1-D3 and original gates unchanged; cannot hand off as pretraining. User-supplied96 CPU pytest plus parent6 key cases passed; exact7-file independent STATIC PASS; zero new test functions. CUDA quality pending. Parent source/test unchanged; only docs/receipt/branch memory/Git integration. Master memory untouched.
+
+## GenSeg diagnostic evidence (2026-10-20; branch-local)
+- L1-only complete100 did not improve matched-budget quality. Accepted manual DSH ready.json and default-off same-forward mode PNG patch; no core/data/target/seed/optimizer/gate change. Immutable CPU array/readiness hashes support failure evidence; extra images reuse existing private BN comparisons.
+- Independent manual DSH STATIC PASS exact5-file diff; implementer reported198 CPU passed; parent32 targeted passed10.70s, zero new test functions. Parent only corrected dynamic-shape/hash docs and integrated; actual CUDA mode-preview run pending. Primary/master memory unchanged.

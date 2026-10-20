@@ -175,8 +175,9 @@ def generate(generator,label,scale):
     return native,list(condition.shape)
 
 
-def render(path,target,label,generated,scale):
+def render(path,target,label,generated,scale,mode=None):
     from PIL import Image,ImageDraw
+    require(mode is None or (isinstance(mode,str) and mode and mode==mode.strip()),'Explicit preview mode title required')
     require(target.shape==label.shape==generated.shape and target.ndim==2,'Native matching panels required')
     valid=label>=0; lo,hi=scale['min'],scale['max']
     report={}
@@ -192,8 +193,12 @@ def render(path,target,label,generated,scale):
     overlay=fake.copy(); lesion=label==1
     overlay[lesion]=np.rint(.6*np.array([255,0,0])+.4*fake[lesion]).astype(np.uint8)
     h,w=label.shape
+    # Optional explicit mode label so a compared-mode panel is never mistaken for the
+    # authoritative eval; the title strip carries it and pixel panels stay identical.
+    suffix='' if mode is None else ' ['+mode+']'
     canvas=Image.new('RGB',(4*w,h+TITLE_HEIGHT),'black'); draw=ImageDraw.Draw(canvas)
-    for i,(pixels,title) in enumerate(zip((real,mask,fake,overlay),('Real 3mm','Lesion label','Generated DWI','Generated + label'))):
+    for i,(pixels,title) in enumerate(zip((real,mask,fake,overlay),
+            ('Real 3mm','Lesion label','Generated DWI'+suffix,'Generated + label'+suffix))):
         canvas.paste(Image.fromarray(pixels),(i*w,TITLE_HEIGHT)); draw.text((i*w+2,4),title,fill='white')
     with Path(path).open('xb') as stream: canvas.save(stream,format='PNG')
     report.update(window=[lo,hi],invalid_pixels=int((~valid).sum()),overlay={'color':[255,0,0],'alpha':.6,'background':.4},panel_shape=[h,w])

@@ -44,6 +44,8 @@ class ExperimentParser(argparse.ArgumentParser):
                     self.error('gd500 requires paired --pretrained-run and --pretrained-sha256')
                 if a.g_objective=='l1_only' and not (repair and a.initialization=='cold'):
                     self.error('--g-objective l1_only requires --strategy adam_trainbn_epoch_v1 and --initialization cold')
+                if a.save_mode_previews and not (a.compare_bn_modes or a.compare_bn_calibration):
+                    self.error('--save-mode-previews requires --compare-bn-modes or --compare-bn-calibration')
         return a
 
 
@@ -70,6 +72,7 @@ def parser():
             a.add_argument('--initialization',choices=('gd500','cold'),default='gd500')
             a.add_argument('--compare-bn-modes',action='store_true',help='observe G batchstats with private buffers; eval alone decides quality')
             a.add_argument('--compare-bn-calibration',action='store_true',help='after-only private one-pass BN calibration; implies BN mode comparison; eval quality unchanged')
+            a.add_argument('--save-mode-previews',action='store_true',help='after-only PNGs from the existing batchstats/private-calibrated-eval arrays; requires a BN comparison switch; default off')
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256',type=digest)
             a.add_argument('--steps',required=True,type=positive)
@@ -123,7 +126,7 @@ def main(argv=None):
         run_single_slice(target,args.output,pretrained_run=args.pretrained_run,
             pretrained_sha256=args.pretrained_sha256,gpu=args.gpu,steps=args.steps,seed=args.seed,
             strategy=args.strategy,initialization_mode=args.initialization,
-            g_objective=args.g_objective,**comparison_options)
+            g_objective=args.g_objective,save_mode_previews=args.save_mode_previews,**comparison_options)
         return 0
     if args.command=='preview':
         from .preview import run_preview

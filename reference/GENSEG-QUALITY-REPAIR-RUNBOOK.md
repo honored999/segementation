@@ -184,3 +184,23 @@ python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%"
 若新目录已存在改trial02/trial03，不覆盖。完成后交回diagnostic.json：比较observations.after.statistics（原eval）、observations.after.bn_mode_comparison.batchstats_statistics、observations.after.bn_calibration.calibrated_eval_statistics的valid/lesion L1与常数基线；检查protocol与steps.jsonl的`g_objective`/系数标记，避免把l1_only的`g_loss`与gan_l1总loss直接对比。
 
 边界：这是固定训练片的单因素工程诊断；同片拟合改善不等于合成数据有效、不等于论文复现或泛化提升。内部15/外部19不参与本次诊断或调参。
+
+## 诊断证据补齐：ready.json与按模式预览图（2026-10-20，本轮只实现+CPU验证）
+
+前两项诊断共有的证据缺口是“训练前身份不可自证”和“看不到batchstats/校准eval的实际生成图”。本轮只补证据，不改网络、坐标、损失、归一化、BN策略、seed、预算或质量门槛。
+
+**F1：不可变ready.json。** `diagnose-single-slice`在固定片已选定、实际scaling已由inner61算出、身份复审计通过之后，且在构造G/D或执行第一次更新之前，独占地新建`ready.json`；`started.json`仍然是最早日志，不延迟、不覆盖、不回填。字段：`format`、`classification`、`diagnostic_only`、`complete=false`、`stage=ready_after_fixed_plane_before_models_or_updates`、内嵌`policy`与`protocol`（复用既有seed/steps/g_objective/rates/l1_weight/scaling含fit_ids/selection/target identity与manifest/source/implementation sha256）、`started_sha256`、`same_training_slice=true`、`formal_data_identity=false`，以及`arrays`中`condition`、`normalized_target`、`label`三项的dtype=float32、shape=[1,1,H,W]（以实际数组为准；当前真实固定片为512×512，256仅为小图测试示例）、C顺序与SHA256。三个哈希直接由既有CPU数组计算，不新增病人数组读取、不做GPU传输、不消耗RNG、不改变输入。表示约定写在ready内：`condition = (label==1)`，`normalized_target`为inner61有效区线性minmax到[-1,1]且ignore置0，`label∈{-1,0,1}`，指标有效区条件为`label>=0`。`ready.json`的SHA256既纳入`diagnostic.json`的`output_logs_sha256`，也进入身份清单并纳入运行结束前的最终审计，因此写入后篡改会被检出。早期拒绝（初始资源守卫、输出目录非法等）合法地不产生ready，`failed.json`也不引用它；ready写成功之后才失败时保留ready并在`failed.json`记录其file与sha256；哈希或序列化失败必须直接报错，不得产生complete标记。
+
+**F2：可选按模式预览图。** 新开关`--save-mode-previews`默认关闭，只作用于`diagnose-single-slice`，且必须与`--compare-bn-modes`或`--compare-bn-calibration`一起使用，否则CLI与诊断入口在读取数据、创建输出目录之前即报错。开启后只在after观测多存图：`after.png`仍是原eval；`after_batchstats.png`来自既有的batchstats前向；同时开启校准时另存`after_calibrated_eval.png`，来自既有的私有缓冲区校准eval前向。不额外做生成器前向、不重复切换模式、不额外做D前向，直接复用`plane_statistics`原先丢弃的native生成数组；窗口、原网格、有效区黑背景与label叠加与原`render`一致，标题和JSON manifest注明batchstats或private calibrated eval。这些PNG只作定性定位，不参与gate：原statistics、bn_mode_comparison、bn_calibration与quality_assessment仍全部取自原eval。关闭开关时图片集合与旧行为一致（除新增ready.json），不增加任何前向。
+
+候选命令（本轮未在数据电脑执行，仅在cold目录上追加开关即可）：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_PREVIEW=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_mode_previews_trial01"
+python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%DIAG_PREVIEW%" --gpu 1 --steps 100 --strategy adam_trainbn_epoch_v1 --initialization cold --compare-bn-calibration --save-mode-previews
+```
+
+交回时独立复算三个CPU数组的SHA256，分别对照`ready.json`的`arrays`对应字段；另将`ready.json`整文件SHA256与`diagnostic.json.output_logs_sha256['ready.json']`对照，两类哈希不能互相替代。写入时序由`stage`标记及ready写入先于模型构造/step的代码和测试证据核对，不能仅凭文件存在证明。再看`diagnostic.json`的`observations.after.mode_previews`记录的文件名、模式、SHA256与显示参数是否与PNG一致。边界不变：这是固定训练片的证据补齐，不构成正式合成数据合格或泛化结论。

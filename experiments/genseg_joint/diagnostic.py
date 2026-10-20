@@ -1,4 +1,5 @@
 """Fixed inner61 training-plane diagnostic; no reusable weights or formal result."""
+import hashlib
 import json
 import inspect
 from pathlib import Path
@@ -7,7 +8,7 @@ import subprocess
 
 import numpy as np
 from experiments.genseg30.contract import (require, write_json, sha256, check_output,
-    checked_file, assert_identities, validate_arrays)
+    checked_file, assert_identities, validate_arrays, capture_identities)
 from .data import Cohort, inner_split
 from .models import Generator, source_identity
 from .pretrain import policy, load_pretrained, REPAIR, STRATEGIES
@@ -23,6 +24,32 @@ REPEAT_OUTPUT_POLICY = {'atol':REPEAT_ATOL,'rtol':REPEAT_RTOL,
     'reference_float32_epsilon':1.1920928955078125e-7,
     'requirements':'same_shape_device_dtype; finite_both; matched_eval_grad_context; no_broadcast; no_equal_nan',
     'interpretation':'Fixed numerical repeatability near normalized unit-scale float32 epsilon; not a loss/image-quality tolerance; parameter/BN/optimizer/RNG/mode purity remains strict'}
+
+
+READY_POLICY = {'stage':'after_fixed_plane_scale_and_identity_reaudit; before_any_model_construction_or_update',
+    'immutability':'single_fresh_exclusive_write; never rewritten, overwritten or backfilled',
+    'identity':'fixed inner61 training slice only; not a formal full-dataset identity and not a generalization result',
+    'fields':'reuses the started protocol seed/steps/g_objective/rates/l1_weight/scaling/selection/target/source identities',
+    'arrays':'actual float32 condition, normalized target and label; dtype/shape/C-contiguous order/SHA256 hashed from the existing CPU arrays; no GPU transfer, RNG consumption or input change',
+    'conventions':{'condition':'label==1','normalized_target':'inner61 valid-pixel minmax to [-1,1] then ignore set to 0',
+        'label':'padded float32 label in {-1,0,1}','metric_region':'label>=0'},
+    'binding':'the final diagnostic.json output_logs_sha256 includes this ready.json and the final identity audit re-verifies it; started.json is never modified',
+    'failure':'retained on failure; failed.json references it only when it was written; an early refusal has no ready'}
+
+
+MODE_PREVIEWS = {'batchstats':{'file':'after_batchstats.png','title':'batchstats',
+        'source':'existing private-buffer batchstats forward'},
+    'calibrated_eval':{'file':'after_calibrated_eval.png','title':'private calibrated eval',
+        'source':'existing private-buffer calibrated eval forward'}}
+
+MODE_PREVIEW_POLICY = {'switch':'save_mode_previews',
+    'scope':'diagnose-single-slice after observation only; requires compare_bn_modes or compare_bn_calibration',
+    'files':{mode:spec['file'] for mode,spec in MODE_PREVIEWS.items()},
+    'titles':{mode:spec['title'] for mode,spec in MODE_PREVIEWS.items()},
+    'source':'the existing batchstats forward or the existing private calibrated eval forward; no extra G or D forward, no second mode switch and no second calibration',
+    'display':'preview.render common inner61 window on the native grid, black background outside the valid region, label overlay; no per-image minmax stretch; the real panel stays the real target',
+    'authority':'after.png, statistics, activations, losses and the quality gate stay on the original eval; these PNGs only localize the compared mode and are not post-hoc formal inference',
+    'arrays':'generated native planes travel only to the renderer and never enter the statistics/receipt JSON'}
 
 
 PROBE_BACKEND_POLICY = {'scope':'entire_read_only_probe_G_D_forwards_and_private_gradients; engine.step_outside',
@@ -90,6 +117,34 @@ def fixed_plane(cohort, scale):
     return x, y, native_image, native_label, record
 
 
+def ready_arrays(x, y):
+    """Hash the actual float32 model inputs on CPU; no GPU copy, RNG or mutation."""
+    arrays = {'condition': (y == 1).astype(np.float32), 'normalized_target': x, 'label': y}
+    report = {}
+    for name, values in arrays.items():
+        require(type(values) is np.ndarray and values.dtype == np.float32 and values.ndim == 4,
+                'Ready evidence requires the actual float32 [1,1,H,W] array: '+name)
+        contiguous = np.ascontiguousarray(values)
+        require(contiguous.flags['C_CONTIGUOUS'] and contiguous.dtype == np.float32,
+                'Ready evidence requires a C-contiguous float32 array: '+name)
+        report[name] = {'dtype': 'float32', 'shape': list(contiguous.shape), 'c_contiguous': True,
+                        'sha256': hashlib.sha256(contiguous.tobytes(order='C')).hexdigest()}
+    require(report['condition']['shape'] == report['label']['shape'] == report['normalized_target']['shape'],
+            'Ready arrays must share the one model input shape')
+    return report
+
+
+def write_ready(output, protocol, x, y):
+    """Write the single immutable readiness record after the fixed plane, before models."""
+    path = output/'ready.json'
+    write_json(path, {'format': 1, 'classification': CLASSIFICATION, 'diagnostic_only': True,
+        'complete': False, 'stage': 'ready_after_fixed_plane_before_models_or_updates',
+        'policy': dict(READY_POLICY), 'protocol': dict(protocol),
+        'started_sha256': sha256(checked_file(output, 'started.json')),
+        'same_training_slice': True, 'formal_data_identity': False, 'arrays': ready_arrays(x, y)})
+    return {'file': path.name, 'sha256': sha256(path)}
+
+
 def tensor_statistics(values):
     import torch
     values = values.detach()
@@ -143,12 +198,17 @@ def _probe_backend_snapshot():
     return snapshot
 
 
-def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False):
+def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False,
+          save_mode_previews=False,mode_previews=None):
     """Locally constrain cuDNN for observation; actual training keeps caller flags."""
     import torch
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
+    require(type(save_mode_previews) is bool,'save_mode_previews must be boolean')
     compare_bn_modes=compare_bn_modes or compare_bn_calibration
+    # Previews only ride on arrays the compared forwards already produce.
+    require(not save_mode_previews or (compare_bn_modes and isinstance(mode_previews,dict)),
+            'Mode previews require a BN comparison mode and a local output container')
     entry=_probe_backend_snapshot()
     backend={'entry':entry}; failure=None
     try:
@@ -163,6 +223,8 @@ def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,co
                     'Probe changed unrelated backend flags')
             comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
             if compare_bn_calibration: comparison_options['compare_bn_calibration']=True
+            if save_mode_previews:
+                comparison_options.update(save_mode_previews=True,mode_previews=mode_previews)
             result,generated=_probe(engine,real,label,native_shape,scale,**comparison_options)
     except BaseException as exc:
         failure=exc
@@ -177,7 +239,8 @@ def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,co
     return result,generated
 
 
-def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False):
+def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,compare_bn_calibration=False,
+           save_mode_previews=False,mode_previews=None):
     """Private functional gradients only; hooks never return replacement outputs."""
     import torch
     from .core import FunctionalModel, adversarial, clean, norm, generator_objective
@@ -277,7 +340,9 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
                     batchstats=gf(gp,condition).detach()
             finally:
                 for module,mode in g_modes: module.training=mode
-            batch_statistics,_=plane_statistics(real,label,batchstats,native_shape,scale)
+            batch_statistics,batchstats_native=plane_statistics(real,label,batchstats,native_shape,scale)
+            # Reuse this forward's discarded native plane for the optional preview only.
+            if save_mode_previews: mode_previews['batchstats']=batchstats_native
             difference=(fake.detach().double()-batchstats.double()).abs()[label>=0]
             result['bn_mode_comparison']={'policy':dict(BN_MODE_COMPARISON_POLICY),
                 'batchstats_statistics':batch_statistics,'grad_enabled':first_context['grad_enabled'],
@@ -305,7 +370,8 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
             finally:
                 for module,momentum in norms: module.momentum=momentum
                 for module,mode in g_modes: module.training=mode
-            calibrated_statistics,_=plane_statistics(real,label,calibrated,native_shape,scale)
+            calibrated_statistics,calibrated_native=plane_statistics(real,label,calibrated,native_shape,scale)
+            if save_mode_previews: mode_previews['calibrated_eval']=calibrated_native
             difference=(fake.detach().double()-calibrated.double()).abs()[label>=0]
             result['bn_calibration']={'policy':dict(BN_CALIBRATION_POLICY),'bn_layers':len(norms),
                 'calibrated_eval_statistics':calibrated_statistics,
@@ -341,10 +407,14 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
 
 def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
                      strategy='legacy',initialization_mode='gd500',g_objective='gan_l1',
-                     compare_bn_modes=False,compare_bn_calibration=False):
+                     compare_bn_modes=False,compare_bn_calibration=False,save_mode_previews=False):
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
+    require(type(save_mode_previews) is bool,'save_mode_previews must be boolean')
     compare_bn_modes=compare_bn_modes or compare_bn_calibration
+    # Explicitly refuse an unsupported combination before data or output exists.
+    require(not save_mode_previews or compare_bn_modes,
+            'Mode previews require compare_bn_modes or compare_bn_calibration')
     require(type(steps) is int and steps > 0, 'Explicit positive diagnostic steps required')
     require(type(seed) is int and seed == SEED, 'Fixed diagnostic seed 20261018 required')
     require(type(gpu) is int and gpu >= 0, 'Physical GPU index must be a nonnegative integer')
@@ -401,8 +471,11 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         protocol.update(compare_bn_modes=True,bn_mode_comparison_policy=dict(BN_MODE_COMPARISON_POLICY))
     if compare_bn_calibration:
         protocol.update(compare_bn_calibration=True,bn_calibration_policy=dict(BN_CALIBRATION_POLICY))
+    if save_mode_previews:
+        protocol.update(save_mode_previews=True,mode_preview_policy=dict(MODE_PREVIEW_POLICY))
     output.mkdir(parents=True, exist_ok=False)
     engine = None
+    ready = {'info': None}
     def final_audit():
         assert_identities(identities)
         audit(target, inventory)
@@ -410,6 +483,9 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 'Diagnostic source/implementation changed')
         if run is not None:
             require(sha256(checked_file(run, 'gan.pt')) == pretrained_sha256, 'GD500 checkpoint changed')
+        if ready['info'] is not None:
+            require(sha256(checked_file(output, ready['info']['file'])) == ready['info']['sha256'],
+                    'Diagnostic ready.json changed')
     try:
         write_json(output/'started.json', protocol)
         with (output/'guard_events.jsonl').open('x', encoding='utf-8') as guard_log, \
@@ -437,6 +513,10 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             x, y, native_image, native_label, selection = fixed_plane(cohort, expected['scaling'])
             protocol['selection'] = selection
             final_audit()
+            # Immutable readiness evidence from the actual scale/selection/CPU arrays,
+            # written once before any model or update; a failure here never fakes one.
+            ready['info'] = write_ready(output, protocol, x, y)
+            identities.update(capture_identities([output/'ready.json']))
             snap = gpu_guard(gpu, expected_uuid=initial['gpu_uuid'])  # immediately before models, no wait
             emit({'unit': 'before_models', 'resources': snap})
             ceiling = min(initial['allocator_fraction'], snap['allocator_fraction'])
@@ -462,11 +542,25 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             def observe(stage, state):
                 comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
                 if compare_bn_calibration and stage=='after': comparison_options['compare_bn_calibration']=True
+                previews = {}
+                if save_mode_previews and stage=='after':
+                    comparison_options.update(save_mode_previews=True,mode_previews=previews)
                 observation, generated = probe(engine, *arrays, selection['native_shape'], expected['scaling'],**comparison_options)
                 observation['resources_before'] = state
                 path = output/(stage+'.png')
                 observation['display'] = render(path, native_image, native_label, generated, expected['scaling'])
                 observation['png'] = {'file': path.name, 'sha256': sha256(path)}
+                if previews:
+                    observation['mode_previews'] = {}
+                    for mode, native in previews.items():
+                        spec = MODE_PREVIEWS[mode]
+                        file = output/(stage+'_'+mode+'.png')
+                        require(file.name == spec['file'], 'Unexpected mode preview filename')
+                        # Same native grid/window/label overlay; only the mode title changes.
+                        display = render(file, native_image, native_label, native, expected['scaling'], mode=spec['title'])
+                        observation['mode_previews'][mode] = {'file': file.name, 'mode': mode,
+                            'title': spec['title'], 'source_forward': spec['source'],
+                            'sha256': sha256(file), 'display': display}
                 records[stage] = observation
             for index in range(steps):
                 state = guarded_unit('update_'+str(index+1))
@@ -482,15 +576,16 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             observe('after', guarded_unit('after_probe'))
         require(engine.steps == steps, 'Incomplete diagnostic step budget')
         from PIL import Image
+        h, w = selection['native_shape']
         for observation in records.values():
-            path = checked_file(output, observation['png']['file'])
-            require(sha256(path) == observation['png']['sha256'], 'Diagnostic PNG changed')
-            with Image.open(path) as image:
-                h, w = selection['native_shape']
-                require(image.format == 'PNG' and image.size == (4*w, h+TITLE_HEIGHT), 'Invalid diagnostic PNG')
-                image.verify()
+            for entry in (observation['png'], *observation.get('mode_previews', {}).values()):
+                path = checked_file(output, entry['file'])
+                require(sha256(path) == entry['sha256'], 'Diagnostic PNG changed')
+                with Image.open(path) as image:
+                    require(image.format == 'PNG' and image.size == (4*w, h+TITLE_HEIGHT), 'Invalid diagnostic PNG')
+                    image.verify()
         require(not any(output.glob('*.pt')) and not (output/'complete.json').exists(), 'Diagnostic must not save weights/training receipt')
-        log_hashes = {name: sha256(checked_file(output, name)) for name in ('started.json', 'steps.jsonl', 'guard_events.jsonl')}
+        log_hashes = {name: sha256(checked_file(output, name)) for name in ('started.json', 'ready.json', 'steps.jsonl', 'guard_events.jsonl')}
         final_audit()
         # This diagnostic-only receipt is LAST. Never emit a valid GAN/joint completion receipt.
         quality={'quality_assessment':assess_quality(records,steps)} if strategy==REPAIR else {}
@@ -500,10 +595,14 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
     except BaseException as exc:
         # Remove only our own possibly partial success marker in this freshly created output.
         (output/'diagnostic.json').unlink(missing_ok=True)
-        write_json(output/'failed.json', {'format': 1, 'complete': False, 'diagnostic_only': True,
+        failure = {'format': 1, 'complete': False, 'diagnostic_only': True,
             'classification': CLASSIFICATION, 'completed_steps': 0 if engine is None else engine.steps,
             'error_type': type(exc).__name__, 'error': str(exc), 'resource_guard': getattr(exc, 'diagnostic', None),
-            'probe_backend':getattr(exc,'probe_backend',None)})
+            'probe_backend':getattr(exc,'probe_backend',None)}
+        # Reference only evidence that really exists: early refusals have no ready.
+        if ready['info'] is not None:
+            failure['ready'] = {'file': ready['info']['file'], 'sha256': ready['info']['sha256']}
+        write_json(output/'failed.json', failure)
         raise
     return output
 

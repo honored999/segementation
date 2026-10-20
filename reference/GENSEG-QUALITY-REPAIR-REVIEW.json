@@ -156,5 +156,25 @@
     "default_compatibility": "DSH reports same existing metric values and G/D states for two steps vs HEAD; parent inspected arithmetic association unchanged",
     "CUDA": "not run; real diagnostic quality pending",
     "blockers": []
+  },
+  "ready_mode_previews_followup": {
+    "baseline": "7cc2efd50b9a2b2ecc8aaf0114f860f7f7510ee8",
+    "result": "PASS_STATIC",
+    "reviewer": "independent manual DSH deepseek-flash",
+    "review_handoff": "user attachment 6bd7001a-fb95-4572-b8ca-1e90c6851249",
+    "reviewed_files_match": "5/5 before doc-only corrections; production and test SHAs unchanged",
+    "files": {
+      "experiments/genseg_joint/diagnostic.py": "a10c22c716af7af0b1ca9dd6d666aa4ce7a1d0a3945b3b07ad8c79a37140a4b2",
+      "experiments/genseg_joint/cli.py": "def063dd9c2da2d31e6b01976eacf786c6b780ac99ddc50e840917515a820d93",
+      "experiments/genseg_joint/preview.py": "6adefd3fab01f5ffd0ac0e92c72cab26756048aa71388d26df30921a66d9573d",
+      "experiments/genseg_joint/tests/test_single_slice.py": "071368b4537e96d4d2a789a44403a220655f21627c066092da3c1f3c7bdb2175",
+      "reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md": "7ef35e676df4abe85ca351c8176e92a47e94d409959484ddf1ba9d34cb3fdb6a"
+    },
+    "worker_validation": "DSH reported198 passed87.49s; zero new test functions; CPU synthetic only",
+    "parent_validation": "32 targeted passed10.70s via run_guarded.ps1/newconda single-thread CPU; preflight CPU20 RAM52.16 GPU6 VRAM978/6144",
+    "doc_corrections": "dynamic H/W and separate array-vs-ready-file hashes; explicit chronology evidence",
+    "nonblocking_deferred": "optional extra failure-path tests and started.json final rehash; no production changes",
+    "CUDA": "not run; fixed100 mode-preview diagnostic pending",
+    "blockers": []
   }
 }
