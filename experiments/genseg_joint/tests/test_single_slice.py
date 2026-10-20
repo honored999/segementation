@@ -134,6 +134,20 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
     assert parser().parse_args(base+['--compare-bn-modes','--save-mode-previews']).save_mode_previews is True
     assert parser().parse_args(base+['--compare-bn-calibration','--save-mode-previews']).save_mode_previews is True
     with pytest.raises(SystemExit): parser().parse_args(base+['--save-mode-previews'])
+    # Bounded convergence is default-off, fixed to the repair cold GAN+L1 500-update plan.
+    audit = ['diagnose-single-slice', '--source', 's', '--raw-root', 'r', '--targets', 't',
+             '--baseline-run', 'b', '--output', 'o', '--gpu', '0', '--steps', '500',
+             '--strategy', 'adam_trainbn_epoch_v1', '--initialization', 'cold']
+    assert parser().parse_args(audit).convergence_audit is False
+    assert parser().parse_args(audit+['--convergence-audit']).convergence_audit is True
+    for rejected in (audit+['--convergence-audit', '--steps', '100'],
+                     audit+['--convergence-audit', '--steps', '499'],
+                     audit+['--convergence-audit', '--strategy', 'legacy'],
+                     audit+['--convergence-audit', '--initialization', 'gd500'],
+                     audit+['--convergence-audit', '--g-objective', 'l1_only'],
+                     audit+['--convergence-audit', '--seed', '1'],
+                     base+['--convergence-audit']):
+        with pytest.raises(SystemExit): parser().parse_args(rejected)
     preview = ['preview', '--source', 's', '--raw-root', 'r', '--targets', 't', '--baseline-run',
                'b', '--output', 'o', '--run', 'x', '--checkpoint-sha256', 'a'*64, '--gpu', '0']
     with pytest.raises(SystemExit): parser().parse_args(preview+['--save-mode-previews'])
@@ -724,6 +738,194 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     assert not list(output.glob('*.pt')) and not (output/'complete.json').exists()
 
 
+def test_convergence_audit_fixed_points_trajectory_state_snapshot_and_failure(tmp_path, monkeypatch):
+    """Reduced private schedule; production plan is the fixed 500-update 100/250/500."""
+    target = Target(tmp_path)
+    guards, waits, order = cpu_transport(monkeypatch, cold=True)
+    built = []
+    def build(**kwargs):
+        order.append('generator'); generator = CountingGenerator(**kwargs); built.append(generator); return generator
+    monkeypatch.setattr(diag, 'Generator', build)
+    probes = []
+    original_probe = diag.probe
+    def probe(engine, *args, **kwargs):
+        probes.append((engine.steps, kwargs.get('compare_bn_modes', False),
+                       kwargs.get('compare_bn_calibration', False), kwargs.get('save_mode_previews', False)))
+        return original_probe(engine, *args, **kwargs)
+    monkeypatch.setattr(diag, 'probe', probe)
+    output = tmp_path/'audit'
+    options = dict(gpu=0, steps=3, strategy='adam_trainbn_epoch_v1', initialization_mode='cold',
+                   convergence_audit=True, _convergence_schedule=(1, 3))
+    # Capture actual live state immediately before serialization, not readback self-comparison.
+    original_snapshot = diag.save_diagnostic_snapshot
+    captured = {}
+    condition = torch.linspace(-1, 1, 99).reshape(1, 1, 9, 11)
+    image = condition.flip(-1)
+    def fixed_eval(g, d):
+        g.net.eval(); d.eval()
+        with torch.no_grad():
+            return g.net(condition).clone(), d(torch.cat((condition, image), 1)).clone()
+    def capture(output, engine, *args, **kwargs):
+        g, d = deepcopy(engine.g), deepcopy(engine.d)
+        captured['outputs'] = fixed_eval(g, d)
+        captured['states'] = {'G': deepcopy(g.net.state_dict()), 'D': deepcopy(d.state_dict())}
+        captured['alpha'] = {k: getattr(g.networks, k).clone() for k in ('conv_arch', 'upconv_arch')}
+        return original_snapshot(output, engine, *args, **kwargs)
+    monkeypatch.setattr(diag, 'save_diagnostic_snapshot', capture)
+    diag.run_single_slice(target, output, **options)
+    r = read_json(output/'diagnostic.json')
+    assert r['complete'] and r['diagnostic_only'] and r['completed_steps'] == 3
+    assert r['weights_saved'] is True
+    assert set(r['observations']) == {'before', 'step000001', 'after'}
+    # One probe per planned point plus before; the final point is also `after`.
+    assert probes == [(0, True, False, False), (1, True, True, True), (3, True, True, True)]
+    assert 'bn_calibration' not in r['observations']['before']
+    assert 'mode_previews' not in r['observations']['before']
+    assert set(r['observations']['step000001']['mode_previews']) == {'batchstats', 'calibrated_eval'}
+    assert set(r['observations']['after']['mode_previews']) == {'batchstats', 'calibrated_eval'}
+    assert all(o['eval_repeat_within_tolerance'] and o['purity']['RNG'] == 'exact_unchanged'
+               for o in r['observations'].values())
+    plan = r['protocol']['convergence_plan']
+    assert r['protocol']['convergence_audit'] is True
+    assert plan['steps'] == 3 and plan['points'] == [1, 3] and plan['final_point_is_after'] is True
+    assert plan['observation_stages'] == ['before', 'step000001', 'after']
+    trajectory = read_json(output/'trajectory.json')
+    assert trajectory['plan'] == plan
+    assert [p['step'] for p in trajectory['points']] == [0, 1, 3]
+    assert [p['stage'] for p in trajectory['points']] == ['before', 'step000001', 'after']
+    assert [p['final_after'] for p in trajectory['points']] == [False, False, True]
+    assert set(trajectory['points'][0]['modes']) == {'eval', 'batchstats'}
+    assert set(trajectory['points'][1]['modes']) == {'eval', 'batchstats', 'calibrated_eval'}
+    snapshot = r['convergence']['snapshot']
+    assert snapshot['file'] == 'diagnostic_state.pt' and snapshot['steps'] == 3
+    assert snapshot['weights_only_load'] is True
+    assert snapshot['sha256'] == sha256(output/'diagnostic_state.pt')
+    assert r['output_logs_sha256']['diagnostic_state.pt'] == snapshot['sha256']
+    assert r['output_logs_sha256']['trajectory.json'] == sha256(output/'trajectory.json')
+    assert trajectory['snapshot'] == snapshot
+    # Safe CPU readback; only tiny CPU models below, with no resume claim.
+    payload = torch.load(output/'diagnostic_state.pt', map_location='cpu', weights_only=True)
+    assert payload['diagnostic_only'] is True and payload['no_resume'] is True
+    assert payload['not_pretraining'] is True and payload['not_joint_handoff'] is True
+    assert payload['training_receipt'] is False and payload['steps'] == 3 and payload['seed'] == diag.SEED
+    assert set(payload['models']) == {'G', 'D', 'alpha'}
+    assert set(payload['models']['G']) == set(TinyGenerator().net.state_dict())
+    assert all(v.device.type == 'cpu' and bool(torch.isfinite(v).all()) for v in payload['models']['G'].values())
+    assert payload['input']['ready_sha256'] == r['output_logs_sha256']['ready.json']
+    assert payload['protocol']['steps'] == 3
+    # Tiny fixture does not consume alpha in forward; test real restore_arch binding
+    # separately. This establishes CPU state/output equivalence, not author-model identity.
+    from experiments.genseg_joint.models import Generator as RealGenerator
+    restored = TinyGenerator(); restored_d = restored.discriminator()
+    restored.net.load_state_dict(payload['models']['G'], strict=True)
+    restored_d.load_state_dict(payload['models']['D'], strict=True)
+    RealGenerator.restore_arch(restored, payload['models']['alpha'])
+    for key in ('conv_arch', 'upconv_arch'):
+        assert torch.equal(getattr(restored.networks, key), captured['alpha'][key])
+        assert getattr(restored.networks, '_'+key+'_parameters')[0] is getattr(restored.networks, key)
+    assert restored.networks._arch_parameters[0] is restored.networks.upconv_arch
+    assert restored.networks._arch_parameters[1] is restored.networks.conv_arch
+    for name, model in (('G', restored.net), ('D', restored_d)):
+        for key, value in model.state_dict().items():
+            assert torch.equal(value, captured['states'][name][key])
+        assert int(model[1].num_batches_tracked) > 0
+    for before, after in zip(captured['outputs'], fixed_eval(restored, restored_d)):
+        torch.testing.assert_close(before, after, rtol=0, atol=0)
+    assert not (output/'complete.json').exists()
+    assert sorted(p.name for p in output.glob('*.png')) == [
+        'after.png', 'after_batchstats.png', 'after_calibrated_eval.png', 'before.png',
+        'step000001_batchstats.png', 'step000001_calibrated_eval.png', 'step000001_eval.png']
+    assert [p.name for p in output.glob('*.pt')] == ['diagnostic_state.pt']
+    entries = [json.loads(line) for line in (output/'steps.jsonl').read_text().splitlines()]
+    assert [e['step'] for e in entries] == [1, 2, 3]
+    assert [e.get('convergence_observation') for e in entries] == ['step000001', None, 'after']
+    assert not waits
+    # A failure after the snapshot keeps only the explicit partial artifact and no success marker.
+    broken = tmp_path/'audit_broken'
+    original_write = diag.write_json
+    def write(path, data):
+        if path.name == 'trajectory.json': raise OSError('trajectory write failed')
+        original_write(path, data)
+    monkeypatch.setattr(diag, 'write_json', write)
+    with pytest.raises(OSError):
+        diag.run_single_slice(target, broken, **options)
+    monkeypatch.setattr(diag, 'write_json', original_write)
+    failed = read_json(broken/'failed.json')
+    assert failed['complete'] is False and failed['completed_steps'] == 3
+    assert failed['diagnostic_state']['file'] == 'diagnostic_state.pt'
+    assert failed['diagnostic_state']['sha256'] == sha256(broken/'diagnostic_state.pt')
+    assert not (broken/'diagnostic.json').exists() and not (broken/'trajectory.json').exists()
+    from experiments.genseg_joint import convergence as conv
+    for failure_mode in ('write', 'hash', 'stat', 'close', 'readback', 'exists'):
+        partial_output = tmp_path/('partial_'+failure_mode)
+        error = OSError('snapshot '+failure_mode+' failed')
+        original_load = torch.load
+        original_open, original_stat = type(output).open, type(output).stat
+        original_hash = conv.sha256
+        def partial_save(payload, stream):
+            stream.write(b'partial snapshot')
+            raise error
+        def snapshot_open(path, mode='r', *args, **kwargs):
+            if path.name != conv.SNAPSHOT_FILE or mode != 'xb':
+                return original_open(path, mode, *args, **kwargs)
+            if failure_mode == 'exists':
+                path.write_bytes(b'preexisting snapshot')
+            stream = original_open(path, mode, *args, **kwargs)
+            @contextmanager
+            def closing():
+                with stream:
+                    yield stream
+                raise error
+            return closing()
+        def snapshot_stat(path, *args, **kwargs):
+            if path.name == conv.SNAPSHOT_FILE:
+                # Initial exists() must still work; fail only after bytes are written.
+                if original_stat(path, *args, **kwargs).st_size:
+                    raise OSError('stat unavailable')
+            return original_stat(path, *args, **kwargs)
+        def snapshot_load(path, *args, **kwargs):
+            if getattr(path, 'name', '') == conv.SNAPSHOT_FILE:
+                raise error
+            return original_load(path, *args, **kwargs)
+        with monkeypatch.context() as patch:
+            if failure_mode in ('write', 'hash', 'stat'):
+                patch.setattr(torch, 'save', partial_save)
+            if failure_mode in ('close', 'exists'):
+                patch.setattr(type(output), 'open', snapshot_open)
+            if failure_mode == 'readback':
+                patch.setattr(torch, 'load', snapshot_load)
+            if failure_mode == 'hash':
+                patch.setattr(conv, 'sha256', lambda path: (_ for _ in ()).throw(OSError('hash unavailable')))
+            if failure_mode == 'stat':
+                patch.setattr(type(output), 'stat', snapshot_stat)
+            with pytest.raises(OSError) as caught:
+                diag.run_single_slice(target, partial_output, **options)
+        failed = read_json(partial_output/'failed.json')
+        assert failed['completed_steps'] == 3
+        assert not (partial_output/'diagnostic.json').exists()
+        assert not (partial_output/'complete.json').exists()
+        if failure_mode == 'exists':
+            assert isinstance(caught.value, FileExistsError)
+            assert not hasattr(caught.value, 'snapshot_partial')
+            assert 'diagnostic_state' not in failed
+            assert (partial_output/conv.SNAPSHOT_FILE).read_bytes() == b'preexisting snapshot'
+            continue
+        assert caught.value is error and failed['error'] == str(error)
+        info = failed['diagnostic_state']
+        assert info['file'] == conv.SNAPSHOT_FILE and info['validated'] is False and info['partial'] is True
+        if failure_mode in ('write', 'hash', 'stat'):
+            assert (partial_output/conv.SNAPSHOT_FILE).read_bytes() == b'partial snapshot'
+        if failure_mode == 'stat':
+            assert info['bytes'] is None and 'stat unavailable' in info['bytes_error']
+        else:
+            assert info['bytes'] == (partial_output/conv.SNAPSHOT_FILE).stat().st_size
+        if failure_mode == 'hash':
+            assert info['sha256'] is None and 'hash unavailable' in info['sha256_error']
+        else:
+            assert info['sha256'] == original_hash(partial_output/conv.SNAPSHOT_FILE)
+
+
+
 def test_initial_resource_refusal_before_arrays_or_models_and_protected_output(tmp_path, monkeypatch):
     target = Target(tmp_path); run, digest = metadata_run(tmp_path, target, monkeypatch)
     def refuse(*a, **k): raise ValueError('Resource guard refused')
@@ -750,3 +952,17 @@ def test_initial_resource_refusal_before_arrays_or_models_and_protected_output(t
             gpu=0, steps=3, strategy='adam_trainbn_epoch_v1', initialization_mode='gd500',
             g_objective='l1_only')
     assert not (tmp_path/'ablation').exists() and not target.reads
+    # Bounded convergence is refused before data/output unless it is the fixed
+    # repair+cold+gan_l1 500-update plan (the test seam supplies the smaller budget).
+    with pytest.raises(ValueError, match='exactly 500'):
+        diag.run_single_slice(target, tmp_path/'audit_short', gpu=0, steps=3,
+            strategy='adam_trainbn_epoch_v1', initialization_mode='cold', convergence_audit=True)
+    assert not (tmp_path/'audit_short').exists() and not target.reads
+    for illegal in (dict(gpu=0, steps=500, strategy='adam_trainbn_epoch_v1', initialization_mode='cold',
+                         g_objective='l1_only'),
+                    dict(gpu=0, steps=500, strategy='legacy', initialization_mode='cold'),
+                    dict(gpu=0, steps=500, strategy='adam_trainbn_epoch_v1', initialization_mode='gd500',
+                         pretrained_run=run, pretrained_sha256=digest)):
+        with pytest.raises(ValueError, match='requires adam_trainbn_epoch_v1 cold gan_l1'):
+            diag.run_single_slice(target, tmp_path/'audit_illegal', convergence_audit=True, **illegal)
+        assert not (tmp_path/'audit_illegal').exists() and not target.reads

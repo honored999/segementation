@@ -126,3 +126,7 @@ Updated: 2026-09-21
 ## GenSeg diagnostic evidence (2026-10-20; branch-local)
 - L1-only complete100 did not improve matched-budget quality. Accepted manual DSH ready.json and default-off same-forward mode PNG patch; no core/data/target/seed/optimizer/gate change. Immutable CPU array/readiness hashes support failure evidence; extra images reuse existing private BN comparisons.
 - Independent manual DSH STATIC PASS exact5-file diff; implementer reported198 CPU passed; parent32 targeted passed10.70s, zero new test functions. Parent only corrected dynamic-shape/hash docs and integrated; actual CUDA mode-preview run pending. Primary/master memory unchanged.
+
+## GenSeg bounded convergence engineering (2026-10-20; branch-local)
+- Mode-preview cold100 received: partial structure visible, quality still failed. Added default-off fixed500 cold GAN+L1 convergence observation plan100/250/500, private same-mode plots/trajectory and one diagnostic-only G/D/alpha snapshot; no resume/pretrain/joint handoff or training-rule changes.
+- Initial B1/B2 blockers fixed: strict tiny restored-eval/BN/alpha evidence and partial write/close/readback/hash/stat failure receipt handling. Independent manual focused STATIC PASS exact5 SHA; fixer42 CPU passed, parent2 passed5.36s. Parent production/test unchanged; actual server500 NOT_RUN and budget approval pending. Primary/canonical master memory untouched.

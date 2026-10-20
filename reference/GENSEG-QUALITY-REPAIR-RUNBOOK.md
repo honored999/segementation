@@ -204,3 +204,34 @@ python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%"
 ```
 
 交回时独立复算三个CPU数组的SHA256，分别对照`ready.json`的`arrays`对应字段；另将`ready.json`整文件SHA256与`diagnostic.json.output_logs_sha256['ready.json']`对照，两类哈希不能互相替代。写入时序由`stage`标记及ready写入先于模型构造/step的代码和测试证据核对，不能仅凭文件存在证明。再看`diagnostic.json`的`observations.after.mode_previews`记录的文件名、模式、SHA256与显示参数是否与PNG一致。边界不变：这是固定训练片的证据补齐，不构成正式合成数据合格或泛化结论。
+
+## 单次有界收敛检查：500更新轨迹与诊断快照（2026-10-20，本轮只实现+CPU验证）
+
+100更新冷启动已重复多次（原eval/batchstats/校准eval有效区L1约0.606/0.232/0.257，均差于常数0.1392；外层圆边、模糊、网格仍未消除），继续重复100更新不再是新证据。本轮只改观察方式：保留现有GAN+L1设置，同权重从零训练到固定上界500，在before/100/250/500四个点记录同一片轨迹，回答“100之后固定训练片结构是否继续恢复还是平台/退化”。500只是候选上界，不是论文规定、也不是已授权预算；100→500的预算与额外probe成本属于探索性支出。旧运行未保存权重，无法续训，因此这仍是全新冷启动；旧输出与旧权重一律不动。
+
+**开关与拒绝。** 新开关`--convergence-audit`默认关闭，只作用于`diagnose-single-slice`。仅允许`--strategy adam_trainbn_epoch_v1 --initialization cold --g-objective gan_l1`且`--steps 500`；CLI与诊断入口在读取数据、创建输出目录之前即拒绝其它组合（含legacy/gd500/l1_only/非500步）。不开启时行为、命令、文件集合、权重禁令与旧诊断完全一致。
+
+**观测点。** before与原诊断相同；100/250/500复用既有私有probe，记录原eval、batchstats、私有校准eval的valid/lesion/background L1、常数基线、range/std与同尺度模式PNG（`step000100_eval.png`、`step000100_batchstats.png`、`step000100_calibrated_eval.png`等，按step+模式命名，后续点不覆盖）。500点即最终after：写`after.png`与既有after字段，不重复前向、不在其后追加观测。中间probe完全私有：不改参数、BN、Adam状态、RNG或后端；必须在同一资源守卫内；任一点probe失败立即停止，不再执行更新。
+
+**轨迹与判定。** 计划在运行前固定（点数/点位置/模式），`trajectory.json`独立记录计划、各点统计、PNG与状态审计（eval重复一致性、BN计数、Adam步数、后端恢复），`steps.jsonl`连续记录1..500且只在计划点带`convergence_observation`。质量门槛`quality_assessment`仍只由before与最终原始eval决定；三个模式与三个中间点只用于定位，不作为挑选最佳模式/最佳步或替换gate的依据。训练loss不与eval混合，不把三模式合并成一条“改善曲线”。到500即停：不看图像质量决定是否继续，不自动重跑、不换seed、不进joint；状态/数值/资源失败立即终止并记录已完成步数与失败信息，不用部分状态继续优化。
+
+**诊断快照边界。** 只有该模式在完整500步与最终状态审计通过后写一个`diagnostic_state.pt`：G/D state_dict（含真实BN缓冲区）、alpha、模型配置、source与代码身份、seed、实际步数、输入哈希/scaling/选择/协议；全部CPU detached，安全`weights_only`只读回读并与内存结构核对，文件SHA256进入`diagnostic.json`的`output_logs_sha256`与convergence记录。文件内显式`diagnostic_only`、`not_pretraining`、`not_joint_handoff`、`no_resume`、`training_receipt=false`，不命名为`gan.pt`/`joint.pt`，不写`complete.json`，不保存Adam矩或逐点权重，不扩展为checkpoint/resume系统；默认诊断仍禁止任何`*.pt`。失败不产生complete标记，可留下`failed.json`引用部分快照（标记未验证），不声称可续训。
+
+**判定规则（预先固定）。** 逐点比较100→250→500同模式的valid/lesion/background误差与同一窗口图像；若500仍不过原工程质量门槛或结构仍不合格，则保留负结果并停止本预算，不自动扩到1000/5000。只有出现明确恢复且eval稳定，才另议固定多片检查，永不直接全量训练。单片通过不等于多患者或合成数据有效。
+
+候选命令（500更新预算尚未授权，本轮未在数据电脑执行；需用户单独批准、独立审查、主分支提交推送后再运行；旧回执无完整更新墙钟，不编造ETA）：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_CONV=C:\lijialin\HD-BET_outputs\genseg_repair_cold500_conv_trial01"
+python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%DIAG_CONV%" --gpu 1 --steps 500 --strategy adam_trainbn_epoch_v1 --initialization cold --g-objective gan_l1 --convergence-audit
+```
+
+若新目录已存在改trial02，不覆盖。交回`diagnostic.json`（before/after原eval、100/250/500三点statistics、`convergence`）、`trajectory.json`、`diagnostic_state.pt`及其SHA256；使用快照前须独立核对ready/输入哈希与快照内身份，不能仅凭文件存在证明。
+
+
+快照异常语义补充：仅在本次成功独占创建文件后登记partial；写入、关闭、读回或最终元数据失败均保留文件和原异常。size/hash尽力获取，失败字段为null并附原因，不能遮蔽原异常，也不能认领已存在文件。
+资源说明：保存时CPU payload与CPU readback同时存活，峰值约两份完整G/D状态，此外还有训练GPU模型与Adam；未测量真实模型内存，不提供MB或ETA估算。tiny CPU恢复测试不证明生产网络配置身份，且fixture前向不使用alpha；alpha另通过真实restore_arch接口核对全部别名。
+收敛模式覆盖说明：继承policy中的after_only字段描述普通模式；收敛模式在每个计划点（含中间点）执行BN校准与mode-preview，以顶层convergence policy为准。observation.resources_before复用同一update unit更新前采样的state，不表示更新后重新测量资源；不增加资源采样或改变guard语义。

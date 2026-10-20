@@ -176,5 +176,24 @@
     "nonblocking_deferred": "optional extra failure-path tests and started.json final rehash; no production changes",
     "CUDA": "not run; fixed100 mode-preview diagnostic pending",
     "blockers": []
+  },
+  "bounded_convergence_followup": {
+    "baseline": "bb7085d411530f73905687eb20246c7363d969cb",
+    "result": "PASS_STATIC_B1_B2_REVIEW",
+    "reviewer": "independent manual reviewer; exact model not verified",
+    "files": {
+      "experiments/genseg_joint/convergence.py": "ef9748f00ce67a81b4c44174f41a338565da4e83afe5a92bda840e9403c1c060",
+      "experiments/genseg_joint/diagnostic.py": "6bfcdfe247c6ff6e6f000daca3b603fbeb9fa5e7ec6c319c28509992c97239c0",
+      "experiments/genseg_joint/cli.py": "c2f58f2072fc14ed81d7b44e7cd4a90596e4792aa09a245a3d34401126e0602e",
+      "experiments/genseg_joint/tests/test_single_slice.py": "b60e3d6a454334fe846dd660b9d084b5884478377050d169e74ee2525f345308",
+      "reference/GENSEG-QUALITY-REPAIR-RUNBOOK.md": "338001c4b8b5c3d72457c80e04232feef036ad8833b61bfad51c43a31c93f20e"
+    },
+    "initial_blockers": "B1 restored fixed-input eval equivalence; B2 snapshot write-failure partial receipt",
+    "blockers_closed": "tiny strict G/D and real restore_arch/BN eval evidence; exclusive creation write close readback metadata failure handling",
+    "worker_validation": "42 passed12.04s; focused1 passed5.31s; zero additional test functions in fixer",
+    "parent_validation": "2 key acceptance cases passed5.36s via newconda run_guarded single-thread CPU; preflight CPU7 RAM55.82 GPU13 VRAM987/6144",
+    "source_test_implementation": "manual implementer and fixer only; parent coordination/docs/Git",
+    "budget": "500 candidate only; user approval pending; server NOT_RUN",
+    "blockers": []
   }
 }

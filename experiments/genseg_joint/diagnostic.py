@@ -9,6 +9,8 @@ import subprocess
 import numpy as np
 from experiments.genseg30.contract import (require, write_json, sha256, check_output,
     checked_file, assert_identities, validate_arrays, capture_identities)
+from .convergence import (CONVERGENCE_POLICY, SNAPSHOT_FILE, TRAJECTORY_FILE, convergence_plan,
+    preview_filename, save_diagnostic_snapshot, stage_name, trajectory)
 from .data import Cohort, inner_split
 from .models import Generator, source_identity
 from .pretrain import policy, load_pretrained, REPAIR, STRATEGIES
@@ -407,7 +409,8 @@ def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False,c
 
 def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
                      strategy='legacy',initialization_mode='gd500',g_objective='gan_l1',
-                     compare_bn_modes=False,compare_bn_calibration=False,save_mode_previews=False):
+                     compare_bn_modes=False,compare_bn_calibration=False,save_mode_previews=False,
+                     convergence_audit=False,_convergence_schedule=None):
     require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     require(type(compare_bn_calibration) is bool,'compare_bn_calibration must be boolean')
     require(type(save_mode_previews) is bool,'save_mode_previews must be boolean')
@@ -424,6 +427,16 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
     require(g_objective in ('gan_l1','l1_only'),'Unknown diagnostic G objective')
     require(g_objective=='gan_l1' or (cold and strategy==REPAIR),
             'l1_only G objective requires adam_trainbn_epoch_v1 cold initialization')
+    # The bounded convergence plan is fixed before any data read or output creation.
+    require(type(convergence_audit) is bool,'convergence_audit must be boolean')
+    plan = None
+    if convergence_audit:
+        require(strategy==REPAIR and cold and g_objective=='gan_l1',
+                'Bounded convergence audit requires adam_trainbn_epoch_v1 cold gan_l1')
+        plan = convergence_plan(steps, _convergence_schedule)
+        require(plan['steps']==steps,'Bounded convergence audit budget mismatch')
+    else:
+        require(_convergence_schedule is None,'Private convergence schedule requires the audit option')
     require((pretrained_run is None)==(pretrained_sha256 is None),'Paired diagnostic source required')
     require((cold and strategy==REPAIR and pretrained_run is None) or (not cold and pretrained_run is not None),
             'cold requires repair and no source; gd500 requires locked source')
@@ -473,9 +486,18 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         protocol.update(compare_bn_calibration=True,bn_calibration_policy=dict(BN_CALIBRATION_POLICY))
     if save_mode_previews:
         protocol.update(save_mode_previews=True,mode_preview_policy=dict(MODE_PREVIEW_POLICY))
+    if plan is not None:
+        protocol.update(convergence_audit=True,convergence_plan=plan,convergence_policy=dict(CONVERGENCE_POLICY),
+            weights_policy='one diagnostic_state.pt after the fixed budget and final audit; not pretraining, not joint handoff, no resume, no optimizer moments',
+            compare_bn_modes=True,bn_mode_comparison_policy=dict(BN_MODE_COMPARISON_POLICY),
+            compare_bn_calibration=True,bn_calibration_policy=dict(BN_CALIBRATION_POLICY),
+            save_mode_previews=True,mode_preview_policy=dict(MODE_PREVIEW_POLICY),
+            probe_schedule='before probe inside the first guarded update unit then engine.step; each planned point probe immediately after its completed update inside that same guarded unit; the final planned point is the after observation with no duplicate probe and no observation after it',
+            observation_authority='quality assessment uses only before and the final original eval; intermediate points and compared modes are localization only')
     output.mkdir(parents=True, exist_ok=False)
     engine = None
     ready = {'info': None}
+    snapshot = {'info': None}
     def final_audit():
         assert_identities(identities)
         audit(target, inventory)
@@ -539,29 +561,35 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 state['applied_allocator_fraction'] = ceiling
                 emit({'unit': unit, 'completed_steps': engine.steps, 'resources': state})
                 return state
-            def observe(stage, state):
-                comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
-                if compare_bn_calibration and stage=='after': comparison_options['compare_bn_calibration']=True
+            def observe(stage, state, *, point=False):
+                compare=compare_bn_modes or plan is not None
+                comparison_options={'compare_bn_modes':True} if compare else {}
+                calibrate=compare_bn_calibration or plan is not None
+                if calibrate and (stage=='after' or point): comparison_options['compare_bn_calibration']=True
                 previews = {}
-                if save_mode_previews and stage=='after':
+                if (save_mode_previews and stage=='after') or (plan is not None and point):
                     comparison_options.update(save_mode_previews=True,mode_previews=previews)
                 observation, generated = probe(engine, *arrays, selection['native_shape'], expected['scaling'],**comparison_options)
                 observation['resources_before'] = state
-                path = output/(stage+'.png')
+                path = output/(stage+'.png' if plan is None else preview_filename(stage,'eval'))
                 observation['display'] = render(path, native_image, native_label, generated, expected['scaling'])
                 observation['png'] = {'file': path.name, 'sha256': sha256(path)}
+                if plan is not None:
+                    observation.update(scheduled_point=point, final_after=stage=='after')
                 if previews:
                     observation['mode_previews'] = {}
                     for mode, native in previews.items():
                         spec = MODE_PREVIEWS[mode]
-                        file = output/(stage+'_'+mode+'.png')
-                        require(file.name == spec['file'], 'Unexpected mode preview filename')
+                        expected_name = spec['file'] if plan is None else preview_filename(stage,mode)
+                        file = output/expected_name
+                        require(file.name == expected_name, 'Unexpected mode preview filename')
                         # Same native grid/window/label overlay; only the mode title changes.
                         display = render(file, native_image, native_label, native, expected['scaling'], mode=spec['title'])
                         observation['mode_previews'][mode] = {'file': file.name, 'mode': mode,
                             'title': spec['title'], 'source_forward': spec['source'],
                             'sha256': sha256(file), 'display': display}
                 records[stage] = observation
+            points = set() if plan is None else set(plan['points'])
             for index in range(steps):
                 state = guarded_unit('update_'+str(index+1))
                 if arrays is None:
@@ -569,11 +597,18 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                     observe('before', state)
                 metrics = engine.step(*arrays)
                 torch.cuda.synchronize()
+                scheduled = plan is not None and engine.steps in points
                 entry = {'step': engine.steps, 'selection': selection, 'resources_before': state,
                          'cuda_peak_allocated': torch.cuda.max_memory_allocated(), **objective_fields, **metrics}
+                if scheduled:
+                    entry['convergence_observation'] = stage_name(engine.steps, steps)
                 step_log.write(json.dumps(entry, allow_nan=False)+'\n'); step_log.flush()
                 print(json.dumps(entry, allow_nan=False), flush=True)
-            observe('after', guarded_unit('after_probe'))
+                # A failed point probe stops the run: no further update is attempted.
+                if scheduled:
+                    observe(entry['convergence_observation'], state, point=True)
+            if plan is None:
+                observe('after', guarded_unit('after_probe'))
         require(engine.steps == steps, 'Incomplete diagnostic step budget')
         from PIL import Image
         h, w = selection['native_shape']
@@ -584,14 +619,40 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 with Image.open(path) as image:
                     require(image.format == 'PNG' and image.size == (4*w, h+TITLE_HEIGHT), 'Invalid diagnostic PNG')
                     image.verify()
-        require(not any(output.glob('*.pt')) and not (output/'complete.json').exists(), 'Diagnostic must not save weights/training receipt')
-        log_hashes = {name: sha256(checked_file(output, name)) for name in ('started.json', 'ready.json', 'steps.jsonl', 'guard_events.jsonl')}
+        if plan is None:
+            require(not any(output.glob('*.pt')) and not (output/'complete.json').exists(),
+                    'Diagnostic must not save weights/training receipt')
+        else:
+            require(not any(output.glob('*.pt')),
+                    'The diagnostic state snapshot is written once, after the full fixed budget')
+            require(not (output/'complete.json').exists(), 'Diagnostic must not save a training receipt')
         final_audit()
+        convergence = None
+        if plan is not None:
+            require(ready['info'] is not None, 'Convergence snapshot requires readiness evidence')
+            snapshot['info'] = save_diagnostic_snapshot(output, engine, protocol,
+                ready=ready['info'], source=source, seed=seed)
+            require(sorted(path.name for path in output.glob('*.pt')) == [SNAPSHOT_FILE],
+                    'Exactly one diagnostic-only state snapshot is permitted')
+            body = trajectory(plan, records)
+            body['snapshot'] = dict(snapshot['info'])
+            write_json(output/TRAJECTORY_FILE, body)
+            convergence = {'plan': plan, 'policy': dict(CONVERGENCE_POLICY),
+                'trajectory_file': TRAJECTORY_FILE, 'trajectory_sha256': sha256(checked_file(output, TRAJECTORY_FILE)),
+                'snapshot': dict(snapshot['info']), 'scheduled_points_complete': True,
+                'intermediate_points_are_final_result': False}
+        log_hashes = {name: sha256(checked_file(output, name)) for name in ('started.json', 'ready.json', 'steps.jsonl', 'guard_events.jsonl')}
+        if convergence is not None:
+            log_hashes[TRAJECTORY_FILE] = convergence['trajectory_sha256']
+            log_hashes[SNAPSHOT_FILE] = convergence['snapshot']['sha256']
         # This diagnostic-only receipt is LAST. Never emit a valid GAN/joint completion receipt.
         quality={'quality_assessment':assess_quality(records,steps)} if strategy==REPAIR else {}
         write_json(output/'diagnostic.json', {'format': 1, 'complete': True, 'diagnostic_only': True,
-            'classification': CLASSIFICATION, 'completed_steps': engine.steps, 'weights_saved': False,
-            'protocol': protocol, 'observations': records, 'output_logs_sha256': log_hashes,**quality})
+            'classification': CLASSIFICATION, 'completed_steps': engine.steps,
+            'weights_saved': plan is not None, 'protocol': protocol, 'observations': records,
+            'output_logs_sha256': log_hashes, **quality,
+            **({} if convergence is None else {'convergence': convergence,
+                'reusable_checkpoint_saved': False})})
     except BaseException as exc:
         # Remove only our own possibly partial success marker in this freshly created output.
         (output/'diagnostic.json').unlink(missing_ok=True)
@@ -602,6 +663,10 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         # Reference only evidence that really exists: early refusals have no ready.
         if ready['info'] is not None:
             failure['ready'] = {'file': ready['info']['file'], 'sha256': ready['info']['sha256']}
+        # A snapshot is referenced once written; a partially validated one is marked partial.
+        partial = snapshot['info'] or getattr(exc, 'snapshot_partial', None)
+        if partial is not None:
+            failure['diagnostic_state'] = dict(partial)
         write_json(output/'failed.json', failure)
         raise
     return output
