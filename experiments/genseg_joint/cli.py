@@ -58,7 +58,7 @@ class ExperimentParser(argparse.ArgumentParser):
 def parser():
     p=ExperimentParser(description=__doc__)
     sub=p.add_subparsers(dest='command',required=True)
-    for command in ('check','train','pretrain','preview','diagnose-single-slice'):
+    for command in ('check','train','pretrain','preview','diagnose-single-slice','preview-diagnostic'):
         a=sub.add_parser(command)
         for field in ('source','raw-root','targets','baseline-run','output'):
             a.add_argument('--'+field,required=True,type=Path)
@@ -70,6 +70,9 @@ def parser():
             a.add_argument('--run',required=True,type=Path)
             a.add_argument('--checkpoint-sha256',required=True,type=digest)
             a.add_argument('--patient-limit',type=patient_limit,default=4)
+        if command=='preview-diagnostic':
+            a.add_argument('--run',required=True,type=Path)
+            a.add_argument('--checkpoint-sha256',required=True,type=digest)
         if command in ('pretrain','diagnose-single-slice'):
             a.add_argument('--strategy',choices=('legacy','adam_trainbn_epoch_v1'),default='legacy')
         if command=='pretrain':
@@ -89,7 +92,7 @@ def parser():
         if command in ('check','train'):
             a.add_argument('--pretrained-run',type=Path)
             a.add_argument('--pretrained-sha256')
-        if command not in ('check','preview','diagnose-single-slice'):
+        if command not in ('check','preview','diagnose-single-slice','preview-diagnostic'):
             a.add_argument('--steps',required=True,type=positive)
             if command=='train':
                 a.add_argument('--pretrain-steps',type=int,default=0,choices=[0],help='legacy cold-start flag; only 0 accepted, no combined phase/resume')
@@ -111,7 +114,7 @@ def main(argv=None):
             require(re.fullmatch('[0-9a-f]{64}',args.pretrained_sha256) is not None,'Explicit lowercase checkpoint SHA256 required')
     if args.gpu is not None:
         from .runtime import gpu_guard
-        guard_options={} if args.command in ('check','preview','diagnose-single-slice') else dict(min_free_vram_gib=args.min_free_vram_gib,min_free_ram_gib=args.min_free_ram_gib)
+        guard_options={} if args.command in ('check','preview','diagnose-single-slice','preview-diagnostic') else dict(min_free_vram_gib=args.min_free_vram_gib,min_free_ram_gib=args.min_free_ram_gib)
         gpu_guard(args.gpu,**guard_options)  # telemetry only; no CUDA/model load
     from experiments.genseg30.contract import Source,require,check_output
     from experiments.genseg3mm.targets import TargetDataset
@@ -136,6 +139,10 @@ def main(argv=None):
             strategy=args.strategy,initialization_mode=args.initialization,
             g_objective=args.g_objective,save_mode_previews=args.save_mode_previews,
             convergence_audit=args.convergence_audit,**comparison_options)
+        return 0
+    if args.command=='preview-diagnostic':
+        from .diagnostic_preview import run_preview_diagnostic
+        run_preview_diagnostic(target,args.run,args.checkpoint_sha256,args.output,gpu=args.gpu)
         return 0
     if args.command=='preview':
         from .preview import run_preview

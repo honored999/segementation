@@ -1,3 +1,11 @@
+## 2026-10-20 - Diagnostic snapshot fixed coverage reader accepted (branch-local)
+- Manual worker added preview-diagnostic, strict G/BN/alpha restore, fixed inner61 <=13 planes, anchor scalar audit, raw same-condition comparison and isolated receipts. Worker reported107 CPU passed; independent exact4-file STATIC Level3 PASS, no blockers; parent hashes/diff verified.
+- No real snapshot/CUDA/data inference or training locally. Server raw upstream-source identity must match generation bytes; no audit relaxation. Parent coordination/memory/Git only, production/test implementation delegated manually. Next: server ff-only sync and one bounded preview; original quality gate unchanged. Canonical master absent/unmodified.
+
+## 2026-10-20 - GenSeg500 existing-result acceptance (branch-local)
+- Verified local10 PNG/5 log hashes,10 implementation files, steps1..500 and scheduled probes; inspected all images. Major structure recovered; residual halo/smoothing and foreground rebound remain; scalar pass does not mean full quality pass.
+- No rerun/model loading/source-test edits/automatic delegation. Snapshot only server-receipt evidence. Updated stale500 approval status; canonical master absent/unmodified. Next: fixed inner61 coverage/condition ambiguity protocol, no new training authorized.
+
 # Log
 
 ## 2026-10-19 - ISLES508 pretrained initialization steering (branch-local; docs)

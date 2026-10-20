@@ -235,3 +235,77 @@ python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%"
 快照异常语义补充：仅在本次成功独占创建文件后登记partial；写入、关闭、读回或最终元数据失败均保留文件和原异常。size/hash尽力获取，失败字段为null并附原因，不能遮蔽原异常，也不能认领已存在文件。
 资源说明：保存时CPU payload与CPU readback同时存活，峰值约两份完整G/D状态，此外还有训练GPU模型与Adam；未测量真实模型内存，不提供MB或ETA估算。tiny CPU恢复测试不证明生产网络配置身份，且fixture前向不使用alpha；alpha另通过真实restore_arch接口核对全部别名。
 收敛模式覆盖说明：继承policy中的after_only字段描述普通模式；收敛模式在每个计划点（含中间点）执行BN校准与mode-preview，以顶层convergence policy为准。observation.resources_before复用同一update unit更新前采样的state，不表示更新后重新测量资源；不增加资源采样或改变guard语义。
+
+## 诊断快照固定多片只读质检（2026-10-20，尚未执行服务器推理）
+
+新增独立命令 `preview-diagnostic`；它只读取本次已完成500诊断快照，
+不接入旧 `preview` 的gan/joint加载，不支持resume/pretrain/joint。
+必须先由主代理验收最终diff、手动独立Level3审查、集成，再由用户决定是否执行
+**单次最多13片**推理。以下是模板，本次实现/CPU验证没有运行它。
+不得把旧500更新授权视作这次服务器推理或进一步训练授权。
+
+服务器保持 `nnunet5090`；工作树为
+`C:\lijialin\segementation\.worktrees\genseg-quality-repair`，GPU物理索引1。
+先确认工作树没有未提交改动，再按主代理给出的集成提交同步；不覆盖服务器改动。
+所有SOURCE/nnUNet_raw/BASELINE/TARGETS/TARGET_SHA沿用上文已核验的原变量，
+不在此猜测或重设数据路径。输出必须为全新独立目录，不能位于原诊断run内。
+
+先在PowerShell只读核验，任何不符都停止：
+
+```powershell
+$state = 'C:\lijialin\HD-BET_outputs\genseg_repair_cold500_conv_trial01\diagnostic_state.pt'
+if ((Get-Item -LiteralPath $state).Length -ne 1100514439) { throw 'snapshot size mismatch' }
+if ((Get-FileHash -LiteralPath $state -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'c025ddf4fcc300d95789d959984563d486071af25832fe465b4dab98b16a22b3') { throw 'snapshot hash mismatch' }
+Get-CimInstance Win32_Processor | Select-Object LoadPercentage
+$m = Get-CimInstance Win32_OperatingSystem
+[math]::Round(100 * (1 - $m.FreePhysicalMemory / $m.TotalVisibleMemorySize), 2)
+nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits
+```
+
+CPU/RAM/GPU/VRAM任一达到80%则不要执行。入口复用selected GPU guard，
+要求至少8GiB可用RAM、12GiB可用VRAM并设置分配上限；这不是实际峰值保证。
+CPU先反序列化完整约1.1GB G/D payload，丢弃D后才构造G；读取过程不构造D/S/
+optimizer，不将D状态移到GPU。functional eval还需要私有G参数与激活，
+本轮没有生产配置峰值测量，不提供虚构内存或ETA。
+
+确认原变量后，在已激活nnunet5090的CMD中仅执行新入口：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+set "DIAG_READ=C:\lijialin\HD-BET_outputs\genseg_repair_cold500_conv_trial01"
+set "DIAG_PREVIEW=C:\lijialin\HD-BET_outputs\genseg_repair_cold500_fixed_preview_trial01"
+python -m experiments.genseg_joint.cli preview-diagnostic --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --run "%DIAG_READ%" --checkpoint-sha256 c025ddf4fcc300d95789d959984563d486071af25832fe465b4dab98b16a22b3 --output "%DIAG_PREVIEW%" --gpu 1
+```
+
+输出已有则停止，不覆盖；不自动重试、改模式、调容差或启动训练。
+manifest在第一次forward前独占写出：seed20261018，sorted(inner61)前4名，
+每人首个有效病灶片及前2有效空mask片，缺类别只记缺失；原片不在其中才追加，
+上限13片。不读inner15/external19，不重新拟合scaling，不按生成质量挑图。
+GT只作为已声明mask-to-image条件及监督目标，不决定ROI。
+
+核验原片CPU condition/label/normalized-target哈希及原生/padded shape；
+采用原eval、functional私有参数/BN buffers、相同grad-enabled上下文、
+probe-local deterministic=True/benchmark=False并恢复caller backend。
+原片要求当前active backend等于原500 after的记录，不临时更换策略。
+恢复保留真实BN running stats/counters及两组alpha全部别名，参数冻结，无反传。
+原片区域normalized L1、两种常数L1及generated std逐项按既有
+atol=1e-7/rtol=0核对；这是区域统计复核，旧结果无浮点输出，不能宣称历史逐像素复现。
+当前两次eval与同shape同condition的原始输出另作tensor repeat比较，
+发生在native裁切和ignore后处理之前。若数值不符，只保留独立failed.json并停止。
+
+保留生成时commit/完整implementation hash清单与读取工具commit/当前hash清单。
+CLI和新读取工具变化不要求历史全清单等于当前；compatibility锁定作者source及未变的
+models/core/data/diagnostic模块（允许CRLF→LF），并对继承的genseg30/models.py
+与生成commit作LF规范化比较；因此本地Git必须保留830642c对象。
+恢复时仍严格审计G/alpha键、shape、dtype、finite，固定生产配置width64/downs8/seed。
+ready写出后生产者仅增加applied_allocator_fraction资源字段；跨ready比较只排除此字段，
+快照和最终diagnostic的protocol仍须完全一致。
+
+成功产物：manifest.json、每片原生四面板PNG、preview_diagnostic.json、files_sha256.json。
+各片含有效/病灶/非病灶normalized L1与常数基线；空区域为null并附原因。
+files_sha256.json覆盖其他所有生成文件（hash清单不能自我哈希）。
+同条件分组同时报告公共有效区域目标差异；同输入异目标说明条件不可辨识性，
+同输入同输出不能直接叫模式坍塌；没有可比组则标不适用。
+不会写training complete.json，不改原diagnostic/trajectory/quality、原权重或数据，
+不设置learning_quality_passed。结果只描述单片记忆模型对其他固定条件的行为，
+不能证明多片训练、泛化或增强收益，也不替代原单片人工质量门槛。

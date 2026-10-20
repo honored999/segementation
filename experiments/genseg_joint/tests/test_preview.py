@@ -370,3 +370,194 @@ def test_wrong_preview_phase_before_load(tmp_path,monkeypatch,phase):
     with pytest.raises(ValueError):
         preview.run_preview(t,folder,r['checkpoint_sha256'],tmp_path/'output',gpu=0,phase=phase)
     assert not t.reads
+
+# Diagnostic snapshot fixtures stay tiny; only the externally approved file identity
+# and production dimensions are substituted, never the audit/restore implementation.
+def diagnostic_files(tmp_path, monkeypatch):
+    from experiments.genseg_joint import diagnostic_preview as dp, diagnostic as d, convergence as c
+    t=Target(tmp_path); folder=tmp_path/'diagnostic'; folder.mkdir()
+    real_receipt=read_json_fixture()
+    p=deepcopy(real_receipt['protocol'])
+    p.update(target_identity=t.identity,target_manifest_sha256=t.manifest_sha256,
+        input_inventory={q:t.inventory(q) for q in t.train})
+    p['scaling']['fit_ids']=inner_split(t.train,t.val,20261018)['train']
+    cohort=preview.Cohort(t,20261018)
+    x,y,_,_,selection=d.fixed_plane(cohort,p['scaling']); p['selection']=selection
+    g=Generator(width=1,downs=5,seed=20261018)
+    with torch.no_grad():
+        for key,v in g.net.state_dict().items():
+            if 'running_mean' in key:v.fill_(.2)
+            if 'num_batches_tracked' in key:v.fill_(7)
+    g.networks.upconv_arch.add_(.2)
+    ready={'format':1,'classification':d.CLASSIFICATION,'diagnostic_only':True,'complete':False,
+        'stage':'ready_after_fixed_plane_before_models_or_updates','protocol':p,
+        'policy':d.READY_POLICY,'arrays':d.ready_arrays(x,y)}
+    write_json(folder/'ready.json',ready)
+    payload={'format':1,'classification':c.CLASSIFICATION,'diagnostic_only':True,
+        'not_pretraining':True,'not_joint_handoff':True,'no_resume':True,'training_receipt':False,
+        'checkpoint_name':'not_gan_not_joint','steps':500,'seed':20261018,
+        'models':{'G':{k:v.clone() for k,v in g.net.state_dict().items()},'D':{},
+            'alpha':{k:getattr(g.networks,k).clone() for k in ('conv_arch','upconv_arch')}},
+        'model_config':{'G':g.config,'D_width':64},'source':p['source'],'protocol':p,
+        'input':{'ready_file':'ready.json','ready_sha256':sha256(folder/'ready.json'),
+            'selection':selection,'scaling':p['scaling'],'condition':'label==1','metric_region':'label>=0'}}
+    # ready is immutable; producer later adds only this resource ceiling.
+    p['applied_allocator_fraction']=.79
+    torch.save(payload,folder/c.SNAPSHOT_FILE)
+    digest=sha256(folder/c.SNAPSHOT_FILE); size=(folder/c.SNAPSHOT_FILE).stat().st_size
+    r=deepcopy(real_receipt);r['protocol']=p
+    r['convergence']['snapshot'].update(sha256=digest,bytes=size)
+    r['output_logs_sha256'].update({'ready.json':sha256(folder/'ready.json'),c.SNAPSHOT_FILE:digest})
+    for name in ('started.json','steps.jsonl','guard_events.jsonl'):
+        (folder/name).write_text('{}')
+        r['output_logs_sha256'][name]=sha256(folder/name)
+    write_json(folder/'trajectory.json',{'classification':c.CLASSIFICATION,'diagnostic_only':True,
+        'plan':c.convergence_plan(500),'scheduled_points_complete':True})
+    r['output_logs_sha256']['trajectory.json']=sha256(folder/'trajectory.json')
+    r['convergence'].update(trajectory_file='trajectory.json',trajectory_sha256=sha256(folder/'trajectory.json'))
+    write_json(folder/'diagnostic.json',r)
+    monkeypatch.setattr(dp,'EXPECTED_SHA256',digest);monkeypatch.setattr(dp,'EXPECTED_BYTES',size)
+    monkeypatch.setattr(dp,'MODEL_CONFIG',payload['model_config'])
+    ready=json.loads((folder/'ready.json').read_text(encoding='utf-8-sig'))
+    return dp,t,folder,r,ready,payload,g
+
+
+def read_json_fixture():
+    # Stable synthetic protocol based on the producer's actual public constants.
+    from experiments.genseg_joint import diagnostic as d, convergence as c
+    from experiments.genseg_joint.runtime import implementation_identity
+    p={'format':1,'classification':d.CLASSIFICATION,'diagnostic_only':True,'seed':20261018,
+       'steps':500,'strategy':'adam_trainbn_epoch_v1','convergence_audit':True,
+       'convergence_plan':c.convergence_plan(500),'convergence_policy':c.CONVERGENCE_POLICY,
+       'initialization':'identical_seed_cold_G_D_alpha_buffers; fresh_Adam_zero_moments; no_resume',
+       'g_objective':'gan_l1','architecture':'both_alpha_frozen','repeat_output_policy':d.REPEAT_OUTPUT_POLICY,
+       'probe_backend_policy':d.PROBE_BACKEND_POLICY,'source':source_identity(),
+       'repository_commit':'830642cc9ad07c84211188369d5315ad59b6dfcc',
+       'implementation_files_sha256':implementation_identity(),
+       'scaling':{'method':'inner61_valid_pixel_global_minmax_to_minus1_plus1_no_clip','min':-5.,'max':500.}}
+    return {'format':1,'classification':d.CLASSIFICATION,'diagnostic_only':True,'complete':True,
+       'completed_steps':500,'weights_saved':True,'reusable_checkpoint_saved':False,'protocol':p,
+       'convergence':{'plan':c.convergence_plan(500),'policy':c.CONVERGENCE_POLICY,
+           'scheduled_points_complete':True,'snapshot':{'format':1,'file':c.SNAPSHOT_FILE,'steps':500,
+           'not_pretraining':True,'not_joint_handoff':True,'no_resume':True,'optimizer_moments':False,
+           'rng_state':False,'weights_only_load':True,'readback_exact':True}},'output_logs_sha256':{}}
+
+
+@pytest.mark.parametrize('damage',[None,'hash','schema','seed','scale','source','ready','finite','shape','receipt_seed','receipt_scale','receipt_source','receipt_ready','failed','code'])
+def test_diagnostic_audit_restore(tmp_path,monkeypatch,damage):
+    torch.set_num_threads(1)
+    dp,t,folder,r,ready,payload,g=diagnostic_files(tmp_path,monkeypatch)
+    dp.audit_diagnostic(t,folder,dp.EXPECTED_SHA256)
+    path=folder/'diagnostic_state.pt'
+    if damage in ('receipt_seed','receipt_scale','receipt_source','receipt_ready','failed','code'):
+        if damage=='receipt_seed':r['protocol']['seed']=7
+        if damage=='receipt_scale':r['protocol']['scaling']['fit_ids']=[]
+        if damage=='receipt_source':r['protocol']['source']={}
+        if damage=='receipt_ready':r['output_logs_sha256']['ready.json']='0'*64
+        if damage=='code':r['protocol']['implementation_files_sha256']['models.py']='0'*64
+        if damage=='failed':(folder/'failed.json').write_text('{}')
+        (folder/'diagnostic.json').write_text(json.dumps(r))
+        with pytest.raises(ValueError):dp.audit_diagnostic(t,folder,dp.EXPECTED_SHA256)
+        return
+    if damage=='hash':
+        path.write_bytes(b'damaged')
+        with pytest.raises(ValueError):dp.audit_diagnostic(t,folder,dp.EXPECTED_SHA256)
+        return
+    if damage=='schema':payload['unexpected']=True
+    if damage=='seed':payload['seed']=7
+    if damage=='scale':payload['input']['scaling']=dict(min=0,max=1)
+    if damage=='source':payload['source']={}
+    if damage=='ready':payload['input']['ready_sha256']='0'*64
+    key=next(k for k,v in payload['models']['G'].items() if v.dtype==torch.float32)
+    if damage=='finite':payload['models']['G'][key].fill_(float('nan'))
+    if damage=='shape':payload['models']['G'][key]=torch.ones(3)
+    torch.save(payload,path)
+    if damage in ('schema','seed','scale','source','ready'):
+        with pytest.raises(ValueError):dp.load_diagnostic(folder,sha256(path),r,ready)
+        return
+    restored=dp.load_diagnostic(folder,sha256(path),r,ready)
+    fresh=Generator(width=1,downs=5,seed=20261018)
+    if damage:
+        with pytest.raises(ValueError):preview.restore_generator(fresh,restored)
+        return
+    preview.restore_generator(fresh,restored)
+    preview.restore_generator(g,restored)
+    manifest,arrays=dp.coverage(preview.Cohort(t,20261018),r['protocol']['scaling'],r['protocol']['selection'],ready)
+    assert len(manifest['planes'])==12 and sum(v['anchor'] for v in manifest['planes'])==1
+    assert [v['patient'] for v in manifest['patients']]==sorted(inner_split(t.train,t.val,20261018)['train'])[:4]
+    x,y,*_=arrays[0];before=dp.frozen_state(fresh)
+    a,stats,_,_=dp.evaluate(fresh,x,y,manifest['planes'][0]['native_shape'],r['protocol']['scaling'])
+    b,_,_,_=dp.evaluate(g,x,y,manifest['planes'][0]['native_shape'],r['protocol']['scaling'])
+    assert np.array_equal(a,b) and dp.frozen_state(fresh)==before
+    assert all(torch.equal(v,restored['G'][k]) for k,v in fresh.net.state_dict().items())
+    assert torch.equal(fresh.networks.upconv_arch,restored['arch']['upconv_arch'])
+    n=fresh.networks
+    assert n._arch_parameters[0] is n.upconv_arch and n._arch_parameters[1] is n.conv_arch
+    dp.compare_anchor(stats,stats)
+    with pytest.raises(ValueError):dp.compare_anchor(stats,dict(stats,valid=dict(stats['valid'],normalized_l1=10)))
+    # Different ignore extents, identical zero conditions: compare raw before masking.
+    x,y,*_=arrays[1]; yy=y.copy();yy[:,:,2:4]=-1
+    a,st,_,_=dp.evaluate(fresh,x,y,manifest['planes'][1]['native_shape'],r['protocol']['scaling'])
+    b,_,_,_=dp.evaluate(fresh,x,yy,manifest['planes'][1]['native_shape'],r['protocol']['scaling'])
+    assert np.array_equal(a,b) and st['foreground'] is None
+    records=[manifest['planes'][1],manifest['planes'][1]]
+    group=dp.condition_groups(records,[(x,y),(x+1,yy)],[a,b])
+    assert group['applicable'] and group['groups'][0]['comparisons'][0]['target_common_valid_l1']==1
+    assert not dp.condition_groups(records[:1],[(x,y)],[a])['applicable']
+    for out in (folder,folder/'child',folder.parent,t.protected[0]/'out'):
+        with pytest.raises(ValueError):dp.run_preview_diagnostic(t,folder,sha256(path),out,gpu=0)
+    args=__import__('experiments.genseg_joint.cli',fromlist=['parser']).parser().parse_args([
+        'preview-diagnostic','--source','a','--raw-root','b','--targets','c','--baseline-run','d',
+        '--output','e','--run','r','--checkpoint-sha256','a'*64,'--gpu','1'])
+    assert not hasattr(args,'patient_limit') and not hasattr(args,'steps')
+
+
+@pytest.mark.parametrize('fail_anchor',[False,True])
+def test_diagnostic_orchestration(tmp_path,monkeypatch,fail_anchor):
+    from experiments.genseg_joint import diagnostic as d
+    torch.set_num_threads(1)
+    dp,t,folder,r,ready,payload,g=diagnostic_files(tmp_path,monkeypatch)
+    restored=dp.load_diagnostic(folder,dp.EXPECTED_SHA256,r,ready)
+    preview.restore_generator(g,restored)
+    cohort=preview.Cohort(t,20261018)
+    manifest,arrays=dp.coverage(cohort,r['protocol']['scaling'],r['protocol']['selection'],ready)
+    x,y,*_=arrays[0]
+    _,stats,_,active=dp.evaluate(g,x,y,manifest['planes'][0]['native_shape'],r['protocol']['scaling'])
+    if fail_anchor:stats['valid']['normalized_l1']+=1
+    r['observations']={'after':{'statistics':stats,'probe_backend':{'active':active}}}
+    (folder/'diagnostic.json').write_text(json.dumps(r))
+    monkeypatch.setattr(dp,'gpu_guard',lambda *a,**k:{'allocator_fraction':.1,'gpu_uuid':'cpu-fixture'})
+    monkeypatch.setattr(torch.cuda,'is_initialized',lambda:False)
+    monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
+    monkeypatch.setattr(torch.cuda,'set_per_process_memory_fraction',lambda *a:None)
+    monkeypatch.setattr(dp,'Generator',lambda **kw:Generator(**{k:v for k,v in kw.items() if k!='device'},device='cpu'))
+    monkeypatch.setattr(Generator,'discriminator',lambda *a,**k:pytest.fail('D constructed'))
+    output=tmp_path/'preview'
+    if fail_anchor:
+        with pytest.raises(ValueError,match='Anchor scalar mismatch'):
+            dp.run_preview_diagnostic(t,folder,dp.EXPECTED_SHA256,output,gpu=0)
+        assert (output/'failed.json').exists() and not (output/'preview_diagnostic.json').exists()
+    else:
+        dp.run_preview_diagnostic(t,folder,dp.EXPECTED_SHA256,output,gpu=0)
+        receipt=json.loads((output/'preview_diagnostic.json').read_text())
+        assert receipt['complete'] and len(receipt['previews'])==12
+        assert receipt['condition_groups']['applicable']
+        assert not receipt['historical_pixelwise_reproduction']
+        assert not (output/'complete.json').exists()
+        hashes=json.loads((output/'files_sha256.json').read_text())
+        assert all(sha256(output/k)==v for k,v in hashes.items())
+    # Coverage with missing category is not supplemented from later patients.
+    original=t.load_train
+    def empty(dataset,patient):
+        x,y,meta=original(dataset,patient);y[y==1]=0
+        return x,y,meta
+    t.load_train=empty
+    selection=dict(r['protocol']['selection'],z=1,category='lesion')
+    xx,yy,_=cohort.plane('train',selection['patient'],1,r['protocol']['scaling'])
+    missing,_=dp.coverage(cohort,r['protocol']['scaling'],selection,{'arrays':d.ready_arrays(xx,yy)})
+    assert len(missing['planes'])==8 and all('lesion' in row['missing_categories'] for row in missing['patients'])
+    # An original anchor outside the four selected patients is appended once only.
+    selection=dict(selection,patient=cohort.train[4],z=2)
+    xx,yy,_=cohort.plane('train',selection['patient'],2,r['protocol']['scaling'])
+    appended,_=dp.coverage(cohort,r['protocol']['scaling'],selection,{'arrays':d.ready_arrays(xx,yy)})
+    assert len(appended['planes'])==9 and appended['planes'][-1]['anchor']

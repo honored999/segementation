@@ -129,4 +129,10 @@ Updated: 2026-09-21
 
 ## GenSeg bounded convergence engineering (2026-10-20; branch-local)
 - Mode-preview cold100 received: partial structure visible, quality still failed. Added default-off fixed500 cold GAN+L1 convergence observation plan100/250/500, private same-mode plots/trajectory and one diagnostic-only G/D/alpha snapshot; no resume/pretrain/joint handoff or training-rule changes.
-- Initial B1/B2 blockers fixed: strict tiny restored-eval/BN/alpha evidence and partial write/close/readback/hash/stat failure receipt handling. Independent manual focused STATIC PASS exact5 SHA; fixer42 CPU passed, parent2 passed5.36s. Parent production/test unchanged; actual server500 NOT_RUN and budget approval pending. Primary/canonical master memory untouched.
+- Initial B1/B2 blockers fixed: strict tiny restored-eval/BN/alpha evidence and partial write/close/readback/hash/stat failure receipt handling. Independent manual focused STATIC PASS exact5 SHA; fixer42 CPU passed, parent2 passed5.36s. Parent production/test unchanged; historical pre-run status superseded by the local500 acceptance below. Primary/canonical master memory untouched.
+
+
+## GenSeg500 local acceptance (2026-10-20; branch-local)
+- Approved500 run completed at830642c; local receipt/log hashes and all10 PNG hashes verified, steps1..500/G1D3 and10 implementation hashes match. Diagnostic state snapshot absent locally; server bytes/hash/readback remain receipt-only.
+- Original eval validL1 .0319455 vs constant .1391926; foreground .0613226 at250 -> .0638616 at500. All10 images inspected: major structure recovered, residual circular halo/smoothing; complete quality not accepted. Original manual-pending/learning_quality_passed=false untouched. Single-slice engineering evidence only.
+- Original preview accepts gan/joint only; new independent preview-diagnostic supports this diagnostic snapshot with strict audit, frozen G-only restore, fixed inner61 coverage <=13 and historical anchor statistics. Implementer reported107 CPU passed; independent four-file STATIC Level3 PASS. Parent verified exact hashes/diff; real snapshot/CUDA/inventory/peak memory remain unverified. Master canonical memory absent; only branch-local sync.
