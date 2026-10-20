@@ -33,6 +33,15 @@ PROBE_BACKEND_POLICY = {'scope':'entire_read_only_probe_G_D_forwards_and_private
     'evidence':'CPU_scope_and_restore_only; CUDA_repeatability_and_unique_root_cause_unverified'}
 
 
+BN_MODE_COMPARISON_POLICY = {'eval_reference':'original_eval_with_saved_running_stats; quality_gates_eval_only',
+    'batchstats':'G_BatchNorm_modules_train_only; every_other_G_module_eval; D_not_called',
+    'weights_input':'same_private_functional_parameters_and_condition_as_eval; same_grad_enabled_context',
+    'buffers':'FunctionalModel_clones_buffers_per_call; no_live_commit_or_num_batches_tracked_change',
+    'RNG':'extra_forward_fork_rng_CPU_and_selected_CUDA; restore_on_success_and_exception',
+    'backend':'same_local_probe_cudnn_context','comparison_region':'native_valid_label_ge0; excludes_padding_and_ignore',
+    'output':'statistics_only; original_before_after_PNG_remain_eval; no_automatic_quality_or_BN_causality_claim'}
+
+
 def initialization(target, run, digest):
     """Strict default-policy GD500 metadata audit before models/patient arrays."""
     require(digest == GD500_SHA256, 'This diagnostic requires the approved GD500 SHA256')
@@ -123,9 +132,10 @@ def _probe_backend_snapshot():
     return snapshot
 
 
-def probe(engine, real, label, native_shape, scale):
+def probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
     """Locally constrain cuDNN for observation; actual training keeps caller flags."""
     import torch
+    require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     entry=_probe_backend_snapshot()
     backend={'entry':entry}; failure=None
     try:
@@ -138,7 +148,8 @@ def probe(engine, real, label, native_shape, scale):
             backend['active']=_probe_backend_snapshot()
             require(backend['active']==dict(entry,deterministic=True,benchmark=False),
                     'Probe changed unrelated backend flags')
-            result,generated=_probe(engine,real,label,native_shape,scale)
+            comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
+            result,generated=_probe(engine,real,label,native_shape,scale,**comparison_options)
     except BaseException as exc:
         failure=exc
         raise
@@ -152,7 +163,7 @@ def probe(engine, real, label, native_shape, scale):
     return result,generated
 
 
-def _probe(engine, real, label, native_shape, scale):
+def _probe(engine, real, label, native_shape, scale, *, compare_bn_modes=False):
     """Private functional gradients only; hooks never return replacement outputs."""
     import torch
     from .core import FunctionalModel, gan_generator_loss, adversarial, clean, norm
@@ -232,6 +243,28 @@ def _probe(engine, real, label, native_shape, scale):
                   'parameter_gradient_norms': gradients, 'activations': activations,
                   'eval_repeat_exact':exact,'eval_repeat_within_tolerance':within_tolerance,
                   'eval_repeat_metrics':repeat_metrics,'bn_counts':bn_counts,'adam_steps':adam_steps}
+        if compare_bn_modes:
+            # Keep authoritative activations eval-only; B has its own scalar report.
+            for handle in handles: handle.remove()
+            handles.clear()
+            g_modes=[(module,module.training) for module in engine.g.net.modules()]
+            try:
+                # All G modules are already eval; switch ONLY BN. FunctionalModel
+                # uses the identical gp and fresh private buffers, with no commit.
+                for module,_ in g_modes:
+                    if isinstance(module,torch.nn.modules.batchnorm._BatchNorm): module.training=True
+                devices=[real.device.index] if real.is_cuda else []
+                with torch.random.fork_rng(devices=devices), torch.set_grad_enabled(first_context['grad_enabled']):
+                    batchstats=gf(gp,condition).detach()
+            finally:
+                for module,mode in g_modes: module.training=mode
+            batch_statistics,_=plane_statistics(real,label,batchstats,native_shape,scale)
+            difference=(fake.detach().double()-batchstats.double()).abs()[label>=0]
+            result['bn_mode_comparison']={'policy':dict(BN_MODE_COMPARISON_POLICY),
+                'batchstats_statistics':batch_statistics,'grad_enabled':first_context['grad_enabled'],
+                'eval_vs_batchstats':{'region':BN_MODE_COMPARISON_POLICY['comparison_region'],
+                    'max_abs_diff':float(difference.max()),'mean_abs_diff':float(difference.mean())}}
+
     finally:
         for handle in handles:
             handle.remove()
@@ -259,7 +292,8 @@ def _probe(engine, real, label, native_shape, scale):
 
 
 def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=None, gpu, steps, seed=SEED,
-                     strategy='legacy',initialization_mode='gd500'):
+                     strategy='legacy',initialization_mode='gd500',compare_bn_modes=False):
+    require(type(compare_bn_modes) is bool,'compare_bn_modes must be boolean')
     require(type(steps) is int and steps > 0, 'Explicit positive diagnostic steps required')
     require(type(seed) is int and seed == SEED, 'Fixed diagnostic seed 20261018 required')
     require(type(gpu) is int and gpu >= 0, 'Physical GPU index must be a nonnegative integer')
@@ -307,6 +341,8 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
             'structure_semantics':'manual_pending_fixed_inner61_lesion_and_empty_previews',
             'failure':'keep_results_no_auto_retry_budget_expansion_or_joint',
             'automatic_budget_expansion':False,'automatic_joint':False}
+    if compare_bn_modes:
+        protocol.update(compare_bn_modes=True,bn_mode_comparison_policy=dict(BN_MODE_COMPARISON_POLICY))
     output.mkdir(parents=True, exist_ok=False)
     engine = None
     def final_audit():
@@ -366,7 +402,8 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
                 emit({'unit': unit, 'completed_steps': engine.steps, 'resources': state})
                 return state
             def observe(stage, state):
-                observation, generated = probe(engine, *arrays, selection['native_shape'], expected['scaling'])
+                comparison_options={'compare_bn_modes':True} if compare_bn_modes else {}
+                observation, generated = probe(engine, *arrays, selection['native_shape'], expected['scaling'],**comparison_options)
                 observation['resources_before'] = state
                 path = output/(stage+'.png')
                 observation['display'] = render(path, native_image, native_label, generated, expected['scaling'])

@@ -98,6 +98,8 @@ def test_cli_requires_explicit_inputs_and_has_no_tuning_knobs():
             '--pretrained-sha256', diag.GD500_SHA256, '--gpu', '0', '--steps', '3']
     args = parser().parse_args(base)
     assert args.steps == 3 and args.seed == diag.SEED
+    assert args.compare_bn_modes is False
+    assert parser().parse_args(base+['--compare-bn-modes']).compare_bn_modes is True
     for flag in ('--g-lr', '--d-lr', '--l1-weight', '--arch-lr', '--pretrain-steps', '--min-free-vram-gib'):
         with pytest.raises(SystemExit): parser().parse_args(base+[flag, '1'])
     for flag, value in (('--steps', '0'), ('--steps', '-1'), ('--seed', '1'), ('--pretrained-sha256', 'bad')):
@@ -235,6 +237,64 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         for handle in training_hooks: handle.remove()
     assert all(all(torch.equal(v, other[k]) for k, v in n.state_dict().items())
                for n, other in zip((g.net, engine.d), state(control)))
+    # Mixed caller modes and dropout must survive private BN-only observation.
+    old_transpose_mode=g.net[2].training
+    g.net[2].training=not old_transpose_mode
+    g.net.add_module('observation_dropout',torch.nn.Dropout(.5))
+    modes=[(m,m.training) for net in (g.net,engine.d) for m in net.modules()]
+    opt_state=[(v,v._version,v.clone()) for opt in getattr(engine,'optimizers',{}).values()
+               for item in opt.state.values() for v in item.values() if isinstance(v,torch.Tensor)]
+    bn_live={name:v for name,v in g.net.named_buffers()}
+    weights={name:v.detach().clone().requires_grad_(True) for name,v in g.net.named_parameters()}
+    saved=state(engine); saved_rng=torch.get_rng_state().clone(); captures=[]; fail_batch=False
+    def inspect_bn_forward(module,inputs,output):
+        batch=module[1].training
+        assert not module.training and not module.observation_dropout.training
+        assert all(not m.training for m in engine.d.modules())
+        assert torch.is_grad_enabled() and torch.backends.cudnn.deterministic and not torch.backends.cudnn.benchmark
+        assert all(torch.equal(v,weights[name]) and v.requires_grad for name,v in module.named_parameters())
+        if batch:
+            assert module[1].running_mean is not bn_live['1.running_mean']
+            assert int(module[1].num_batches_tracked)==int(bn_live['1.num_batches_tracked'])+1
+            torch.rand(3)  # Even a random observational hook must be isolated by fork_rng.
+            if fail_batch: raise ValueError('batchstats observation failure')
+        captures.append((batch,output.detach().clone()))
+    handle=None
+    try:
+        current_eval,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.})
+        handle=g.net.register_forward_hook(inspect_bn_forward)
+        compared,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},compare_bn_modes=True)
+        assert [mode for mode,_ in captures]==[False,False,True]
+        assert compared['statistics']==current_eval['statistics']
+        assert compared['activations']==current_eval['activations']  # B never pollutes eval activations.
+        assert 'bn_mode_comparison' not in current_eval
+        report=compared['bn_mode_comparison']
+        # Independently compute batch normalization over N/H/W (biased variance).
+        condition=(label==1).float()
+        h=torch.nn.functional.conv2d(condition,weights['0.weight'],weights['0.bias'])
+        h=(h-h.mean((0,2,3),keepdim=True))*torch.rsqrt(h.var((0,2,3),unbiased=False,keepdim=True)+g.net[1].eps)
+        h=h*weights['1.weight'][None,:,None,None]+weights['1.bias'][None,:,None,None]
+        expected=torch.tanh(torch.nn.functional.conv_transpose2d(h,weights['2.weight'],weights['2.bias']))
+        torch.testing.assert_close(captures[2][1],expected,atol=1e-7,rtol=1e-6)
+        captured_stats,_=diag.plane_statistics(real,label,captures[2][1],(8,9),{'min':0.,'max':10.})
+        assert report['batchstats_statistics']==captured_stats
+        difference=(captures[0][1].double()-captures[2][1].double()).abs()[label>=0]
+        assert report['eval_vs_batchstats']['max_abs_diff']==float(difference.max())
+        assert report['eval_vs_batchstats']['mean_abs_diff']==float(difference.mean())
+        assert report['policy']['eval_reference'].endswith('quality_gates_eval_only')
+        assert diag.assess_quality({'before':observation,'after':compared},1)==diag.assess_quality({'before':observation,'after':current_eval},1)
+        fail_batch=True
+        with pytest.raises(ValueError,match='batchstats observation failure') as error:
+            diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.},compare_bn_modes=True)
+        assert error.value.probe_backend['restored']
+        assert torch.equal(saved_rng,torch.get_rng_state())
+        assert all(m.training==mode for m,mode in modes)
+        assert all(v._version==version and torch.equal(v,value) for v,version,value in opt_state)
+        assert all(all(torch.equal(v,before[k]) for k,v in net.state_dict().items()) for net,before in zip((g.net,engine.d),saved))
+    finally:
+        if handle is not None: handle.remove()
+        delattr(g.net,'observation_dropout')
+        g.net[2].training=old_transpose_mode
     # One float32 ULP of repeat-output variation is numerical stability, not
     # evidence that parameters, buffers or image-quality thresholds may drift.
     repeated_outputs=[]
@@ -350,8 +410,8 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     original_audit, original_probe, original_step = diag.audit, diag.probe, PretrainEngine.step
     def audit(*args):
         result = original_audit(*args); order.append('audit'); return result
-    def probe(*args):
-        order.append('probe'); return original_probe(*args)
+    def probe(*args,**kwargs):
+        order.append('probe'); return original_probe(*args,**kwargs)
     def step(self, *args):
         order.append('step'); return original_step(self, *args)
     monkeypatch.setattr(diag, 'audit', audit)
@@ -377,6 +437,8 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
     monkeypatch.setattr(diag, 'write_json', write)
     options = dict(pretrained_run=None if init=='cold' else run,
         pretrained_sha256=None if init=='cold' else digest, gpu=0, steps=3,strategy=strategy,initialization_mode=init)
+    compare_bn_modes=init=='cold'
+    if compare_bn_modes: options['compare_bn_modes']=True
     # A cold run has no dependency on historical GD500 files.
     if init=='cold' and tamper=='pretrain': tamper=None
     if tamper:
@@ -388,6 +450,10 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         r = read_json(output/'diagnostic.json')
         assert r['complete'] and r['diagnostic_only'] and r['completed_steps'] == 3 and r['weights_saved'] is False
         assert set(r['observations']) == {'before', 'after'} and len(renders) == 2
+        assert ('compare_bn_modes' in r['protocol'])==compare_bn_modes
+        assert all(('bn_mode_comparison' in o)==compare_bn_modes for o in r['observations'].values())
+        if compare_bn_modes:
+            assert read_json(output/'started.json')['bn_mode_comparison_policy']==r['protocol']['bn_mode_comparison_policy']==diag.BN_MODE_COMPARISON_POLICY
         assert r['protocol']['rates'] == {'g': 2e-5, 'd': 2e-5} and r['protocol']['l1_weight'] == 100.
         repeat_policy=r['protocol']['repeat_output_policy']
         assert repeat_policy['atol']==1e-7 and repeat_policy['rtol']==0.

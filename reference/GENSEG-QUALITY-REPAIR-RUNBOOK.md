@@ -122,3 +122,23 @@ set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_trial02"
 本次不继续增大容差。作者上采样分支使用ConvTranspose2d，官方文档说明cuDNN可能选择非确定性算法。修订仅让probe使用局部cuDNN deterministic=True/benchmark=False上下文，保留原enabled/TF32设置并在正常/异常退出时恢复；实际训练engine.step使用原调用者设置。诊断协议记录这一观测计算策略；训练/优化器/BN/随机状态/atol和学习质量门槛均不变。
 
 服务器更新后先做1步工程执行检查，新目录如`genseg_repair_cold1_deterministicprobe_trial01`，其余冷启动命令相同，仅steps=1。检查before/after、completed_steps=1和探针状态；1步不是学习质量验收，不自动扩预算。将该次结果和旧100步失败回执一起交回，再决定下一步，避免重复100次更新而丢失收尾证据。
+
+## 下一项单因素观测：同权重的 BN running-stat / batch-stat 对照
+
+已只读核实281d3ae的冷启动100步完整回执：complete=true、completed_steps=100、state=true；before/after重复输出差均0，cuDNN配置退出恢复。有效区L1 0.861486→0.604038，病灶L1 0.258631→0.163445，常数基线0.139193；后图有粗略结构但圆形亮边/颗粒明显，质量未通过。末步实际G损失24.3659与after eval G损失61.9690存在差距，但测量时点、BN模式和判别器前向不同，不能单独归因为BN。
+
+下一项测量使用显式`--compare-bn-modes`，保持现有eval图和quality gate为准；对同一切片/权重额外测G的BN batch statistics，使用私有functional buffers、隔离随机状态，临时BN模式恢复，不更新真实统计、不改D或optimizer、不改变训练预算。额外batchstats仅记录同尺度统计量，不另存图片；原before/after图与质量门槛仍只使用eval。
+
+旧诊断没有保存权重，无法事后补算同权重输出。新诊断保持原seed、目标和100次更新预算，单独目录如`genseg_repair_cold100_bn_modes_trial01`；新增项是观测，不换seed/加步数/调参，不追改旧失败结果。若batchstats明显优于running-stat eval，才支持进一步查BN运行统计/校准；若两者均差，需继续查单片拟合和条件/目标表示。两种结果都不能单独证明泛化或合成数据合格。
+
+在数据电脑原CMD窗口保留SOURCE/BASELINE/TARGETS/TARGET_SHA/nnUNet_raw变量，修复checkout工作区干净后更新，再执行：
+
+```bat
+cd /d C:\lijialin\segementation\.worktrees\genseg-quality-repair
+git status --short --branch
+git pull --ff-only
+set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_bn_modes_trial01"
+python -m experiments.genseg_joint.cli diagnose-single-slice --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%DIAG_COLD%" --gpu 1 --steps 100 --strategy adam_trainbn_epoch_v1 --initialization cold --compare-bn-modes
+```
+
+若新目录已存在，改trial02。完成后交回diagnostic.json，重点比较observations.after.statistics.valid.normalized_l1与observations.after.bn_mode_comparison.batchstats_statistics.valid.normalized_l1，同时保留常数基线和原质量判定。这仍是固定单片诊断；此阶段100次更新便于控制变量，完整数据覆盖训练才使用epochs。

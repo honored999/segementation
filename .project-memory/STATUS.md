@@ -110,3 +110,7 @@ Updated: 2026-09-21
 - User supplied failed.json confirms100 updates completed, after-probe repeat maxdiff1.49e-7. No weights were saved; preserve this failed run, do not fabricate completion or imply loss of all training execution.
 - Probe-only cuDNN deterministic=True/benchmark=False now scoped/restored by official context, compatible optional API inspection; caller enabled/TF32 and subsequent actual training unchanged. No tolerance increase (atol1e-7/rtol0), quality/strict state checks unchanged.
 - Existing CPU regression scope/restore and old-signature RED/GREEN, final affected31 passed; exact2-file independent STATIC PASS. Zero new test functions; real CUDA/old-version execution and generated quality pending. Primary fine-tuning/master memory untouched.
+
+## GenSeg same-weights BN diagnosis (2026-10-20; branch-local)
+- Locally read deterministic cold100 receipt: complete100, state/repeated-output checks passed; learning gate failed. Valid L1 0.6040 exceeds constant 0.1392; no weights saved. Single-slice engineering evidence only.
+- Added opt-in --compare-bn-modes: same private weights/input, only G BN batchstats, private buffers and isolated RNG; original eval PNG/statistics/gates remain authoritative. Existing focused3/affected31 CPU pytest passed; zero new test functions, exact3-file independent STATIC PASS. Actual BN CUDA comparison pending; no causal or quality claim. Source/test leaf-owned; primary checkout/master memory untouched.

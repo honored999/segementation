@@ -98,5 +98,23 @@
     "validation": "scope RED2/GREEN2; old-signature RED2/GREEN2; final affected31 passed in8.05s; AST/diff PASS; no new test functions",
     "CUDA": "next: fresh one-step diagnostic, not automatic100 retry",
     "actual_old_pytorch": "not run"
+  },
+  "bn_mode_comparison_followup": {
+    "baseline": "281d3ae9830a5b7cd58b8246a928392bd7551bc5",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/diagnostic.py": "65ccecef9bcbff728006574507c2bd35e60364b7f0f60bbaa0c2ec7109d6a1a8",
+      "experiments/genseg_joint/cli.py": "055396ddc96287c60945df4bf4d35f5cf3bb00ca0c49dec7b9932dba5a5bbcec",
+      "experiments/genseg_joint/tests/test_single_slice.py": "90192918acee958f9fae9b1996205a2da2df91890fa372bb07063ad1f09d8fc2"
+    },
+    "change": "Opt-in same-weights G BN-only batchstats; private buffers/RNG; authoritative eval activations/PNG/quality unchanged",
+    "focused": "3 passed, 28 deselected in 3.62s",
+    "affected": "31 passed in 7.47s",
+    "resource": "newconda single-thread CPU; CUDA disabled; per-run CPU/RAM/GPU/VRAM preflight",
+    "new_test_functions": 0,
+    "independent_pytest_logs": false,
+    "server_status": "prior deterministic cold100 completed; quality failed; new BN comparison CUDA not run",
+    "blockers": []
   }
 }

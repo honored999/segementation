@@ -90,3 +90,6 @@
 
 ## 2026-10-20 - GenSeg probe-local cuDNN policy (branch-local)
 - Confirmed server100 updates completed but after repeat check failed at1.49e-7. Added scoped/restored deterministic cuDNN probe policy, retaining fixed tolerance and actual training flags. Existing CPU scope+compatibility RED/GREEN and affected31 passed; independent2-file STATIC PASS. No new test functions/real CUDA/quality claim. Next:1-step check, no automatic100 rerun; source/test leaf-owned.
+
+## 2026-10-20 - GenSeg optional BN comparison (branch-local)
+- Accepted deterministic cold100 execution evidence, retaining failed learning gate. Added opt-in private BN-only same-weights observation, no eval/gate/training-state change. Existing focused3 and affected31 CPU pytest passed, zero new test functions; exact3-file independent STATIC PASS. Actual CUDA comparison pending. Parent coordination/Git only; canonical master memory absent/untouched.
