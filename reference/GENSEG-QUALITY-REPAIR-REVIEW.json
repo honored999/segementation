@@ -80,5 +80,23 @@
     "resource": "per-command guarded newconda single-thread CPU, CUDA disabled; CPU6/8/17 RAM66.68/66.30/66 GPU0/3/2 VRAM1291of6144",
     "CUDA": "server rerun pending",
     "new_test_functions": 0
+  },
+  "probe_cudnn_followup": {
+    "date": "2026-10-20",
+    "baseline": "437a150f843150d5104e03db7343bbc307b8a13e",
+    "result": "PASS_STATIC",
+    "reviewer": "01a1532e-6a11-7f23-8d07-69771a6bd422",
+    "files": {
+      "experiments/genseg_joint/diagnostic.py": "bf5a589746e079ea487137a4fb0e55b71607ece31e70d2d2e5d8a557215a07d0",
+      "experiments/genseg_joint/tests/test_single_slice.py": "1b64ee8af9255d19d6a135a3d02537be3116556d6b5c9fa2fd7e3a8bfb2c6a23"
+    },
+    "server_evidence": "User confirmed completed_steps=100, after-probe maxdiff1.4901161193847656e-7; no weights saved",
+    "probe_policy": "local cuDNN deterministic=True benchmark=False; official flags preserve other settings and restore on success/exception",
+    "compatibility": "optional fields/signature gated; old API CPU simulation only",
+    "tolerance": "unchanged atol1e-7 rtol0",
+    "state_and_training": "strict purity and actual engine.step caller settings unchanged",
+    "validation": "scope RED2/GREEN2; old-signature RED2/GREEN2; final affected31 passed in8.05s; AST/diff PASS; no new test functions",
+    "CUDA": "next: fresh one-step diagnostic, not automatic100 retry",
+    "actual_old_pytorch": "not run"
   }
 }

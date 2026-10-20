@@ -87,3 +87,6 @@
 
 ## 2026-10-19 - GenSeg repeat-output numerical contract (branch-local)
 - Actual server matched-context CUDA maxdiff7.45e-9 motivated fixed diagnostic atol1e-7/rtol0; true exact/within metrics and pre-probe protocol, strict live-state checks preserved. Existing regression RED2/GREEN2 and affected31 CPU passed; independent2-file STATIC PASS. No new test functions or training/data changes; server quality pending.
+
+## 2026-10-20 - GenSeg probe-local cuDNN policy (branch-local)
+- Confirmed server100 updates completed but after repeat check failed at1.49e-7. Added scoped/restored deterministic cuDNN probe policy, retaining fixed tolerance and actual training flags. Existing CPU scope+compatibility RED/GREEN and affected31 passed; independent2-file STATIC PASS. No new test functions/real CUDA/quality claim. Next:1-step check, no automatic100 rerun; source/test leaf-owned.

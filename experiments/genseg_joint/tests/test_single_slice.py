@@ -1,6 +1,8 @@
 """Synthetic CPU diagnostic contracts; no patient/CUDA execution."""
+from contextlib import contextmanager
 from copy import deepcopy
 import json
+import inspect
 import random
 from types import SimpleNamespace
 
@@ -153,6 +155,10 @@ def state(engine):
 
 @pytest.mark.parametrize('strategy',['legacy','adam_trainbn_epoch_v1'])
 def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,strategy):
+    # Test opposite caller flags, including both enabled/TF32 values across strategies.
+    for key,value in dict(enabled=strategy=='legacy',benchmark=True,benchmark_limit=7,
+                          deterministic=False,allow_tf32=strategy!='legacy').items():
+        monkeypatch.setattr(torch.backends.cudnn,key,value)
     torch.manual_seed(7)
     g = TinyGenerator(); engine = PretrainEngine(g, g.discriminator(),strategy=strategy)
     control = deepcopy(engine)
@@ -162,12 +168,23 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         for p in net.parameters(): p.grad = torch.ones_like(p)
     before = state(engine); gradients = [p.grad.clone() for n in (g.net, engine.d) for p in n.parameters()]
     rng = torch.get_rng_state().clone(); py_rng = random.getstate(); np_rng = np.random.get_state()
+    caller_backend={name:getattr(torch.backends.cudnn,name) for name in
+        ('enabled','benchmark','benchmark_limit','deterministic','allow_tf32')}
+    caller_global=(torch.are_deterministic_algorithms_enabled(),torch.is_deterministic_algorithms_warn_only_enabled())
     forward_grad_contexts=[]
-    handle=g.net.register_forward_pre_hook(lambda module,inputs: forward_grad_contexts.append(torch.is_grad_enabled()))
+    def check_probe_backend(module,inputs):
+        assert torch.backends.cudnn.deterministic is True
+        assert torch.backends.cudnn.benchmark is False
+        for key in ('enabled','allow_tf32','benchmark_limit'):
+            assert getattr(torch.backends.cudnn,key)==caller_backend[key]
+        assert (torch.are_deterministic_algorithms_enabled(),torch.is_deterministic_algorithms_warn_only_enabled())==caller_global
+        forward_grad_contexts.append(torch.is_grad_enabled())
+    handle=g.net.register_forward_pre_hook(check_probe_backend)
     try:
         observation, generated = diag.probe(engine, real, label, (8, 9), {'min': 0., 'max': 10.})
     finally:
         handle.remove()
+    assert {name:getattr(torch.backends.cudnn,name) for name in caller_backend}==caller_backend
     assert forward_grad_contexts==[True,True], 'Repeated eval forwards must use the same enabled grad context'
     assert generated.shape == (8, 9) and (generated[0] == 0).all()
     assert observation['statistics']['valid']['target_normalized']['count'] == 63
@@ -176,6 +193,28 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
     assert observation['statistics']['valid']['optimal_constant_l1']==float((valid-median).abs().mean())
     assert observation['eval_repeat_exact'] and observation['eval_repeat_within_tolerance']
     assert observation['eval_repeat_metrics']['max_abs_diff']==0.
+    trace=observation['probe_backend']
+    assert trace['restored'] and trace['entry']==trace['exit']==diag._probe_backend_snapshot()
+    assert trace['active']==dict(trace['entry'],deterministic=True,benchmark=False)
+    # Exercise an older flags signature with no fp32_precision/benchmark_limit,
+    # and no cudnn.conv precision object; real local context still restores flags.
+    original_flags=torch.backends.cudnn.flags
+    @contextmanager
+    def old_flags(enabled=False,benchmark=False,deterministic=False,allow_tf32=True):
+        options=dict(enabled=enabled,benchmark=benchmark,deterministic=deterministic,allow_tf32=allow_tf32)
+        options.update({key:None for key in ('benchmark_limit','fp32_precision')
+                        if key in inspect.signature(original_flags).parameters})
+        with original_flags(**options):
+            yield
+    with monkeypatch.context() as compat:
+        compat.setattr(torch.backends.cudnn,'flags',old_flags)
+        compat.setattr(torch.backends.cudnn,'conv',None,raising=False)
+        old_observation,_=diag.probe(engine,real,label,(8,9),{'min':0.,'max':10.})
+        old_trace=old_observation['probe_backend']
+        assert old_trace['restored'] and old_trace['entry']==old_trace['exit']==diag._probe_backend_snapshot()
+        assert 'conv_fp32_precision' not in old_trace['entry']
+        assert old_trace['active']==dict(old_trace['entry'],deterministic=True,benchmark=False)
+    assert {name:getattr(torch.backends.cudnn,name) for name in caller_backend}==caller_backend
     assert all(m.training==(strategy!='legacy') for n in (engine.g.net,engine.d) for m in n.modules())
     assert set(observation['parameter_gradient_norms']['G']) == dict(g.net.named_parameters()).keys()
     assert observation['activations'] and observation['purity']['RNG'] == 'exact_unchanged'
@@ -187,7 +226,13 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
         assert all(not m._forward_hooks for m in net.modules())
     assert all(torch.equal(p.grad, old) for p, old in zip((p for n in (g.net, engine.d) for p in n.parameters()), gradients))
     assert engine.steps == 0
-    engine.step(real, label); control.step(real, label)
+    def check_training_backend(module,inputs):
+        assert {name:getattr(torch.backends.cudnn,name) for name in caller_backend}==caller_backend
+    training_hooks=[net.register_forward_pre_hook(check_training_backend) for net in (engine.g.net,control.g.net)]
+    try:
+        engine.step(real, label); control.step(real, label)
+    finally:
+        for handle in training_hooks: handle.remove()
     assert all(all(torch.equal(v, other[k]) for k, v in n.state_dict().items())
                for n, other in zip((g.net, engine.d), state(control)))
     # One float32 ULP of repeat-output variation is numerical stability, not
@@ -248,12 +293,29 @@ def test_probe_exact_state_rng_grad_hooks_and_next_step_unchanged(monkeypatch,st
             handle.remove()
         assert all(all(torch.equal(v,old[k]) for k,v in net.state_dict().items()) for net,old in zip((g.net,engine.d),before))
         assert all(m.training==(strategy!='legacy') for net in (g.net,engine.d) for m in net.modules())
-    def fail(*a, **k): raise ValueError('hook observation failure')
+    def fail(*a, **k):
+        assert torch.backends.cudnn.deterministic is True and torch.backends.cudnn.benchmark is False
+        raise ValueError('hook observation failure')
     monkeypatch.setattr(diag, 'tensor_statistics', fail)
     before = state(engine)
-    with pytest.raises(ValueError, match='hook observation'): diag.probe(engine, real, label, (8, 9), {'min': 0., 'max': 10.})
+    with pytest.raises(ValueError, match='hook observation') as error:
+        diag.probe(engine, real, label, (8, 9), {'min': 0., 'max': 10.})
+    trace=error.value.probe_backend
+    assert trace['restored'] and trace['entry']==trace['exit']==diag._probe_backend_snapshot()
+    assert trace['active']==dict(trace['entry'],deterministic=True,benchmark=False)
     assert all(not m._forward_hooks for n in (g.net, engine.d) for m in n.modules())
     assert all(all(torch.equal(v, old[k]) for k, v in n.state_dict().items()) for n, old in zip((g.net, engine.d), before))
+
+    assert {name:getattr(torch.backends.cudnn,name) for name in caller_backend}==caller_backend
+    assert (torch.are_deterministic_algorithms_enabled(),torch.is_deterministic_algorithms_warn_only_enabled())==caller_global
+    # An exception must also leave the next actual training update unchanged.
+    training_hooks=[net.register_forward_pre_hook(check_training_backend) for net in (engine.g.net,control.g.net)]
+    try:
+        engine.step(real,label); control.step(real,label)
+    finally:
+        for handle in training_hooks: handle.remove()
+    assert all(all(torch.equal(v,other[k]) for k,v in net.state_dict().items())
+               for net,other in zip((engine.g.net,engine.d),state(control)))
 
 
 def cpu_transport(monkeypatch,*,cold=False):
@@ -332,6 +394,11 @@ def test_run_fixed_updates_final_audits_and_no_checkpoint(tmp_path, monkeypatch,
         assert repeat_policy['reference_float32_epsilon']==torch.finfo(torch.float32).eps
         assert 'not a loss/image-quality tolerance' in repeat_policy['interpretation']
         assert read_json(output/'started.json')['repeat_output_policy']==repeat_policy
+        started=read_json(output/'started.json')
+        assert started['probe_backend_policy']==r['protocol']['probe_backend_policy']==diag.PROBE_BACKEND_POLICY
+        assert started['backend_at_start']==r['protocol']['backend_at_start']==diag._probe_backend_snapshot()
+        assert all(o['probe_backend']['restored'] and o['probe_backend']['entry']==o['probe_backend']['exit']
+                   for o in r['observations'].values())
         if strategy!='legacy':
             assert 'eval_repeat_within_tolerance_atol1e-07_rtol0' in r['protocol']['quality_gates']['state']
         entries = [json.loads(line) for line in (output/'steps.jsonl').read_text().splitlines()]

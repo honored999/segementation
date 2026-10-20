@@ -1,5 +1,6 @@
 """Fixed inner61 training-plane diagnostic; no reusable weights or formal result."""
 import json
+import inspect
 from pathlib import Path
 import random
 import subprocess
@@ -23,6 +24,13 @@ REPEAT_OUTPUT_POLICY = {'atol':REPEAT_ATOL,'rtol':REPEAT_RTOL,
     'requirements':'same_shape_device_dtype; finite_both; matched_eval_grad_context; no_broadcast; no_equal_nan',
     'interpretation':'Fixed numerical repeatability near normalized unit-scale float32 epsilon; not a loss/image-quality tolerance; parameter/BN/optimizer/RNG/mode purity remains strict'}
 
+
+PROBE_BACKEND_POLICY = {'scope':'entire_read_only_probe_G_D_forwards_and_private_gradients; engine.step_outside',
+    'deterministic':True,'benchmark':False,'enabled':'preserve_caller','allow_tf32':'preserve_caller',
+    'benchmark_limit':'preserve_caller_when_available','fp32_precision':'preserve_caller_when_available',
+    'global_deterministic_algorithms':'unchanged','RNG':'no_reset',
+    'restore':'official_cudnn.flags_on_success_and_exception; verify_entry_exit_snapshot',
+    'evidence':'CPU_scope_and_restore_only; CUDA_repeatability_and_unique_root_cause_unverified'}
 
 
 def initialization(target, run, digest):
@@ -100,7 +108,51 @@ def plane_statistics(real, label, fake, native_shape, scale):
     return groups, native
 
 
+def _probe_backend_snapshot():
+    import torch
+    snapshot={key:getattr(torch.backends.cudnn,key) for key in
+              ('enabled','benchmark','deterministic','allow_tf32')}
+    # Precision properties are absent before PyTorch 2.9; only snapshot those present.
+    for key,owner,attribute in (
+            ('benchmark_limit',torch.backends.cudnn,'benchmark_limit'),
+            ('conv_fp32_precision',getattr(torch.backends.cudnn,'conv',None),'fp32_precision'),
+            ('matmul_fp32_precision',torch.backends.cuda.matmul,'fp32_precision')):
+        if hasattr(owner,attribute): snapshot[key]=getattr(owner,attribute)
+    snapshot.update(deterministic_algorithms=torch.are_deterministic_algorithms_enabled(),
+        deterministic_warn_only=torch.is_deterministic_algorithms_warn_only_enabled())
+    return snapshot
+
+
 def probe(engine, real, label, native_shape, scale):
+    """Locally constrain cuDNN for observation; actual training keeps caller flags."""
+    import torch
+    entry=_probe_backend_snapshot()
+    backend={'entry':entry}; failure=None
+    try:
+        # Official set_flags mutates only non-None inputs (also in 2.7/2.8).
+        # Inspect optional keywords rather than requiring newer flags signatures.
+        options=dict(enabled=None,benchmark=False,deterministic=True,allow_tf32=None)
+        supported=inspect.signature(torch.backends.cudnn.flags).parameters
+        options.update({key:None for key in ('benchmark_limit','fp32_precision') if key in supported})
+        with torch.backends.cudnn.flags(**options):
+            backend['active']=_probe_backend_snapshot()
+            require(backend['active']==dict(entry,deterministic=True,benchmark=False),
+                    'Probe changed unrelated backend flags')
+            result,generated=_probe(engine,real,label,native_shape,scale)
+    except BaseException as exc:
+        failure=exc
+        raise
+    finally:
+        # The official context has already exited, including when probe fails.
+        backend['exit']=_probe_backend_snapshot()
+        backend['restored']=backend['exit']==entry
+        if failure is not None: failure.probe_backend=backend
+        require(backend['restored'],'Probe failed to restore caller backend flags')
+    result['probe_backend']=backend
+    return result,generated
+
+
+def _probe(engine, real, label, native_shape, scale):
     """Private functional gradients only; hooks never return replacement outputs."""
     import torch
     from .core import FunctionalModel, gan_generator_loss, adversarial, clean, norm
@@ -235,6 +287,7 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         'rates': expected['rates'], 'l1_weight': expected['l1_weight'], 'BN': expected['BN'],
         'architecture': expected['architecture'], 'optimizer': expected['optimizer'], 'scaling': expected.get('scaling'),
         'repeat_output_policy':dict(REPEAT_OUTPUT_POLICY),
+        'probe_backend_policy':dict(PROBE_BACKEND_POLICY),'backend_at_start':_probe_backend_snapshot(),
         'probe_schedule': 'before probe inside first guarded update unit then engine.step with no intervening util resample; after probe in guarded unit after all completed updates',
         'guard': 'unchanged runtime gpu_guard; same UUID/80percent/headroom/allocator ceiling; synchronize then empty_cache; util-only max5x1s only after completed updates',
         'initialization': 'saved G/D and alpha only; fresh fixed seed; no RNG/optimizer restoration; no S',
@@ -353,7 +406,8 @@ def run_single_slice(target, output, *, pretrained_run=None, pretrained_sha256=N
         (output/'diagnostic.json').unlink(missing_ok=True)
         write_json(output/'failed.json', {'format': 1, 'complete': False, 'diagnostic_only': True,
             'classification': CLASSIFICATION, 'completed_steps': 0 if engine is None else engine.steps,
-            'error_type': type(exc).__name__, 'error': str(exc), 'resource_guard': getattr(exc, 'diagnostic', None)})
+            'error_type': type(exc).__name__, 'error': str(exc), 'resource_guard': getattr(exc, 'diagnostic', None),
+            'probe_backend':getattr(exc,'probe_backend',None)})
         raise
     return output
 

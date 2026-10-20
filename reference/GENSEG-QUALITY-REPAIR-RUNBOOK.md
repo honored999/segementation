@@ -114,3 +114,11 @@ set "DIAG_COLD=C:\lijialin\HD-BET_outputs\genseg_repair_cold100_trial02"
 下一次运行前固定诊断输出重复性容差`atol=1e-7, rtol=0`，对应单位归一化float32精度量级（epsilon约1.192e-7）；仍要求shape/device/dtype/context匹配且两次输出有限。日志如实保存实际exact、within-tolerance与max_abs_diff，质量状态检查消费within-tolerance。参数、BN、优化器、随机状态和运行模式的不可变检查仍保持完全严格。没有改变训练、学习质量阈值或确定性设置。
 
 这是面向后续独立运行的诊断数值契约修订，不追改旧失败结果。保留trial01/trial02；更新修复checkout后，冷启动输出改为尚不存在的`genseg_repair_cold100_trial03`（若已存在继续新编号），再执行原100步命令。服务器CUDA和生成质量仍需新回执确认。
+
+## after-probe再次超差后的定位（2026-10-20）
+
+服务器在437a150的训练更新循环后，after probe报告最大绝对差1.4901161193847656e-7（finite、matched context），超过固定atol1e-7。保留该失败目录、steps.jsonl、before.png及failed.json；它不是完整质量验收。用户回传failed.json已确认completed_steps=100、error_type=ValueError；100次更新已执行，失败在after观测。本诊断不保存权重，进程结束后不能从这些日志恢复模型或补造after结果。
+
+本次不继续增大容差。作者上采样分支使用ConvTranspose2d，官方文档说明cuDNN可能选择非确定性算法。修订仅让probe使用局部cuDNN deterministic=True/benchmark=False上下文，保留原enabled/TF32设置并在正常/异常退出时恢复；实际训练engine.step使用原调用者设置。诊断协议记录这一观测计算策略；训练/优化器/BN/随机状态/atol和学习质量门槛均不变。
+
+服务器更新后先做1步工程执行检查，新目录如`genseg_repair_cold1_deterministicprobe_trial01`，其余冷启动命令相同，仅steps=1。检查before/after、completed_steps=1和探针状态；1步不是学习质量验收，不自动扩预算。将该次结果和旧100步失败回执一起交回，再决定下一步，避免重复100次更新而丢失收尾证据。

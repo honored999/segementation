@@ -105,3 +105,8 @@ Updated: 2026-09-21
 ## GenSeg numerical repeatability follow-up (2026-10-19; branch-local)
 - Server matched-context float32 CUDA output differed by7.45058e-9 before update1. Revised only diagnostic output repeatability to predeclared atol1e-7/rtol0 with shape/device/dtype/finite/context guards and truthful exact/within metrics. All live-state purity and learning-quality thresholds unchanged; old failed results retained.
 - Existing regression RED2/GREEN2, affected31 CPU passed; independent exact2-file STATIC PASS. Zero new test functions, leaf implementation; no CUDA/quality pass claimed. Canonical master/current fine-tuning checkout untouched.
+
+## GenSeg probe-local cuDNN follow-up (2026-10-20; branch-local)
+- User supplied failed.json confirms100 updates completed, after-probe repeat maxdiff1.49e-7. No weights were saved; preserve this failed run, do not fabricate completion or imply loss of all training execution.
+- Probe-only cuDNN deterministic=True/benchmark=False now scoped/restored by official context, compatible optional API inspection; caller enabled/TF32 and subsequent actual training unchanged. No tolerance increase (atol1e-7/rtol0), quality/strict state checks unchanged.
+- Existing CPU regression scope/restore and old-signature RED/GREEN, final affected31 passed; exact2-file independent STATIC PASS. Zero new test functions; real CUDA/old-version execution and generated quality pending. Primary fine-tuning/master memory untouched.
