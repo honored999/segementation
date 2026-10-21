@@ -206,13 +206,16 @@ def render(path,target,label,generated,scale,mode=None):
 
 
 def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase='joint'):
-    require(phase in ('joint','gan_pretrain'),'Invalid preview phase')
-    checkpoint_file='joint.pt' if phase=='joint' else 'gan.pt'
+    require(phase in ('joint','gan_pretrain','joint_repair'),'Invalid preview phase')
+    checkpoint_file='gan.pt' if phase=='gan_pretrain' else 'joint.pt'
     require(type(patient_limit) is int and 1<=patient_limit<=61,'Patient limit must be 1..61')
     run=Path(run).resolve()
     output=check_output(output,list(target.protected)+[run])
     target.require_no_unpack_writes()
-    auditor=audit_joint if phase=='joint' else audit_gan
+    if phase=='joint_repair':
+        from .joint_checkpoint import audit_joint as auditor
+    else:
+        auditor=audit_joint if phase=='joint' else audit_gan
     receipt,identities=auditor(target,run,checkpoint_sha256)
     inventory={p:target.inventory(p) for p in target.train}
     source=source_identity(); implementation=sha256(__file__)
@@ -225,8 +228,13 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase=
     require(not torch.cuda.is_initialized(),'GPU binding must precede CUDA initialization')
     require(torch.cuda.is_available(),'CUDA-enabled PyTorch required')
     torch.cuda.set_per_process_memory_fraction(initial['allocator_fraction'],0)
-    loader=load_joint if phase=='joint' else load_gan
-    payload=loader(run,checkpoint_sha256,receipt)
+    if phase=='joint_repair':
+        from .joint_checkpoint import validate_payload
+        payload=load_checkpoint(run,'joint.pt',checkpoint_sha256)
+        validate_payload(payload,receipt)
+    else:
+        loader=load_joint if phase=='joint' else load_gan
+        payload=loader(run,checkpoint_sha256,receipt)
     final_audit()
     generator=Generator(seed=20261018,device='cuda:0')
     restore_generator(generator,payload)
@@ -244,6 +252,8 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase=
         planes,missing=select_planes(label[0]); patients.append({'patient':patient,'missing_categories':missing,
             'all_ignore_planes':np.flatnonzero(~(label[0]>=0).any(axis=(1,2))).tolist()})
         for z,category in planes:
+            if phase=='joint_repair' and not bool((label[0,z]==1).any()):
+                continue
             generated,pad=generate(generator,label[0,z],scale)
             filename=f'{patient}_z{z:04d}_{category}.png'
             display=render(output/filename,image[0,z],label[0,z],generated,scale)
@@ -262,7 +272,7 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase=
         'input_inventory':inventory,'saved_protocol':receipt['protocol'],'scaling':scale,
         'preview_implementation_sha256':implementation,'patients':patients,'previews':records,
         'initial_resources':initial,
-        'cpu_payload':'weights_only=True, map_location=cpu; '+('G/D/S' if phase=='joint' else 'G/D')+' tensors; only G restored on GPU',
-        'D_S':('D/S' if phase=='joint' else 'D (no S in GAN checkpoint)')+' CPU payload tensors only; no D/S models or optimizers constructed'})
+        'cpu_payload':'weights_only=True, map_location=cpu; '+('G/D' if phase=='gan_pretrain' else 'G/D/S')+' tensors; only G restored on GPU',
+        'D_S':('D (no S in GAN checkpoint)' if phase=='gan_pretrain' else 'D/S')+' CPU payload tensors only; no D/S models or optimizers constructed'})
     print(f'PREVIEW COMPLETE: {len(records)} PNGs; output={output}',flush=True)
     return output

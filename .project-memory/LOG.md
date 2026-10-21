@@ -1,3 +1,8 @@
+## 2026-10-21 - Joint positive strategy and throughput integration (branch-local)
+- Accepted manual implementation plus B1/B2 fixes: array-header/transient admission and actual production direct/indirect proxy FD/negative controls. Independent final11-file STATIC PASS, manifest d403e688d02b668614fde4e277bc2bd4727bee8232ea3da93f513f6f39dcdf3e; fixer202 CPU passed, parent hash/diff verification.
+- Actual Adam/trainBN, virtual SGD/eval-BN approximation, fresh S/moments, positive-only fake with real negatives, immutable RAM inputs and explicit audit-strength limits. No parent source/test edit; no raw/old-result change.
+- Real checkpoint/CUDA/peaks/throughput/quality and server psutil NOT_RUN; no joint unit budget yet. Next: publish, server dependency/resource/check-only evidence then user-approved short preflight. Canonical master unchanged.
+
 ## 2026-10-20 - Diagnostic snapshot fixed coverage reader accepted (branch-local)
 - Manual worker added preview-diagnostic, strict G/BN/alpha restore, fixed inner61 <=13 planes, anchor scalar audit, raw same-condition comparison and isolated receipts. Worker reported107 CPU passed; independent exact4-file STATIC Level3 PASS, no blockers; parent hashes/diff verified.
 - No real snapshot/CUDA/data inference or training locally. Server raw upstream-source identity must match generation bytes; no audit relaxation. Parent coordination/memory/Git only, production/test implementation delegated manually. Next: server ff-only sync and one bounded preview; original quality gate unchanged. Canonical master absent/unmodified.
