@@ -1,77 +1,23 @@
 # Log
 
-## 2026-10-19 - ISLES508 pretrained initialization steering (branch-local; docs)
-- User requests original-ISLES full fine-tuning on HD-BET3mm privateDWI fold0; added separate source-audit/hash/protocol runbook, reused existing builder and ordinaryDS TopK10+ES. No source/tests/LR/CKPD/fixedsplit edits.
-- Validation: 3 embedded commands AST parsed, official loader checked, independent Level3 STATIC PASS; source checkpoint and all runtime remain server-unverified. Old private fine-tuning roots are reference outputs; same-source hash control needed for attribution.
-- Next: server sync, read-only source existence then guardedCPUmetadata/hash audit, fresh realDWI95 preparation/QA/preprocess, fresh -pretrained_weights fold0 --val_best and fixed19original-space evaluation. Parent docs/memory/Git only; no implementation delegation needed or nested agents. Canonical master unchanged.
-## 2026-10-19 - HD-BET real-DWI nnU-Net fold0 preparation (branch-local; static)
-- Added fresh isolated95 dataset builder with audited76 masks/frozen19 inference, native3mm rule, rawGT/plans/splits protection, explicitly inherited fingerprint compatibility and ordinary deep-supervision TopK10+early-stop composition.
-- Validation: parent7PythonAST/diff PASS and exact10file independentLevel3 STATIC PASS. No local tests/imports/models/patient arrays/CUDA or server preprocessing/training/evaluation; raw/splits/oldweights untouched. Leaf implementation/fixes, separate reviewer, no nested agents; parent docs/memory/Git only.
-- Next: server pull, metadata check, freshprepare95/train76QA, guarded2d preprocessing, ready/discovery/guard, fixedfold0 --val_best, exact19original-space evaluation. Match originalDWI control settings; no efficacy claim.
-- Canonical master memory absent/unmodified; branch-local state only.
-## 2026-10-18 - Fixed training slice diagnostic (branch-local; static)
+## 2026-10-21 - Branch-local progress consolidation
+- Updated STATUS/GOALS/NEXT to the HD-BET3mm comparison milestone; removed superseded blanket pending-run directions and compressed older engineering history.
+- Evidence: current clean branch at fb6f8ca; prior 2026-10-18 session through 2026-10-20 records server preparation95/95, fine-tuning/scratch fixed19 results and completed GenSeg100 diagnostic. Server artifacts were not freshly verified.
+- Recorded Dice 74.7072% versus 71.5864% with boundary-metric tradeoffs; single-fold development evidence only. Next: paired provenance audit and a matched original-DWI control before skull-stripping attribution.
+- Documentation-only update by main agent; no source/tests/raw data/checkpoints changed, no runtime validation, commit or push. Master memory absent and untouched.
 
-- Changed: exact GD500 warm start, deterministic inner61 lesion slice, existing G/D updates and before/after pure functional probes/PNG; diagnostic-only receipt, no checkpoint weights.
-- Validation: final three-file AST/diff checks, independent Level3 PASS STATIC and focused re-review after resource-sampling order fix. Tests/production/model/numerical/CUDA/resource runs NOT RUN locally; server3 then100 pending.
-- Result: raw/splits/targets/old weights/training core unchanged; leaf implementation/fix, parent coordination/Git, no nested agents. Copied GD500 PNGs were already gray; no proven BN cause or efficacy claim.
-- Next: run SINGLE-SLICE-RUNBOOK on data computer, preserve outputs, return diagnostic folder. Master memory absent/untouched.
+## 2026-10-19 - ISLES508 initialization steering
+- Added separate source-audit/hash/protocol runbook, retaining normal deep supervision and TopK10+early stopping; commit fb6f8ca.
+- Embedded-command AST checks and independent Level 3 STATIC review PASS were recorded. Subsequent server outcomes are summarized above; historical local checks did not verify server runtime.
 
-## 2026-10-18 - Completed G/D qualitative preview (branch-local; static)
+## 2026-10-19 - HD-BET real-DWI fold-0 preparation
+- Added isolated95 derived-data builder, frozen mask processing/native3mm rule, protected GT/plans/splits and inherited preprocessing compatibility; commit 40309bd.
+- Historical AST/diff checks and independent Level 3 STATIC review PASS. No local real-patient runtime or effectiveness claim.
 
-- Changed: explicit preview --phase gan_pretrain, strict completed gan.pt audit/CPU safe load, G-only restoration and existing same-slice rendering; joint default retained.
-- Validation: final three-file stdlib AST/diff checks and independent Level3 PASS STATIC; tests/model/CUDA/numerical runs NOT RUN per user. First data-computer GAN preview pending.
-- Result: leaf source/tests, parent docs/branch memory/Git, no nested agents. User GD500/joint100 preview remains gray; no efficacy or proven BN-cause claim. Raw/splits/old weights unchanged, master memory absent/untouched.
-- Next: fresh GD500 preview and same-name third-panel comparison using GD-PREVIEW-RUNBOOK; no budget increase pending diagnosis.
+## 2026-10-18 - GenSeg staged training and diagnostics
+- Added G/D pretraining handoff, completed-checkpoint previews, bounded utilization retry and fixed-slice diagnostics. Historical scoped synthetic tests/static reviews are engineering evidence only.
+- Prior receipt confirms100 diagnostic steps with no weights saved; gray GD500/joint previews do not pass an augmentation quality gate or prove a BN cause.
 
-## 2026-10-18 - Selected-GPU utilization sampling retry (branch-local; static)
-
-- Changed: typed util-only six-attempt guard between completedsteps; permanentguardsfirst, finite wait/event diagnostics, initialguardunchanged.
-- Validation: AST3files/diffcheck and independentLevel3 PASSSTATIC; no localtests/model/CUDA peruser. ServerGD3passed but priorjoint3failed beforestep2 at81percentutil/5.4percentVRAM; newretryunverified.
-- Result: sourceleafowned, no nestedagents; raw/splits/oldweights and numericalprotocol unchanged; canonicalmastermemoryuntouched.
-- Next: reuseGD3, freshjointtrial02; preservetrial01 and inspectruntimebefore500+100.
-
-## 2026-10-18 - Short multi-step run preparation (branch-local; static)
-
-- Changed: release only unused CUDA cache before unchanged strict step guard, cap allocator budget at initial/pre-model minimum; no seed/split/loss/BN/optimizer changes.
-- Validation: AST3files/diffcheck and independent Level3 PASS(STATIC). Pytest/model/CUDA/numerical execution NOT RUN per user; earlier invocation interrupted without result.
-- Result: code statically accepted, real multi-step unverified. Leaf owns source/tests, parent coordination only; canonical master memory unchanged.
-- Next: target-PC3+3 then proposed GD500joint100, separate output dirs and same-slice image review; no resume claim.
-
-## 2026-10-18 - Joint checkpoint qualitative preview (branch-local)
-
-- Changed: strict completed-joint G/alpha restoration, inner61-only deterministic native four-panel PNG preview, shared saved display scale, final provenance receipt; zero-valid-plane failure preserves diagnostics.
-- Validation: guarded newconda worker32 focused/105 joint affected PASS; parent32 focused, CLI and synthetic visual inspection PASS; independent Level3 PASS on final three hashes.
-- Result: engineering preview capability accepted; real-patient/CUDA preview not locally run. User-reported1+1 joint run is separate runtime evidence, not an image-quality/performance result. Source/tests delegated leaf, no nested agents.
-- Next: pull on data computer, run PREVIEW-RUNBOOK and review PNGs. Canonical master memory unchanged.
-
-## 2026-10-18 - GD pretraining and joint handoff (branch-local)
-
-- Changed: inner61-only frozen-alpha GAN pretraining, phase checkpoint/receipt, safe same-protocol initialization of fresh author U-Net joint run; no resume.
-- Validation: guarded newconda CPU worker73/15/63 passed; parent43 key tests and CLI helps passed; exact five-file independent Level3 PASS.
-- Result: engineering implementation accepted; no target-PC real-data CUDA phase handoff or formal metrics. Raw/splits/old weights/upstream unchanged. Parent source/test edits none; leaf implementation, no nested workers.
-- Next: publish locally and data-computer1+1 phase trial per PRETRAIN-RUNBOOK. Canonical master memory unchanged.
-
-## 2026-10-14 - GenSeg30 fold0 slice augmentation prepared (branch-local)
-
-- Changed: offline train-only conditional-GAN preparation and a separate
-  GenSeg30 EarlyStopping Trainer; adds exactly ceil(30% of training 2D slices),
-  retaining original patient IDs and untouched real validation/full-volume path.
-- Validation: parent fresh serial CPU synthetic and affected suite 74 passed; affected
-  EarlyStopping tests included (11); final independent 15-file snapshot review PASS.
-  Counts, provenance, source safety, checkpoints, QA and CLI guards covered.
-- Result: engineering preparation only, prepared for branch publication; no real-data generation,
-  server training or effect metrics. Requires original Blosc2 backend, fixed
-  Dataset501 fold0 split and explicit generated-image quality review.
-- Next: server compatibility preflight, train/export/QA, then matched A/B fold0.
-  Canonical master memory and baseline source/splits remain unchanged.
-
-## 2026-10-14 - GenSeg reference source snapshot (branch-local)
-
-- Changed: downloaded 342 upstream source/config/documentation files under
-  `reference/GenSeg` on `codex/genseg-reference`, pinned to upstream
-  `6480e178a5d44cb838f53f7951aae48138b8f5eb`; preserved license and provenance.
-- Validation: all upstream Git blob hashes matched; local SHA256 and file count
-  verified. Datasets, binaries, caches and nested Git metadata excluded.
-- Result: reference snapshot recorded on its dedicated branch; no dependency installation, source
-  integration, training or formal evaluation. Canonical master memory untouched.
-- Next: inspect/adapt only under a separately defined implementation scope.
+## 2026-10-14 - GenSeg reference and augmentation preparation
+- Pinned upstream source with provenance; prepared train-only30% slice augmentation with fixed validation boundaries.
+- Historical synthetic checks and independent review passed. Generated-data quality and segmentation benefit were not established.
