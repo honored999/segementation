@@ -28,8 +28,10 @@ def check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_work
         arrays_loaded=False,weights_loaded=False,training_started=False)
 
 
-def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes):
-    require(type(steps) is int and steps>0,'Explicit positive unit budget required; no default training budget')
+def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes):
+    require((steps is None)!=(epochs is None),'Choose exactly one of steps or epochs')
+    budget=steps if epochs is None else epochs
+    require(type(budget) is int and budget>0,'Explicit positive unit/epoch budget required')
     require(type(model_reserve_bytes) is int and model_reserve_bytes>0,'Explicit conservative model/optimizer/higher-order RAM reserve required')
     check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes)
     output=check_output(output,list(target.protected)+[Path(pretrained_run)])
@@ -41,7 +43,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_
     require(torch.cuda.is_available(),'CUDA required for future production run')
     torch.cuda.set_per_process_memory_fraction(initial['allocator_fraction'],0)
     target.require_no_unpack_writes()
-    from .data import Cohort
+    from .data import Cohort,EpochSampler
     from .models import create_models,source_identity
     identities=capture_identities([Path(pretrained_run)/'gan.pt',Path(pretrained_run)/'complete.json'])
     prehash={p:sha256(p) for p in identities}
@@ -52,6 +54,9 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_
     cohort=snapshot.cohort
     scale=cohort.fit_scale(skip_all_ignore=True)
     sampler=PositiveSampler(cohort)
+    real_sampler=None if epochs is None else EpochSampler(cohort,np.random.default_rng(20261018))
+    if real_sampler is not None:
+        steps=epochs*len(real_sampler.planes)
     source=source_identity()
     code=implementation_identity()
     protocol=dict(POLICY,steps=steps,split=cohort.split,scaling=scale,source=source,
@@ -65,6 +70,10 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_
         inherited_preprocessing='old76_target_fill_and_original_grid_not_refit; outer19_development_not_independent_test',
         selection='last_complete_unit; no_external19_arrays_or_metrics; no_resume',
         small_lesions='positive_only_not_size_balanced; no_small_lesion_improvement_claim')
+    if real_sampler is not None:
+        protocol.update(epochs=epochs,total_valid_planes=len(real_sampler.planes),
+            real_sampling='inner61_valid_planes_without_replacement_including_negatives',
+            epoch_progress=real_sampler.progress()['epoch_progress'])
     timing=dict(snapshot.timings,startup=time.perf_counter()-started,log=0.,checkpoint_measurement='final_wall_in_timing.json_not_known_before_serialization')
     def full_audit():
         snapshot.full_audit(); assert_identities(identities)
@@ -88,7 +97,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_
                 start=time.perf_counter(); light_audit(); audit_wall=time.perf_counter()-start
                 start=time.perf_counter(); resources=guard(); resource_wall=time.perf_counter()-start
                 start=time.perf_counter()
-                tx,ty,tr=cohort.sample('train',rng,scale)
+                tx,ty,tr=cohort.sample('train',rng,scale) if real_sampler is None else real_sampler.next(scale)
                 vx,vy,vr=cohort.sample('validation',rng,scale)
                 fy,fr=sampler.next(scale)
                 arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty,vx,vy,fy)]
@@ -100,6 +109,15 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps,gpu,cache_budget_
                     lightweight_audit_wall=audit_wall,resource_guard_wall=resource_wall,
                     sample_and_transfer_host_wall=sample_wall,unit_boundary_sync_wall=sync_wall,
                     unit_wall=time.perf_counter()-unit,**metrics)
+                if real_sampler is not None:
+                    progress=real_sampler.progress()
+                    protocol['epoch_progress']=progress['epoch_progress']
+                    entry.update(epochs=epochs,**progress)
+                    ep=progress['epoch_progress']
+                    prefix=f"Epoch {ep['epoch']}/{epochs} | {ep['planes']}/{ep['total']} | "
+                else:
+                    prefix=''
+                print(f"{prefix}Unit {index+1}/{steps} | S loss {metrics['s_loss']:.5g} | Val loss {metrics['internal_validation_loss']:.5g}",flush=True)
                 start=time.perf_counter(); log.write(json.dumps(entry,allow_nan=False)+'\n'); log.flush()
                 timing['log']+=time.perf_counter()-start
                 del arrays,metrics,entry

@@ -6,7 +6,7 @@ Use the existing server repair checkout `C:\lijialin\segementation\.worktrees\ge
 
 Pinned upstream source remains 6480e178a5d44cb838f53f7951aae48138b8f5eb. Canonical CRLF-to-LF hashes and observed raw hashes are both retained; raw source mismatches are not waived. Local author `models_pix2pix/pix2pix_model.py` uses Adam G/D and architecture Adam with decay; author end-to-end S uses RMSprop. Our fresh S Adam, zero-decay staged upconv Adam, eval-BN virtual SGD proxy, independent positive synthesis and nested61/15 roles are deliberate local adaptations. Paper: https://www.nature.com/articles/s41467-025-61754-6 . No claim of numerical reproduction.
 
-CMD variables (templates only, do not execute training until a separate explicit unit budget):
+CMD variables (templates only; the approved 80-epoch budget is documented below, production preflight remains pending):
 
 ```bat
 set "GD20=C:\lijialin\HD-BET_outputs\genseg_repair_gd_epoch20_trial01"
@@ -23,10 +23,10 @@ Check requires an explicit RAM cache budget in bytes; choose CACHE_BYTES after i
 python -m experiments.genseg_joint.joint_cli check --strategy "%STRATEGY%" --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --gpu 1 --pretrained-run "%GD20%" --pretrained-sha256 "%GD20_SHA%" --cache-budget-bytes %CACHE_BYTES% --loader-workspace-bytes %LOADER_WORKSPACE_BYTES% --model-reserve-bytes %MODEL_RESERVE_BYTES%
 ```
 
-Check hashes provenance/masks and estimates memory; it does not load patient image/label arrays or model tensors, create CUDA context, or create output. TargetDataset retains its existing mask audit. Training startup then actually loads and binds the RAM snapshot. No joint unit budget is authorized by this document. After review and a separately chosen UNITS value, the future template is:
+Check hashes provenance/masks and estimates memory; it does not load patient image/label arrays or model tensors, create CUDA context, or create output. TargetDataset retains its existing mask audit. Training startup then actually loads and binds the RAM snapshot. The user approved 80 real-inner61 epochs; production resource preflight remains pending. The future command template is:
 
 ```bat
-python -m experiments.genseg_joint.joint_cli train --strategy "%STRATEGY%" --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --gpu 1 --pretrained-run "%GD20%" --pretrained-sha256 "%GD20_SHA%" --cache-budget-bytes %CACHE_BYTES% --loader-workspace-bytes %LOADER_WORKSPACE_BYTES% --model-reserve-bytes %MODEL_RESERVE_BYTES% --steps %UNITS%
+python -m experiments.genseg_joint.joint_cli train --strategy "%STRATEGY%" --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --gpu 1 --pretrained-run "%GD20%" --pretrained-sha256 "%GD20_SHA%" --cache-budget-bytes %CACHE_BYTES% --loader-workspace-bytes %LOADER_WORKSPACE_BYTES% --model-reserve-bytes %MODEL_RESERVE_BYTES% --epochs 80
 ```
 
 Only physicalGPU1 by default, bound once by UUID before CUDA initialization. One selected-card nvidia-smi query at a unit boundary; primed nonblocking CPU delta, immediate RAM and strict telemetry failures. No busy sleeps, empty_cache, retry or OOM continuation. Guard is a boundary external-load/headroom check, not a continuous GPU utilization limiter. Other cards do not gate this card.
@@ -53,3 +53,26 @@ After a future approved production preflight, collect live BN/Adam/alpha state, 
 B1/B2 follow-up: joint snapshot accepts audited Blosc2 source headers only; NPZ/NPY source backends and unaudited dtypes are explicitly refused before loading. check reports final_cache_estimated_bytes, max_case_load_transient_bytes, loader_workspace_reserve_bytes, model_reserve_bytes and startup_required_bytes. Startup required = final cache + maximum additional case transient + model reserve. Before each case the live resource guard reserves remaining final cache (subtracting actual cached nbytes), current case transient and model reserve; after each load it samples resources again. The explicit cache budget limits permanent owned arrays, not all RAM. External codec/pickle workspace and real production model peaks remain UNKNOWN, even with reserves.
 
 Known limitation: nvidia-smi utilization at a unit boundary can include the preceding unit's own work and stop a high-throughput run at >=80%. Threshold, no-wait/no-retry policy unchanged. Observe this during a separately authorized short real preflight; no mitigation or server run is authorized here.
+
+
+## Real epoch budget (2026-10-21)
+
+The user approved 80 real-inner61 epochs. Production single-card resource preflight
+is still incomplete; this implementation task does not launch server training.
+Use `--epochs 80` as in the train command above; `--epochs` and `--steps` are
+mutually exclusive, exactly one required. Existing `--steps` keeps its original random
+patient/plane sampling. In epoch mode the existing EpochSampler traverses every
+valid real inner61 plane once per epoch without replacement, including negatives;
+all-ignore planes are excluded. N is measured from the in-memory snapshot, not
+hardcoded. Current expected N=970 gives 80*970=77600 joint units.
+
+Example progress: `Epoch 1/80 | 1/970 | Unit 1/77600 | S loss ... | Val loss ...`.
+Epoch order has its own RNG; fake positive sampling remains independent and
+inner15 keeps the original random sampling rule. Fake/inner15 coverage is not
+an epoch guarantee. Epoch mode does not consume real draws from the shared old
+real/validation RNG, so its validation sequence differs from steps mode.
+`steps.jsonl` keeps detailed metrics and records epochs, total_valid_planes and
+current epoch_progress; protocol records the same budget and final progress.
+Only the final checkpoint is saved; interrupted runs cannot resume. No periodic
+checkpoint or new training strategy is added. Existing production resource,
+quality and audit gates remain required.

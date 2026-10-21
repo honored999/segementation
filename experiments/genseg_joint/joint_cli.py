@@ -29,7 +29,9 @@ def parser():
             a.add_argument('--loader-workspace-bytes',required=True,type=positive)
             a.add_argument('--model-reserve-bytes',required=True,type=positive)
         if name=='train':
-            a.add_argument('--steps',required=True,type=positive)
+            budget=a.add_mutually_exclusive_group(required=True)
+            budget.add_argument('--steps',type=positive)
+            budget.add_argument('--epochs',type=positive)
     return p
 
 
@@ -49,7 +51,7 @@ def main(argv=None):
     elif a.command=='train':
         from .joint_runtime import run
         run(target,a.output,pretrained_run=a.pretrained_run,pretrained_sha256=a.pretrained_sha256,
-            steps=a.steps,gpu=a.gpu,cache_budget_bytes=a.cache_budget_bytes,model_reserve_bytes=a.model_reserve_bytes,loader_workspace_bytes=a.loader_workspace_bytes)
+            steps=a.steps,epochs=a.epochs,gpu=a.gpu,cache_budget_bytes=a.cache_budget_bytes,model_reserve_bytes=a.model_reserve_bytes,loader_workspace_bytes=a.loader_workspace_bytes)
     else:
         from .preview import run_preview
         run_preview(target,a.run,a.checkpoint_sha256,a.output,gpu=a.gpu,patient_limit=a.patient_limit,phase='joint_repair')

@@ -264,6 +264,15 @@ def test_resource_guard_one_query_nonblocking_and_fail_closed(monkeypatch):
 def test_new_cli_explicit_budget_and_legacy_rejection():
     from experiments.genseg_joint.joint_cli import parser
     with pytest.raises(SystemExit): parser().parse_args(['train'])
+    base=['train','--strategy','joint_adam_trainbn_positive_sgdproxy_v1']
+    for key in ('source','raw-root','targets','baseline-run','output','pretrained-run'):
+        base+=['--'+key,'fixture']
+    base+=['--pretrained-sha256','a'*64,'--cache-budget-bytes','100000',
+           '--loader-workspace-bytes','1024','--model-reserve-bytes','1024']
+    assert parser().parse_args(base+['--steps','2']).steps==2
+    assert parser().parse_args(base+['--epochs','2']).epochs==2
+    for budget in ([],['--steps','2','--epochs','2'],['--epochs','0']):
+        with pytest.raises(SystemExit): parser().parse_args(base+budget)
     e=engine()
     with pytest.raises(ValueError,match='legacy'): JointEngine(e.g,e.d,e.s)
 
@@ -301,7 +310,8 @@ def test_transition_wrong_hash_no_weight_load(monkeypatch):
     with pytest.raises(ValueError,match='pinned'): audit_transition(None,'missing','a'*64)
 
 
-def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch):
+@pytest.mark.parametrize('epochs',[None,2])
+def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epochs):
     from experiments.genseg_joint import joint_runtime as rt,joint_checkpoint as cp,models,preview
     from experiments.genseg30.contract import sha256,read_json
     from experiments.genseg_joint.joint_checkpoint import PRETRAIN_SHA
@@ -337,13 +347,30 @@ def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch):
     monkeypatch.setattr(data,'pad_plane',lambda a,*args:a.copy())
     assert rt.check(target,pre,PRETRAIN_SHA,100000,1024,1024)['arrays_loaded'] is False
     output=tmp_path/'joint'
-    rt.run(target,output,pretrained_run=pre,pretrained_sha256=PRETRAIN_SHA,steps=2,gpu=1,
+    rt.run(target,output,pretrained_run=pre,pretrained_sha256=PRETRAIN_SHA,steps=2 if epochs is None else None,epochs=epochs,gpu=1,
         cache_budget_bytes=100000,model_reserve_bytes=1024,loader_workspace_bytes=1024)
     receipt=read_json(output/'complete.json'); payload=torch.load(output/'joint.pt',weights_only=True)
     cp.validate_payload(payload,receipt)
-    assert receipt['steps']==2 and target.reads==76
+    total=2 if epochs is None else 244
+    assert receipt['steps']==total and target.reads==76
     records=[__import__('json').loads(s) for s in (output/'steps.jsonl').read_text().splitlines()]
-    assert len(records)==2 and all(r['fake_mask']['foreground_pixels']>0 for r in records)
+    assert len(records)==total and all(r['fake_mask']['foreground_pixels']>0 for r in records)
+    if epochs is not None:
+        expected={(p,z) for p in receipt['protocol']['split']['train'] for z in (0,1)}
+        for start in (0,122):
+            chunk=records[start:start+122]
+            assert {(r['train']['patient'],r['train']['z']) for r in chunk}==expected
+            assert any(r['train']['z']==0 for r in chunk)  # negative real planes retained
+        assert records[-1]['epoch_progress']==dict(epoch=2,planes=122,total=122)
+        assert receipt['protocol']['epochs']==2 and receipt['protocol']['total_valid_planes']==122
+        text=capsys.readouterr().out
+        assert 'Epoch 1/2 | 1/122 | Unit 1/244' in text
+        assert 'Epoch 2/2 | 122/122 | Unit 244/244' in text
+    else:
+        rng=np.random.default_rng(20261018); cohort=Cohort(target,20261018)
+        for r in records:
+            assert cohort.sample('train',rng,receipt['protocol']['scaling'])[2]==r['train']
+            assert cohort.sample('validation',rng,receipt['protocol']['scaling'])[2]==r['internal_validation']
     assert all('unit_boundary_sync_wall' in r and 'stage_host_wall_seconds' in r for r in records)
     cp.audit_joint(target,output,sha256(output/'joint.pt'))
     # Real repair audit/schema and renderer; substitute GPU-sized G restore only.

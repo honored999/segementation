@@ -1,3 +1,7 @@
+## 2026-10-21 - Joint true epochs and progress (branch-local)
+- Added --epochs mutually exclusive with old --steps; existing EpochSampler on snapshot traverses real valid61 planes including negatives, separate shuffle RNG; progress/protocol/logs report real epochs. User approved80 epochs, expected77600 units.
+- Worker3 focused CPU passed12.88s; parent5 handoff hashes/full manifest/diff verified, no repeated large/core review per user request. Only5 task files plus parent memory; joint engine/optimizer/BN untouched. Server psutil/RAM/GPU telemetry supplied, production CUDA preflight/quality pending; no resume or automatic launch.
+
 ## 2026-10-21 - Joint positive strategy and throughput integration (branch-local)
 - Accepted manual implementation plus B1/B2 fixes: array-header/transient admission and actual production direct/indirect proxy FD/negative controls. Independent final11-file STATIC PASS, manifest d403e688d02b668614fde4e277bc2bd4727bee8232ea3da93f513f6f39dcdf3e; fixer202 CPU passed, parent hash/diff verification.
 - Actual Adam/trainBN, virtual SGD/eval-BN approximation, fresh S/moments, positive-only fake with real negatives, immutable RAM inputs and explicit audit-strength limits. No parent source/test edit; no raw/old-result change.
