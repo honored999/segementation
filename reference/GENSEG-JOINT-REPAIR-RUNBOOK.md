@@ -76,3 +76,24 @@ current epoch_progress; protocol records the same budget and final progress.
 Only the final checkpoint is saved; interrupted runs cannot resume. No periodic
 checkpoint or new training strategy is added. Existing production resource,
 quality and audit gates remain required.
+
+
+## Phase-aware VRAM admission (2026-10-22)
+
+Only the new joint ResourceGuard is phased. Startup (CLI check, cache admission,
+and before model construction) requires free VRAM >=12 GiB, valid selected-card
+telemetry/UUID, CPU/RAM/GPU utilization and global VRAM usage <80%, projected RAM
+headroom, and a finite positive initial allocator fraction. The initial fraction
+is fixed and set once; resident memory is never subtracted from global usage.
+After model construction and at synchronized unit boundaries with prior temporary
+inputs released, between_units retains all these resource/identity checks except
+the startup 12 GiB free-VRAM requirement. Global VRAM usage still must be <80%.
+No empty_cache, wait, retry, utilization relaxation, or legacy-path change.
+Failure messages include phase, selected index/UUID, total/used/free GiB and rule.
+
+Preserve failed preflight3_trial01 as failed evidence: only one unit completed,
+not CUDA OOM and not a completed three-unit preflight. It cannot resume. Parent
+acceptance/publication precedes a separate new-directory preflight3_trial02
+three-unit retry; only then assess the retained 80-epoch approval. This repair
+ran no real CUDA, training, or retry. Later peaks and utilization-window effects
+remain unverified; a prior unit can still cause the unchanged >=80% util gate.

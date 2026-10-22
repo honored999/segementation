@@ -320,22 +320,27 @@ def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epo
     pre=tmp_path/'pretrain'; pre.mkdir(); (pre/'gan.pt').write_bytes(b'fixture'); (pre/'complete.json').write_text('{}')
     # Hardware, large checkpoint transition and model size replaced; production snapshot/engine/save/audits execute.
     monkeypatch.setattr(rt,'audit_transition',lambda *a:None)
+    phases=[]; allocator_calls=[]; syncs=[]
     class Guard:
         def __init__(self,*a): pass
-        def __call__(self,*a): return dict(allocator_fraction=.1,gpu_uuid='CPU-fixture')
+        def __call__(self,*a,phase='startup'):
+            phases.append(phase)
+            if phase=='between_units': assert syncs
+            return dict(allocator_fraction=.1,gpu_uuid='CPU-fixture')
         def bind(self): pass
     monkeypatch.setattr(rt,'ResourceGuard',Guard)
     monkeypatch.setattr(torch.cuda,'is_initialized',lambda:False)
     monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
     monkeypatch.setattr(torch.cuda,'is_current_stream_capturing',lambda:False)
-    monkeypatch.setattr(torch.cuda,'set_per_process_memory_fraction',lambda *a:None)
-    monkeypatch.setattr(torch.cuda,'synchronize',lambda:None)
+    monkeypatch.setattr(torch.cuda,'set_per_process_memory_fraction',lambda *a:allocator_calls.append(a))
+    monkeypatch.setattr(torch.cuda,'synchronize',lambda:syncs.append(True))
     monkeypatch.setattr(torch.cuda,'max_memory_allocated',lambda:0)
     monkeypatch.setattr(torch.cuda,'max_memory_reserved',lambda:0)
     monkeypatch.setattr(torch.cuda,'get_rng_state_all',lambda:[])
     original_to=torch.Tensor.to
     monkeypatch.setattr(torch.Tensor,'to',lambda self,*a,**kw:original_to(self,*(('cpu',)+a[1:] if a and a[0]=='cuda:0' else a),**kw))
     def create(**kw):
+        assert phases and set(phases)=={'startup'}
         e=engine(); return e.g,e.d,e.s
     monkeypatch.setattr(models,'create_models',create)
     def transition(target,run,digest,g,d,scale):
@@ -353,6 +358,9 @@ def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epo
     cp.validate_payload(payload,receipt)
     total=2 if epochs is None else 244
     assert receipt['steps']==total and target.reads==76
+    assert phases.count('between_units')==total
+    assert phases[-total:]==['between_units']*total
+    assert allocator_calls==[(.1,0)]
     records=[__import__('json').loads(s) for s in (output/'steps.jsonl').read_text().splitlines()]
     assert len(records)==total and all(r['fake_mask']['foreground_pixels']>0 for r in records)
     if epochs is not None:
@@ -519,3 +527,33 @@ def test_production_indirect_oracle_detects_injected_sever(monkeypatch):
     with pytest.raises(RuntimeError,match='not have been used'):
         test_production_proxy_isolated_paths(monkeypatch,'indirect')
     assert calls[0]>=4
+
+
+def test_resource_guard_resident_phase(monkeypatch):
+    from experiments.genseg_joint import joint_resources as r
+    import sys
+    ps=SimpleNamespace(cpu_percent=lambda interval:2.,virtual_memory=lambda:SimpleNamespace(
+        percent=20.,total=100*1024**3,available=80*1024**3))
+    monkeypatch.setitem(sys.modules,'psutil',ps)
+    used=[100.]; uid=['GPU-one']; util=[2.]
+    monkeypatch.setattr(r.subprocess,'run',lambda *a,**k:SimpleNamespace(
+        stdout=f'1, {uid[0]}, {util[0]}, {used[0]}, 32607'))
+    g=r.ResourceGuard(1); initial=g()
+    used[0]=22.574*1024
+    with pytest.raises(ValueError,match='phase=startup.*free_gib=.*startup'):
+        g()
+    resident=g(phase='between_units')
+    assert resident['phase']=='between_units'
+    assert resident['allocator_fraction']==initial['allocator_fraction']
+    assert resident['vram_used_mib']==used[0]
+    assert resident['vram_total_mib']==32607
+    for ratio in (.8,.81):
+        used[0]=32607*ratio
+        with pytest.raises(ValueError,match='80 percent.*phase=between_units.*GPU-one'):
+            g(phase='between_units')
+    used[0]=22.574*1024; uid[0]='GPU-other'
+    with pytest.raises(ValueError,match='UUID changed.*phase=between_units'):
+        g(phase='between_units')
+    uid[0]='GPU-one'; util[0]=80.
+    with pytest.raises(ValueError,match='80 percent'):
+        g(phase='between_units')

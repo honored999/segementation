@@ -51,3 +51,34 @@ B2 actual RepairJointEngine.hyperloss/virtual_chain/virtual_sgd/GAN/segmentation
 Allocator finite-positive guard tested at78.9/79/79.5/80% used VRAM. RUNBOOK now records/skips individual missing-positive patients; fails only when no exportable positives. GPU-util>=80 policy unchanged; previous unit can contribute to sampled utilization, to observe in future separately authorized real short preflight. No sleep/retry/threshold change.
 
 joint_repair.py/core.py unchanged; no optimizer/BN/hyperparameter/loss/sampling/split/model semantics changed. New loader-workspace requirement and model reserve for check are admission-interface changes only. No source/TargetDataset global behavior changed. Complete11-file manifest updated; no self hash. No agents, real data/weights/CUDA/server training, dependency install, staging/commit/push, raw/old-results/project/global-memory edits. Production psutil unavailable/unverified; CPU telemetry fixtures do not establish production readiness. Production peaks/throughput/image quality NOT_RUN. Independent focused re-review NOT_RUN/manual next; parent acceptance then independent review before any server decision.
+
+
+## 2026-10-22 minimal phase-aware guard repair
+
+Baseline: codex/genseg-quality-repair at 5f2333030590da8bff48cd577b6655e051c1293d,
+clean before edits. Direct fixer per explicit user instruction; no agents.
+CPU fake telemetry: total32607 MiB, used22.574 GiB (=23115.776 MiB),
+free9.269 GiB: startup rejects, between_units passes with unchanged initial
+allocator fraction. Global usage80%/81%, changed UUID and GPU utilization80%
+remain rejected. Existing startup allocator78.9/79/79.5/80% cases retained.
+Runtime spy confirms startup before model construction, synchronization before
+between_units, one allocator setter call, and phase on every unit for both old
+steps and epochs; existing tiny production engine/BN/update assertions retained.
+
+newconda serial CPU, CUDA_VISIBLE_DEVICES=-1, no dependency changes.
+Preflight before RED: CPU7%, RAM67.2268%, GPU0 util6%, VRAM751/6144 MiB;
+resident regression: 1 failed in3.59s (old error lacks phase/numeric context).
+Preflight before GREEN: CPU12%, RAM67.2514%, GPU0 util8%, VRAM751/6144 MiB.
+Command: & experiments/genseg_joint/tests/run_guarded.ps1
+experiments/genseg_joint/tests/test_joint_repair.py::test_resource_guard_resident_phase
+experiments/genseg_joint/tests/test_joint_repair.py::test_resource_guard_one_query_nonblocking_and_fail_closed
+experiments/genseg_joint/tests/test_joint_repair.py::test_allocator_fraction_boundary
+experiments/genseg_joint/tests/test_joint_repair.py::test_new_runtime_check_load_save_preview_cpu
+--basetemp "$env:TEMP/genseg-phase-tests"
+Result:8 passed in13.47s. No202-test rerun, FD, real-model or cache audit rerun.
+Only engineering CPU evidence; real CUDA/3-unit retry NOT_RUN; no quality claim.
+No train/model/Adam/BN/loss/sampling/80-epoch budget changes. Raw data, targets,
+splits, previous outputs/weights and project/global memory untouched. No staging,
+commit or push. Independent review NOT_RUN per no-agent scope; parent acceptance
+remains next. Manifest entries refreshed; manifest self SHA delivered in HANDOFF
+(the manifest cannot contain its own cryptographic hash).

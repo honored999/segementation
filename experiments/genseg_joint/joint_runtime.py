@@ -95,7 +95,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
             for index in range(steps):
                 unit=time.perf_counter()
                 start=time.perf_counter(); light_audit(); audit_wall=time.perf_counter()-start
-                start=time.perf_counter(); resources=guard(); resource_wall=time.perf_counter()-start
+                start=time.perf_counter(); torch.cuda.synchronize(); resources=guard(phase='between_units'); resource_wall=time.perf_counter()-start
                 start=time.perf_counter()
                 tx,ty,tr=cohort.sample('train',rng,scale) if real_sampler is None else real_sampler.next(scale)
                 vx,vy,vr=cohort.sample('validation',rng,scale)

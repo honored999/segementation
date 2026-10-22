@@ -148,3 +148,9 @@ Updated: 2026-09-21
 - User approved80 complete real-inner61 epochs and requested minimal validation. Added mutually exclusive --epochs/--steps, reusing EpochSampler on RAM snapshot, independent shuffle RNG, progress output and protocol/log epoch metadata; old steps random path retained. Expected970 planes ->77600 units; actual N measured.
 - Worker reported3 focused CPU tests passed12.88s; parent checked5 hashes/full manifest/diff, no large rerun or repeated independent core review. Joint engine/Adam/BN/resources unchanged. Epoch validation RNG sequence differs from steps mode because real draws are separated; disclosed.
 - User server telemetry confirms nnunet5090 psutil works, RAM127.73GiB/free100.52GiB, physicalGPU1 RTX5090 32607MiB free/idle. Real production load/CUDA preflight/throughput/quality NOT_RUN. Only final checkpoint/no resume;80epoch budget is approved, resource verification remains before launch. Parent coordination/Git only; canonical master unchanged.
+
+
+## Joint resident VRAM guard accepted (2026-10-22; branch-local)
+- Server preflight3 trial01 completed1 unit then stopped before unit2: freeVRAM12GiB gate, not OOM; allocated/reserved peaks21.347/22.574GiB, unit wall1.928s. Trial01 failed/non-resumable, not3-unit pass.
+- Startup retains12GiB free and80% checks; synchronized between_units retains80% global VRAM/CPU/RAM/GPU/identity/RAM checks without startup12GiB rule. Initial allocator fixed once; no cache flush, wait/retry or model/optimizer/sampling change. Worker8 focused CPU passed13.47s; parent diff/final11 hashes checked; no large rerun. Manifest f4efb5e85a4c6e6e6339f8397c33662045f6af80e2ee5eb19524d29f570368c8.
+- New-directory real3unit retry/CUDA performance still pending; own previous-unit GPU-util sampling risk unchanged.80epoch approval retained; no automatic launch.

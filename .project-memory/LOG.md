@@ -1,3 +1,7 @@
+## 2026-10-22 - Resident VRAM admission fix (branch-local)
+- Actual preflight1 unit completed then startup12GiB free rule rejected model-resident boundary. Scoped startup/between_units checks, fixed initial allocator and numeric failure diagnostics;80% and training semantics retained. Parent source/test unchanged.
+- Worker8 focused CPU passed13.47s; parent6 task files/final11 manifest/diff accepted without large rerun. Real3-unit retry pending, trial01 failed preserved; next fresh trial02 before approved80epochs. Canonical master unchanged.
+
 ## 2026-10-21 - Joint true epochs and progress (branch-local)
 - Added --epochs mutually exclusive with old --steps; existing EpochSampler on snapshot traverses real valid61 planes including negatives, separate shuffle RNG; progress/protocol/logs report real epochs. User approved80 epochs, expected77600 units.
 - Worker3 focused CPU passed12.88s; parent5 handoff hashes/full manifest/diff verified, no repeated large/core review per user request. Only5 task files plus parent memory; joint engine/optimizer/BN untouched. Server psutil/RAM/GPU telemetry supplied, production CUDA preflight/quality pending; no resume or automatic launch.
