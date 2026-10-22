@@ -82,3 +82,83 @@ splits, previous outputs/weights and project/global memory untouched. No staging
 commit or push. Independent review NOT_RUN per no-agent scope; parent acceptance
 remains next. Manifest entries refreshed; manifest self SHA delivered in HANDOFF
 (the manifest cannot contain its own cryptographic hash).
+
+
+## 2026-10-22 runtime GPU-util policy and failure telemetry
+
+Start: cd04f339da76221892e4a4e5f2856c3391661640, clean,
+codex/genseg-quality-repair. Explicit direct fixer/no agents; no memory edits.
+Startup GPU-util<80; between_units finite 0..100 record only. Whole-card samples
+cannot attribute self/other-process work; no exclusive GPU guarantee. CPU/RAM/
+global VRAM<80, projected RAM/reserve/8GiB margin, startup12GiB, UUID/index,
+finite-positive fixed-once allocator and fail-closed telemetry remain.
+Exceptions carry resource_snapshot and readable numbers; runtime stores it in
+failed.json. Invalid/missing numeric telemetry is null with reason. Receipt save
+failure adds a note without hiding the original error. Model/Adam/BN/sampling/
+higher-order gradient/80-epoch budget and legacy/pretrain/diagnostic code unchanged.
+
+Exact CPU nodes (test_joint_repair.py): test_resource_failure_snapshot,
+test_resource_missing_telemetry_snapshot, test_resource_guard_resident_phase,
+test_resource_guard_one_query_nonblocking_and_fail_closed,
+test_allocator_fraction_boundary, and only [resource_failure]/[save_failure]
+parameters of test_new_runtime_check_load_save_preview_cpu. No normal epochs,
+FD, broad202, real model/weights/CUDA or training tests run.
+All via experiments/genseg_joint/tests/run_guarded.ps1, newconda, single-thread,
+CUDA_VISIBLE_DEVICES=-1; temp artifacts under OS TEMP/genseg-util-*.
+RED: CPU13%, RAM60.94%, GPU15%, VRAM755/6144MiB; 10 failed in8.20s,
+missing exception snapshot and failed.json snapshot.
+GREEN: CPU17%, RAM60.25%, GPU10%, VRAM768/6144MiB;17 passed in7.73s.
+Expanded malformed/missing samples: CPU10%, RAM60.64%, GPU1%, VRAM862/6144MiB;
+18 passed in8.21s. Then runtime injection strengthened to use actual ResourceGuard
+with fake telemetry (CPU80%, GPU100%, used23713/total32607MiB); only its two
+affected nodes rerun: CPU19%, RAM62.68%, GPU1%, VRAM891/6144MiB;2 passed in7.80s.
+Failed receipt asserts phase between_units, violated_rules=[cpu_pct<80], exact
+CPU/GPU/VRAM/UUID/RAM/sample interval, complete=false and no complete.json.
+Save-failure injection preserves original ValueError. No extra CPU/BN/optimizer
+path altered; existing success-path assertions retained but not rerun here.
+
+git diff --check clean. SHA manifest refreshed; manifest self hash in HANDOFF.
+No stage/commit/push/training/dependency changes; raw/splits/targets/old runs,
+author source and global/project memory untouched. Historical failure CPU/RAM/
+GPU-util UNKNOWN; no backfill. RealCUDA/production readiness/quality NOT_RUN.
+Independent review NOT_RUN under no-agent scope. Parent acceptance/publication
+then separately authorized fresh-directory preflight; no automatic failed-run
+resume. Approved80 epochs retained, not executed by this task.
+
+## 2026-10-22 old-Python add_note compatibility patch
+
+Focused direct fixer per task brief; no agents. Worktree genseg-quality-repair,
+branch codex/genseg-quality-repair, HEAD cd04f339da76221892e4a4e5f2856c3391661640.
+Preserved all six pre-existing modified files. Only runtime failure diagnostics,
+existing runtime test parameters, this validation record and SHA manifest updated.
+Runtime uses getattr(exc, 'add_note', None) plus callable; absent/non-callable
+capability stores failure_receipt_save_error. Lookup, formatting, note attachment
+and fallback assignment are locally best-effort protected; outer bare raise retained.
+No change to original exception args/type/message/resource_snapshot/traceback.
+
+Existing test_new_runtime_check_load_save_preview_cpu extended with
+[save_failure_legacy], hiding add_note through __getattribute__. Both save-failure
+nodes assert exception object identity, unchanged args, snapshot object identity,
+and retention of the original traceback node; native note/fallback text checked.
+This simulates old-Python capability absence on local Python, not an actual older
+interpreter run. Other existing parameters retained, not rerun.
+
+newconda, serial tiny CPU fixtures, CUDA_VISIBLE_DEVICES=-1, OS TEMP outputs.
+RED via experiments/genseg_joint/tests/run_guarded.ps1:
+experiments/genseg_joint/tests/test_joint_repair.py::test_new_runtime_check_load_save_preview_cpu[save_failure_legacy]
+--basetemp $env:TEMP/genseg-add-note-red
+Preflight CPU8%, RAM63.847142%, GPU0 util4%, VRAM925/6144MiB.
+Result: 1 failed in6.49s; AttributeError: add_note replaced original resource error.
+GREEN via same guarded script, exact nodes:
+experiments/genseg_joint/tests/test_joint_repair.py::test_new_runtime_check_load_save_preview_cpu[save_failure]
+experiments/genseg_joint/tests/test_joint_repair.py::test_new_runtime_check_load_save_preview_cpu[save_failure_legacy]
+--basetemp $env:TEMP/genseg-add-note-green
+Preflight CPU15%, RAM64.261579%, GPU0 util1%, VRAM909/6144MiB.
+Result: 2 passed in7.78s. Guard permitted lightweight serial CPU validation.
+
+No broad18/202 rerun, real CUDA/model/weights/server training, dependency changes,
+staging/commit/push or raw/split/old-output/author-source/project-memory edits.
+Startup GPU-util guard, between-unit record-only policy and 80-epoch budget unchanged.
+Production readiness/peaks/quality and actual older Python interpreter NOT_RUN.
+Independent review NOT_RUN per no-agent brief; parent acceptance remains next.
+Manifest refreshed; self SHA reported in HANDOFF. git diff --check clean.

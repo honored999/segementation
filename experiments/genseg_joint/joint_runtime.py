@@ -134,11 +134,24 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
         write_json(output/'protocol.json',protocol)
     except BaseException as exc:
         # Completion is removed only if our own post-save output failed, never touched in old runs.
-        complete=output/'complete.json'
-        if complete.exists(): complete.unlink()
-        write_json(output/'failed.json',dict(complete=False,error_type=type(exc).__name__,error=str(exc),
-            completed_steps=0 if engine is None else engine.steps,
-            failure_stage=None if engine is None else engine.failure_stage,
-            poisoned=False if engine is None else engine.poisoned))
+        try:
+            complete=output/'complete.json'
+            if complete.exists(): complete.unlink()
+            write_json(output/'failed.json',dict(complete=False,error_type=type(exc).__name__,error=str(exc),
+                resource_snapshot=getattr(exc,'resource_snapshot',None),
+                completed_steps=0 if engine is None else engine.steps,
+                failure_stage=None if engine is None else engine.failure_stage,
+                poisoned=False if engine is None else engine.poisoned))
+        except Exception as save_exc:
+            try:
+                note=f'Failure receipt save failed: {type(save_exc).__name__}: {save_exc}'
+                add_note=getattr(exc,'add_note',None)
+                if callable(add_note):
+                    add_note(note)
+                else:
+                    exc.failure_receipt_save_error=note
+            except BaseException:
+                pass  # Best-effort diagnostics must never replace the original failure.
+
         raise
     return output

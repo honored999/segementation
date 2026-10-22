@@ -1,3 +1,7 @@
+## 2026-10-22 - Runtime GPU-util policy and old-Python diagnostics (branch-local)
+- Accepted six-file manual fix: startup busy gate retained; runtime whole-card GPU-util finite0..100 recorded only. CPU/RAM/global VRAM caps, startup12GiB, RAM/identity and fixed allocator retained. Structured failure snapshot/rules and protected add_note fallback preserve original errors; historical failure trigger UNKNOWN.
+- Worker reported18 focused CPU passes,2 strengthened injection passes,2 compatibility passes7.78s; parent inspected exact11-file manifest b869ac28fddcc5ac96c4b64e10095340b630efd859142d8ea3711358e1ff70ce and diff. No broad rerun, parent source/test edits or new independent review; real CUDA/old interpreter NOT_RUN.
+- Next publish repair branch and fresh3-unit complete/checkpoint verification before approved80epochs. Preserve failed outputs, no resume. Main checkout and canonical master unchanged.
 ## 2026-10-22 - Resident VRAM admission fix (branch-local)
 - Actual preflight1 unit completed then startup12GiB free rule rejected model-resident boundary. Scoped startup/between_units checks, fixed initial allocator and numeric failure diagnostics;80% and training semantics retained. Parent source/test unchanged.
 - Worker8 focused CPU passed13.47s; parent6 task files/final11 manifest/diff accepted without large rerun. Real3-unit retry pending, trial01 failed preserved; next fresh trial02 before approved80epochs. Canonical master unchanged.

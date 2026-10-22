@@ -29,7 +29,7 @@ Check hashes provenance/masks and estimates memory; it does not load patient ima
 python -m experiments.genseg_joint.joint_cli train --strategy "%STRATEGY%" --source "%SOURCE%" --raw-root "%nnUNet_raw%" --baseline-run "%BASELINE%" --targets "%TARGETS%" --targets-sha256 "%TARGET_SHA%" --output "%JOINT%" --gpu 1 --pretrained-run "%GD20%" --pretrained-sha256 "%GD20_SHA%" --cache-budget-bytes %CACHE_BYTES% --loader-workspace-bytes %LOADER_WORKSPACE_BYTES% --model-reserve-bytes %MODEL_RESERVE_BYTES% --epochs 80
 ```
 
-Only physicalGPU1 by default, bound once by UUID before CUDA initialization. One selected-card nvidia-smi query at a unit boundary; primed nonblocking CPU delta, immediate RAM and strict telemetry failures. No busy sleeps, empty_cache, retry or OOM continuation. Guard is a boundary external-load/headroom check, not a continuous GPU utilization limiter. Other cards do not gate this card.
+Only physicalGPU1 by default, bound once by UUID before CUDA initialization. One selected-card nvidia-smi query at a unit boundary; primed nonblocking CPU delta, immediate RAM and strict telemetry failures. No busy sleeps, empty_cache, retry or OOM continuation. Guard checks boundary resource headroom and identity. GPU utilization is a whole-card sample and cannot attribute self/other-process work; the GPU is not exclusive. Startup busy checks, live memory changes, identity gates and failure protection remain active. Other cards do not gate this card.
 
 Real sampling keeps all valid inner61 slices, including negatives, with old patient/plane rule and its RNG sequence. Independent seeded RNG uniformly samples inner61 positive planes and independent xy flips; label/condition/ignore stay aligned. No size stratification, small-lesion threshold, or demonstrated small-lesion improvement. Inner15 affects alpha through architecture loss only; it is not an independent holdout generalization result. Outer19 remains development validation and is never read as arrays here. Historical76-derived fill/preprocessing is disclosed, not refit.
 
@@ -52,7 +52,7 @@ After a future approved production preflight, collect live BN/Adam/alpha state, 
 
 B1/B2 follow-up: joint snapshot accepts audited Blosc2 source headers only; NPZ/NPY source backends and unaudited dtypes are explicitly refused before loading. check reports final_cache_estimated_bytes, max_case_load_transient_bytes, loader_workspace_reserve_bytes, model_reserve_bytes and startup_required_bytes. Startup required = final cache + maximum additional case transient + model reserve. Before each case the live resource guard reserves remaining final cache (subtracting actual cached nbytes), current case transient and model reserve; after each load it samples resources again. The explicit cache budget limits permanent owned arrays, not all RAM. External codec/pickle workspace and real production model peaks remain UNKNOWN, even with reserves.
 
-Known limitation: nvidia-smi utilization at a unit boundary can include the preceding unit's own work and stop a high-throughput run at >=80%. Threshold, no-wait/no-retry policy unchanged. Observe this during a separately authorized short real preflight; no mitigation or server run is authorized here.
+Runtime GPU utilization can include the preceding unit's work. It is validated as finite 0..100 and recorded only; startup still rejects >=80%. CPU/RAM/global VRAM caps are unchanged. No server run is authorized here.
 
 
 ## Real epoch budget (2026-10-21)
@@ -86,14 +86,23 @@ telemetry/UUID, CPU/RAM/GPU utilization and global VRAM usage <80%, projected RA
 headroom, and a finite positive initial allocator fraction. The initial fraction
 is fixed and set once; resident memory is never subtracted from global usage.
 After model construction and at synchronized unit boundaries with prior temporary
-inputs released, between_units retains all these resource/identity checks except
-the startup 12 GiB free-VRAM requirement. Global VRAM usage still must be <80%.
-No empty_cache, wait, retry, utilization relaxation, or legacy-path change.
-Failure messages include phase, selected index/UUID, total/used/free GiB and rule.
+inputs released, between_units retains CPU/RAM/global VRAM <80%, projected RAM/headroom and
+telemetry/UUID checks. It drops the startup 12 GiB free-VRAM requirement;
+GPU utilization must remain finite in 0..100 but is recorded only. Global VRAM usage still must be <80%.
+No empty_cache, wait, retry or legacy-path change. Runtime compute-utilization
+policy explicitly changes; memory and startup busy protection remain unchanged.
+Failure messages and failed.json resource_snapshot include phase, CPU and sample
+interval, RAM usage/available/total/reserve, GPU utilization, total/used/free GiB,
+global VRAM percent, index/UUID and violated_rules. Unavailable/invalid numeric
+telemetry is null with telemetry_reason and fails closed. Receipt save errors
+are attached to the original exception and never replace it.
 
 Preserve failed preflight3_trial01 as failed evidence: only one unit completed,
 not CUDA OOM and not a completed three-unit preflight. It cannot resume. Parent
 acceptance/publication precedes a separate new-directory preflight3_trial02
 three-unit retry; only then assess the retained 80-epoch approval. This repair
 ran no real CUDA, training, or retry. Later peaks and utilization-window effects
-remain unverified; a prior unit can still cause the unchanged >=80% util gate.
+remain unverified. Whole-card runtime utilization cannot identify other-process
+load and offers no exclusivity guarantee. Preserve existing failed runs without
+backfilling telemetry; historical CPU/RAM/GPU-util cause remains unknown.
+The approved 80-epoch budget remains; no automatic resume from failed runs.

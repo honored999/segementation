@@ -1,4 +1,5 @@
 """New joint-only resource guard: one selected GPU query and primed CPU delta."""
+import json
 import csv
 import math
 import os
@@ -25,47 +26,75 @@ class ResourceGuard:
         require(phase in ('startup','between_units'),'Unknown resource phase')
         require(phase=='startup' or self.allocator_fraction is not None,'Startup resource sample required')
         require(type(reserve_bytes) is int and reserve_bytes>=0,'Nonnegative RAM reserve required')
-        now=time.perf_counter()
-        cpu=self.initial_cpu if self.initial else self.psutil.cpu_percent(interval=None)
-        interval=self.startup_interval if self.initial else now-self.last_sample
-        self.initial=False; self.last_sample=now
-        ram=self.psutil.virtual_memory()
-        result=subprocess.run(['nvidia-smi','-i',str(self.index),
-            '--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total',
-            '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True)
-        rows=list(csv.reader(result.stdout.strip().splitlines()))
-        context=f'phase={phase} selected_index={self.index} selected_uuid={self.uuid} total_gib=unavailable used_gib=unavailable free_gib=unavailable rule=valid_selected_gpu_telemetry'
-        require(len(rows)==1 and len(rows[0])==5,'Selected GPU telemetry unavailable; '+context)
-        idx,uid,util,used,total=[v.strip() for v in rows[0]]
+        snapshot=dict(phase=phase,cpu_pct=None,cpu_sample_interval_seconds=None,
+            ram_used_pct=None,ram_available=None,ram_total_bytes=None,reserve_bytes=reserve_bytes,
+            ram_min_free_bytes=self.min_ram,gpu_index=self.index,gpu_uuid=None,
+            gpu_util_pct=None,vram_total_gib=None,vram_used_gib=None,vram_free_gib=None,
+            global_vram_pct=None,violated_rules=[],telemetry_reason=None)
+        def number(value):
+            try:
+                value=float(value)
+                return value if math.isfinite(value) else None
+            except (ValueError,TypeError): return None
+        def check(ok,rule):
+            if not ok: snapshot['violated_rules'].append(rule)
         try:
-            util,used,total=float(util),float(used),float(total)
+            now=time.perf_counter()
+            cpu=self.initial_cpu if self.initial else self.psutil.cpu_percent(interval=None)
+            interval=self.startup_interval if self.initial else now-self.last_sample
+            self.initial=False; self.last_sample=now
+            snapshot.update(cpu_pct=number(cpu),cpu_sample_interval_seconds=number(interval))
+            ram=self.psutil.virtual_memory()
+            snapshot.update(ram_used_pct=number(ram.percent),ram_available=number(ram.available),
+                ram_total_bytes=number(ram.total))
+            result=subprocess.run(['nvidia-smi','-i',str(self.index),
+                '--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total',
+                '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True)
+            rows=list(csv.reader(result.stdout.strip().splitlines()))
+            require(len(rows)==1 and len(rows[0])==5,'Selected GPU telemetry unavailable')
+            idx,uid,util,used,total=[v.strip() for v in rows[0]]
+            util,used,total=number(util),number(used),number(total)
+            snapshot.update(gpu_uuid=uid or None,gpu_util_pct=util,
+                vram_used_gib=None if used is None else used/1024,
+                vram_total_gib=None if total is None else total/1024,
+                vram_free_gib=None if used is None or total is None else (total-used)/1024,
+                global_vram_pct=None if used is None or total is None or total<=0 else 100*used/total)
             selected=int(idx)
-        except ValueError as exc:
-            raise ValueError('Invalid resource telemetry; '+context) from exc
-        context=(f'phase={phase} selected_index={self.index} selected_uuid={uid} '
-            f'total_gib={total/1024:.6f} used_gib={used/1024:.6f} free_gib={(total-used)/1024:.6f} '
-            f'rule=CPU_RAM_GPU_util_global_VRAM<80%; RAM_headroom; '
-            f"{'startup_free_VRAM>=12GiB; finite_positive_initial_allocator' if phase=='startup' else 'between_units_no_12GiB_requirement; fixed_startup_allocator'}")
-        require(selected==self.index and uid and all(math.isfinite(v) and v>=0 for v in (cpu,util,used,total))
-            and cpu<=100 and util<=100 and total>0 and used<=total and interval>0,'Invalid resource telemetry; '+context)
-        require(cpu<80 and math.isfinite(ram.percent) and ram.percent<80 and util<80 and 100*used/total<80,
-            '80 percent resource guard refused; '+context)
-        require(ram.total>0 and ram.available>=0 and ram.available<=ram.total and
-            100*(ram.total-ram.available+reserve_bytes)/ram.total<80 and
-            ram.available-reserve_bytes>=self.min_ram,'Insufficient projected snapshot/model RAM headroom; '+context)
-        if phase=='startup':
-            require((total-used)*1024**2>=self.min_vram,'Insufficient VRAM headroom; '+context)
-        require(self.uuid is None or uid==self.uuid,'Selected GPU UUID changed; '+context)
-        fraction=self.allocator_fraction
-        if fraction is None:
-            fraction=.79-used/total
-        require(math.isfinite(fraction) and fraction>0,
-                'Nonpositive/nonfinite CUDA allocator fraction; insufficient allocator headroom; '+context)
+            cpu=snapshot['cpu_pct']; interval=snapshot['cpu_sample_interval_seconds']
+            require(all(v is not None for v in (cpu,interval,util,used,total,
+                snapshot['ram_used_pct'],snapshot['ram_available'],snapshot['ram_total_bytes']))
+                and selected==self.index and bool(uid) and 0<=cpu<=100 and 0<=util<=100
+                and total>0 and 0<=used<=total and interval>0 and 0<=ram.percent<=100
+                and ram.total>0 and 0<=ram.available<=ram.total,'Invalid resource telemetry')
+        except Exception as exc:
+            snapshot['telemetry_reason']=str(exc)
+            snapshot['violated_rules'].append('valid_selected_gpu_telemetry')
+        if not snapshot['violated_rules']:
+            check(cpu<80,'cpu_pct<80')
+            check(ram.percent<80,'ram_used_pct<80')
+            if phase=='startup': check(util<80,'gpu_util_pct<80')
+            check(100*used/total<80,'global_vram_pct<80')
+            check(100*(ram.total-ram.available+reserve_bytes)/ram.total<80,'projected_ram_pct<80')
+            check(ram.available-reserve_bytes>=self.min_ram,'RAM_headroom')
+            if phase=='startup': check((total-used)*1024**2>=self.min_vram,'startup_free_VRAM>=12GiB')
+            check(self.uuid is None or uid==self.uuid,'selected_gpu_uuid_unchanged')
+            fraction=self.allocator_fraction if self.allocator_fraction is not None else .79-used/total
+            check(math.isfinite(fraction) and fraction>0,'finite_positive_initial_allocator')
+        context=(f'phase={phase} selected_index={self.index} selected_uuid={snapshot["gpu_uuid"]} '
+            f'total_gib={snapshot["vram_total_gib"]} used_gib={snapshot["vram_used_gib"]} free_gib={snapshot["vram_free_gib"]}; '
+            + ('startup_free_VRAM>=12GiB; GPUutil<80' if phase=='startup' else
+               'between_units_no_12GiB_requirement; GPUutil_record_only_whole_card_sample_cannot_attribute_self_or_others')
+            + '; CPU_RAM_global_VRAM<80%; RAM_headroom; fixed_startup_allocator')
+        if snapshot['violated_rules']:
+            label=('Invalid resource telemetry' if snapshot['telemetry_reason'] else
+                'Selected GPU UUID changed' if 'selected_gpu_uuid_unchanged' in snapshot['violated_rules'] else
+                '80 percent resource guard refused or insufficient allocator/headroom')
+            exc=ValueError(label+'; '+context+'; snapshot='+json.dumps(snapshot,allow_nan=False))
+            exc.resource_snapshot=snapshot
+            raise exc
         self.uuid=uid
         self.allocator_fraction=fraction
-        return dict(phase=phase,cpu_pct=cpu,cpu_sample_interval_seconds=interval,ram_used_pct=ram.percent,
-            ram_available=ram.available,reserve_bytes=reserve_bytes,gpu_index=self.index,gpu_uuid=uid,
-            gpu_util_pct=util,vram_used_mib=used,vram_total_mib=total,allocator_fraction=fraction,
+        return dict(snapshot,vram_used_mib=used,vram_total_mib=total,allocator_fraction=fraction,
             policy=context+'; no_wait_no_retry_no_empty_cache')
 
     def bind(self):

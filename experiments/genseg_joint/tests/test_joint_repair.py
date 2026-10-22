@@ -310,7 +310,7 @@ def test_transition_wrong_hash_no_weight_load(monkeypatch):
     with pytest.raises(ValueError,match='pinned'): audit_transition(None,'missing','a'*64)
 
 
-@pytest.mark.parametrize('epochs',[None,2])
+@pytest.mark.parametrize('epochs',[None,2,'resource_failure','save_failure','save_failure_legacy'])
 def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epochs):
     from experiments.genseg_joint import joint_runtime as rt,joint_checkpoint as cp,models,preview
     from experiments.genseg30.contract import sha256,read_json
@@ -320,12 +320,35 @@ def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epo
     pre=tmp_path/'pretrain'; pre.mkdir(); (pre/'gan.pt').write_bytes(b'fixture'); (pre/'complete.json').write_text('{}')
     # Hardware, large checkpoint transition and model size replaced; production snapshot/engine/save/audits execute.
     monkeypatch.setattr(rt,'audit_transition',lambda *a:None)
-    phases=[]; allocator_calls=[]; syncs=[]
+    phases=[]; allocator_calls=[]; syncs=[]; original_errors=[]
+    class LegacyResourceError(ValueError):
+        def __getattribute__(self,name):
+            if name=='add_note': raise AttributeError(name)
+            return super().__getattribute__(name)
     class Guard:
         def __init__(self,*a): pass
         def __call__(self,*a,phase='startup'):
             phases.append(phase)
-            if phase=='between_units': assert syncs
+            if phase=='between_units':
+                assert syncs
+                if epochs in ('resource_failure','save_failure','save_failure_legacy'):
+                    from experiments.genseg_joint import joint_resources as resources
+                    import sys
+                    ps=SimpleNamespace(cpu_percent=lambda interval:80.,virtual_memory=lambda:SimpleNamespace(
+                        percent=20.,total=100*1024**3,available=80*1024**3))
+                    with monkeypatch.context() as m:
+                        m.setitem(sys.modules,'psutil',ps)
+                        m.setattr(resources.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout='1, GPU-one, 100, 23713, 32607'))
+                        guard=resources.ResourceGuard(1); guard.allocator_fraction=.1; guard.uuid='GPU-one'
+                        try:
+                            guard(phase=phase)
+                        except ValueError as exc:
+                            if epochs=='save_failure_legacy':
+                                legacy=LegacyResourceError(*exc.args)
+                                legacy.resource_snapshot=exc.resource_snapshot
+                                exc=legacy.with_traceback(exc.__traceback__)
+                            original_errors.append((exc,exc.args,exc.resource_snapshot,exc.__traceback__))
+                            raise exc
             return dict(allocator_fraction=.1,gpu_uuid='CPU-fixture')
         def bind(self): pass
     monkeypatch.setattr(rt,'ResourceGuard',Guard)
@@ -352,6 +375,37 @@ def test_new_runtime_check_load_save_preview_cpu(tmp_path,monkeypatch,capsys,epo
     monkeypatch.setattr(data,'pad_plane',lambda a,*args:a.copy())
     assert rt.check(target,pre,PRETRAIN_SHA,100000,1024,1024)['arrays_loaded'] is False
     output=tmp_path/'joint'
+    if epochs in ('resource_failure','save_failure','save_failure_legacy'):
+        original_write=rt.write_json
+        def write(path,payload):
+            if path.name=='failed.json' and epochs in ('save_failure','save_failure_legacy'): raise OSError('injected receipt failure')
+            return original_write(path,payload)
+        monkeypatch.setattr(rt,'write_json',write)
+        with pytest.raises(ValueError,match='cpu_pct.*80') as caught:
+            rt.run(target,output,pretrained_run=pre,pretrained_sha256=PRETRAIN_SHA,steps=2,gpu=1,
+                cache_budget_bytes=100000,model_reserve_bytes=1024,loader_workspace_bytes=1024)
+        original,args,snapshot,tb=original_errors[0]
+        assert caught.value is original and caught.value.args==args
+        assert caught.value.resource_snapshot is snapshot
+        frames=[]; current=caught.value.__traceback__
+        while current is not None:
+            frames.append(current); current=current.tb_next
+        assert any(frame is tb for frame in frames)
+        assert snapshot['phase']=='between_units' and snapshot['cpu_pct']==80.
+        if epochs=='save_failure':
+            assert any('injected receipt failure' in note for note in caught.value.__notes__)
+        elif epochs=='save_failure_legacy':
+            assert 'injected receipt failure' in caught.value.failure_receipt_save_error
+        assert not (output/'complete.json').exists()
+        if epochs=='resource_failure':
+            failure=read_json(output/'failed.json')
+            snap=failure['resource_snapshot']
+            assert snap['phase']=='between_units' and snap['violated_rules']==['cpu_pct<80']
+            assert snap['cpu_pct']==80. and snap['gpu_util_pct']==100.
+            assert snap['gpu_uuid']=='GPU-one' and snap['vram_used_gib']==23713/1024
+            assert snap['ram_available']==80*1024**3 and snap['cpu_sample_interval_seconds']>0
+            assert failure['completed_steps']==0 and failure['complete'] is False
+        return
     rt.run(target,output,pretrained_run=pre,pretrained_sha256=PRETRAIN_SHA,steps=2 if epochs is None else None,epochs=epochs,gpu=1,
         cache_budget_bytes=100000,model_reserve_bytes=1024,loader_workspace_bytes=1024)
     receipt=read_json(output/'complete.json'); payload=torch.load(output/'joint.pt',weights_only=True)
@@ -555,5 +609,50 @@ def test_resource_guard_resident_phase(monkeypatch):
     with pytest.raises(ValueError,match='UUID changed.*phase=between_units'):
         g(phase='between_units')
     uid[0]='GPU-one'; util[0]=80.
-    with pytest.raises(ValueError,match='80 percent'):
-        g(phase='between_units')
+    assert g(phase='between_units')['gpu_util_pct']==80.
+    util[0]=100.
+    assert g(phase='between_units')['gpu_util_pct']==100.
+    for invalid in (-1.,101.,float('nan'),float('inf'),'N/A'):
+        util[0]=invalid
+        with pytest.raises(ValueError,match='telemetry'): g(phase='between_units')
+
+
+@pytest.mark.parametrize('field,value,rule',[
+    ('util',80.,'gpu_util_pct<80'),('util',100.,'gpu_util_pct<80'),
+    ('cpu',80.,'cpu_pct<80'),('ram',80.,'ram_used_pct<80'),
+    ('used',26214.4,'global_vram_pct<80'),('util',float('nan'),'valid_selected_gpu_telemetry'),
+    ('util',101.,'valid_selected_gpu_telemetry'),('uid','GPU-other','selected_gpu_uuid_unchanged'),
+    ('util','N/A','valid_selected_gpu_telemetry')])
+def test_resource_failure_snapshot(monkeypatch,field,value,rule):
+    from experiments.genseg_joint import joint_resources as r
+    import sys
+    values=dict(cpu=2.,ram=20.,util=2.,used=100.,uid='GPU-one')
+    ps=SimpleNamespace(cpu_percent=lambda interval:values['cpu'],virtual_memory=lambda:SimpleNamespace(
+        percent=values['ram'],total=100*1024**3,available=80*1024**3))
+    monkeypatch.setitem(sys.modules,'psutil',ps)
+    monkeypatch.setattr(r.subprocess,'run',lambda *a,**k:SimpleNamespace(
+        stdout=f"1, {values['uid']}, {values['util']}, {values['used']}, 32768"))
+    g=r.ResourceGuard(1); g(); values[field]=value
+    phase='startup' if field=='util' and value in (80.,100.) else 'between_units'
+    with pytest.raises(ValueError) as caught: g(phase=phase)
+    snap=caught.value.resource_snapshot
+    assert snap['phase']==phase and rule in snap['violated_rules']
+    assert snap['cpu_pct']==values['cpu'] and snap['ram_used_pct']==values['ram']
+    assert snap['vram_total_gib']==32 and snap['gpu_uuid']==values['uid']
+    if field=='util' and (value=='N/A' or not __import__('math').isfinite(float(value))):
+        assert snap['gpu_util_pct'] is None and snap['telemetry_reason']
+    __import__('json').dumps(snap,allow_nan=False)
+
+
+def test_resource_missing_telemetry_snapshot(monkeypatch):
+    from experiments.genseg_joint import joint_resources as r
+    import sys
+    ps=SimpleNamespace(cpu_percent=lambda interval:2.,virtual_memory=lambda:SimpleNamespace(
+        percent=20.,total=100*1024**3,available=80*1024**3))
+    monkeypatch.setitem(sys.modules,'psutil',ps)
+    monkeypatch.setattr(r.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout=''))
+    with pytest.raises(ValueError) as caught: r.ResourceGuard(1)()
+    snap=caught.value.resource_snapshot
+    assert snap['gpu_util_pct'] is None and snap['vram_total_gib'] is None
+    assert snap['telemetry_reason'] and snap['violated_rules']==['valid_selected_gpu_telemetry']
+    assert snap['cpu_pct']==2. and snap['reserve_bytes']==0
