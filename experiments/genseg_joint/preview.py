@@ -206,14 +206,15 @@ def render(path,target,label,generated,scale,mode=None):
 
 
 def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase='joint'):
-    require(phase in ('joint','gan_pretrain','joint_repair'),'Invalid preview phase')
+    require(phase in ('joint','gan_pretrain','joint_repair','joint_nnunet'),'Invalid preview phase')
     checkpoint_file='gan.pt' if phase=='gan_pretrain' else 'joint.pt'
     require(type(patient_limit) is int and 1<=patient_limit<=61,'Patient limit must be 1..61')
     run=Path(run).resolve()
     output=check_output(output,list(target.protected)+[run])
     target.require_no_unpack_writes()
-    if phase=='joint_repair':
-        from .joint_checkpoint import audit_joint as auditor
+    if phase in ('joint_repair','joint_nnunet'):
+        from .joint_checkpoint import audit_joint as repair_auditor
+        auditor=lambda *a:repair_auditor(*a,nnunet=phase=='joint_nnunet')
     else:
         auditor=audit_joint if phase=='joint' else audit_gan
     receipt,identities=auditor(target,run,checkpoint_sha256)
@@ -228,10 +229,10 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase=
     require(not torch.cuda.is_initialized(),'GPU binding must precede CUDA initialization')
     require(torch.cuda.is_available(),'CUDA-enabled PyTorch required')
     torch.cuda.set_per_process_memory_fraction(initial['allocator_fraction'],0)
-    if phase=='joint_repair':
+    if phase in ('joint_repair','joint_nnunet'):
         from .joint_checkpoint import validate_payload
         payload=load_checkpoint(run,'joint.pt',checkpoint_sha256)
-        validate_payload(payload,receipt)
+        validate_payload(payload,receipt,nnunet=phase=='joint_nnunet')
     else:
         loader=load_joint if phase=='joint' else load_gan
         payload=loader(run,checkpoint_sha256,receipt)
@@ -252,7 +253,7 @@ def run_preview(target,run,checkpoint_sha256,output,*,gpu,patient_limit=4,phase=
         planes,missing=select_planes(label[0]); patients.append({'patient':patient,'missing_categories':missing,
             'all_ignore_planes':np.flatnonzero(~(label[0]>=0).any(axis=(1,2))).tolist()})
         for z,category in planes:
-            if phase=='joint_repair' and not bool((label[0,z]==1).any()):
+            if phase in ('joint_repair','joint_nnunet') and not bool((label[0,z]==1).any()):
                 continue
             generated,pad=generate(generator,label[0,z],scale)
             filename=f'{patient}_z{z:04d}_{category}.png'

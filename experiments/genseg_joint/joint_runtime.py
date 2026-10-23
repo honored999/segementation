@@ -13,7 +13,7 @@ from .joint_resources import ResourceGuard
 from .runtime import implementation_identity
 
 
-def check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes):
+def check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes,*,nnunet=False):
     from .data import inner_split
     audit_transition(target,pretrained_run,pretrained_sha256)
     split=inner_split(target.train,target.val,20261018)
@@ -21,19 +21,26 @@ def check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_work
     plan=cache_plan(target,split['train']+split['validation'],loader_workspace_bytes)
     estimate=plan['final_cache_estimated_bytes']
     require(estimate<=cache_budget_bytes,'Snapshot estimate exceeds explicit RAM budget')
-    return dict(strategy=STRATEGY,cache_estimated_bytes=estimate,cache_budget_bytes=cache_budget_bytes,
+    extra={}
+    if nnunet:
+        from .nnunet_s import from_source,padded_shape,STRATEGY as nn_strategy
+        descriptor=from_source(target.original)
+        shapes={p:list(padded_shape(descriptor,v['shape'][-2:])) for p,v in plan['cases'].items()}
+        extra=dict(s_descriptor=descriptor,padded_shapes=shapes)
+    return dict(**extra,strategy=nn_strategy if nnunet else STRATEGY,cache_estimated_bytes=estimate,cache_budget_bytes=cache_budget_bytes,
         **{k:v for k,v in plan.items() if k!='cases'},model_reserve_bytes=model_reserve_bytes,
         startup_required_bytes=estimate+plan['max_case_load_transient_bytes']+model_reserve_bytes,
         model_peak='UNKNOWN; explicit reserve and live guard required; no peak guarantee',
         arrays_loaded=False,weights_loaded=False,training_started=False)
 
 
-def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes):
+def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes,nnunet=False):
     require((steps is None)!=(epochs is None),'Choose exactly one of steps or epochs')
     budget=steps if epochs is None else epochs
     require(type(budget) is int and budget>0,'Explicit positive unit/epoch budget required')
     require(type(model_reserve_bytes) is int and model_reserve_bytes>0,'Explicit conservative model/optimizer/higher-order RAM reserve required')
-    check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes)
+    admission=check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes,nnunet=nnunet)
+    descriptor=admission.get("s_descriptor")
     output=check_output(output,list(target.protected)+[Path(pretrained_run)])
     guard=ResourceGuard(gpu)
     initial=guard(model_reserve_bytes)
@@ -59,9 +66,10 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
         steps=epochs*len(real_sampler.planes)
     source=source_identity()
     code=implementation_identity()
-    protocol=dict(POLICY,steps=steps,split=cohort.split,scaling=scale,source=source,
+    from .joint_checkpoint import nn_policy
+    protocol=dict(nn_policy() if nnunet else POLICY,steps=steps,split=cohort.split,scaling=scale,source=source,
         target_identity=target.identity,target_manifest_sha256=target.manifest_sha256,
-        model_config={'G':{'width':64,'downs':8,'seed':20261018},'S':'pinned_author_UNet(1,1,bilinear=False)'},
+        model_config={'G':{'width':64,'downs':8,'seed':20261018},'S':descriptor if nnunet else 'pinned_author_UNet(1,1,bilinear=False)'},
         pretrained_sha256=pretrained_sha256,pretrained_run=str(Path(pretrained_run).resolve()),
         implementation_files_sha256=code,initial_resources=initial,
         repository_commit=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip(),
@@ -70,6 +78,14 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
         inherited_preprocessing='old76_target_fill_and_original_grid_not_refit; outer19_development_not_independent_test',
         selection='last_complete_unit; no_external19_arrays_or_metrics; no_resume',
         small_lesions='positive_only_not_size_balanced; no_small_lesion_improvement_claim')
+    if nnunet:
+        protocol.update(run_purpose='engineering_unit_preflight' if epochs is None else 'controlled_epoch_trial_not_formal',
+            s_initialization=descriptor['initialization'],s_normalizer=descriptor['normalizer'],
+            s_parameter_count=descriptor['parameter_count'],padding='bottom_right_zero_image_ignore_label_lcm256_actual_strides',
+            checkpoint_selection='final_only_no_best_no_early_stop_no_resume',model_peak='UNKNOWN')
+        print(json.dumps(dict(S=descriptor['kind'],normalizer=descriptor['normalizer'],
+            initialization=descriptor['initialization'],parameter_count=descriptor['parameter_count'],
+            versions=descriptor['runtime']['versions'],epochs=epochs,units=steps,model_peak='UNKNOWN')),flush=True)
     if real_sampler is not None:
         protocol.update(epochs=epochs,total_valid_planes=len(real_sampler.planes),
             real_sampling='inner61_valid_planes_without_replacement_including_negatives',
@@ -88,7 +104,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
     rng=np.random.default_rng(20261018); random.seed(20261018); torch.manual_seed(20261018)
     try:
         full_audit(); guard(model_reserve_bytes)
-        g,d,s=create_models(seed=20261018,device='cuda:0')
+        g,d,s=create_models(seed=20261018,device='cuda:0',s_descriptor=descriptor) if nnunet else create_models(seed=20261018,device='cuda:0')
         load_transition(target,pretrained_run,pretrained_sha256,g,d,scale)
         engine=RepairJointEngine(g,d,s)
         with (output/'steps.jsonl').open('x',encoding='utf-8') as log:
@@ -102,6 +118,9 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
                 fy,fr=sampler.next(scale)
                 arrays=[torch.from_numpy(np.ascontiguousarray(a)).to('cuda:0') for a in (tx,ty,vx,vy,fy)]
                 sample_wall=time.perf_counter()-start
+                if nnunet:
+                    from .nnunet_s import pad_unit
+                    arrays=pad_unit(arrays,descriptor)
                 metrics=engine.step(*arrays)
                 start=time.perf_counter(); torch.cuda.synchronize(); sync_wall=time.perf_counter()-start
                 entry=dict(step=index+1,train=tr,internal_validation=vr,fake_mask=fr,resources_before=resources,

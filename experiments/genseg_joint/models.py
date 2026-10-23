@@ -82,10 +82,14 @@ def author_unet():
             sys.modules.pop(key,None)
 
 
-def create_models(*,width=64,downs=8,discriminator_width=64,seed=20261018,device='cpu'):
+def create_models(*,width=64,downs=8,discriminator_width=64,seed=20261018,device='cpu',s_descriptor=None):
     source_identity()
     torch.manual_seed(seed)
     g=Generator(width,downs,seed,device)
     d=g.discriminator(discriminator_width)
-    s=author_unet().to(device)
+    if s_descriptor is None:
+        s=author_unet().to(device)
+    else:
+        from .nnunet_s import build
+        s=build(s_descriptor,device)
     return g,d,s

@@ -5,6 +5,7 @@ from pathlib import Path
 from experiments.genseg30.contract import require,Source,check_output
 from .runtime import TARGET_SHA256
 from .joint_repair import STRATEGY
+from .nnunet_s import STRATEGY as NN_STRATEGY
 from .cli import positive,digest
 
 
@@ -13,7 +14,7 @@ def parser():
     sub=p.add_subparsers(dest='command',required=True)
     for name in ('check','train','preview'):
         a=sub.add_parser(name)
-        a.add_argument('--strategy',required=True,choices=[STRATEGY])
+        a.add_argument('--strategy',required=True,choices=[STRATEGY,NN_STRATEGY])
         for field in ('source','raw-root','targets','baseline-run','output'):
             a.add_argument('--'+field,required=True,type=Path)
         a.add_argument('--targets-sha256',default=TARGET_SHA256,choices=[TARGET_SHA256])
@@ -47,14 +48,14 @@ def main(argv=None):
     check_output(a.output,protected)
     if a.command=='check':
         from .joint_runtime import check
-        print(json.dumps(check(target,a.pretrained_run,a.pretrained_sha256,a.cache_budget_bytes,a.loader_workspace_bytes,a.model_reserve_bytes),allow_nan=False))
+        print(json.dumps(check(target,a.pretrained_run,a.pretrained_sha256,a.cache_budget_bytes,a.loader_workspace_bytes,a.model_reserve_bytes,nnunet=a.strategy==NN_STRATEGY),allow_nan=False))
     elif a.command=='train':
         from .joint_runtime import run
         run(target,a.output,pretrained_run=a.pretrained_run,pretrained_sha256=a.pretrained_sha256,
-            steps=a.steps,epochs=a.epochs,gpu=a.gpu,cache_budget_bytes=a.cache_budget_bytes,model_reserve_bytes=a.model_reserve_bytes,loader_workspace_bytes=a.loader_workspace_bytes)
+            steps=a.steps,epochs=a.epochs,gpu=a.gpu,cache_budget_bytes=a.cache_budget_bytes,model_reserve_bytes=a.model_reserve_bytes,loader_workspace_bytes=a.loader_workspace_bytes,nnunet=a.strategy==NN_STRATEGY)
     else:
         from .preview import run_preview
-        run_preview(target,a.run,a.checkpoint_sha256,a.output,gpu=a.gpu,patient_limit=a.patient_limit,phase='joint_repair')
+        run_preview(target,a.run,a.checkpoint_sha256,a.output,gpu=a.gpu,patient_limit=a.patient_limit,phase='joint_nnunet' if a.strategy==NN_STRATEGY else 'joint_repair')
     return 0
 
 

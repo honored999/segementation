@@ -31,6 +31,11 @@ class RepairJointEngine:
         require(getattr(generator, 'pretrain_strategy', None) == 'adam_trainbn_epoch_v1',
                 'New joint strategy requires audited repair G/D weights')
         self.g, self.d, self.s = generator, discriminator, segmenter
+        self.s_descriptor=getattr(segmenter,'genseg_s_descriptor',None)
+        if self.s_descriptor is not None:
+            from .nnunet_s import audit_norm, STRATEGY as NN_STRATEGY
+            audit_norm(segmenter,self.s_descriptor)
+            self.strategy=NN_STRATEGY
         self.steps = 0
         self.poisoned = False
         self.failure_stage = None
@@ -103,13 +108,19 @@ class RepairJointEngine:
                 fake = self.g.net((fake_label == 1).to(real.dtype))
                 fake = fake * (fake_label >= 0).to(real.dtype)
             self.s.train()
+            owned=self.s_optimizer.param_groups
+            require(len(owned)==1 and len(owned[0]['params'])==len(list(self.s.parameters())) and
+                all(a is b for a,b in zip(owned[0]['params'],self.s.parameters())), 'S Adam parameter ownership changed')
             loss = segmentation_loss(self.s(real), label) + segmentation_loss(self.s(fake), fake_label)
             require(bool(torch.isfinite(loss)), 'Nonfinite S loss')
-            grads = torch.autograd.grad(loss, tuple(self.s.parameters()))
-            require(all(bool(torch.isfinite(v).all()) for v in grads), 'Nonfinite S gradient')
+            inactive=set(getattr(self.s,'genseg_inactive_parameters',()))
+            grads = torch.autograd.grad(loss, tuple(self.s.parameters()),allow_unused=bool(inactive))
+            require(all((v is None)==(k in inactive) for k,v in zip(dict(self.s.named_parameters()),grads)),
+                'Unexpected disconnected/active actual S parameter')
+            require(all(bool(torch.isfinite(v).all()) for v in grads if v is not None), 'Nonfinite S gradient')
             self.s_optimizer.zero_grad(set_to_none=True)
             for p, grad in zip(self.s.parameters(), grads):
-                p.grad = grad.detach()
+                p.grad = None if grad is None else grad.detach()
             self.s_optimizer.step()
             with torch.no_grad():
                 alpha.copy_(new_alpha)
@@ -123,14 +134,17 @@ class RepairJointEngine:
                 count = {'G':1, 'D':3, 'S':2}[key]
                 require(all(int(net.state_dict()[k]) == v+count*next_step
                     for k,v in self.initial_bn[key].items()), 'Joint BN count mismatch '+key)
+            if self.s_descriptor is not None:
+                from .nnunet_s import audit_norm
+                audit_norm(self.s,self.s_descriptor)
             self.steps = next_step
             self.failure_stage = None
             timings['actual_S'] = time.perf_counter()-started
             return dict(metrics, s_loss=float(loss.detach()), alpha_gradient_norm=norm([ag]),
-                internal_validation_loss=validation_value, s_gradient_norm=norm(grads),
+                internal_validation_loss=validation_value, s_gradient_norm=norm([v for v in grads if v is not None]),
                 forwards={'virtual':{'G':2,'D':1,'S':3}, 'actual_train':{'G':1,'D':3,'S':2},
                           'actual_eval_auxiliary':{'G':1,'D':0,'S':0}},
-                bn_updates={'G':1,'D':3,'S':2}, stage_host_wall_seconds=timings,
+                bn_updates={'G':1,'D':3,'S':0 if self.s_descriptor is not None else 2}, stage_host_wall_seconds=timings,
                 timing_policy='host_enqueue_wall; CUDA execution/synchronization charged to unit boundary')
         except BaseException:
             self.poisoned = True

@@ -44,19 +44,19 @@ def require_outer19(identifiers):
     return expected
 
 
-def audit_receipt(run, digest=None):
-    """Metadata/hash admission only: no patient arrays, torch.load or models."""
+def audit_receipt(run, digest=None, *, nnunet=False):
+    """Metadata/hash admission: new S uses meta-only layout, no weight tensors."""
     run = Path(run).resolve(strict=True)
     require(not (run/'failed.json').exists(), 'Run has failed receipt; refused')
     receipt_path = checked_file(run,'complete.json')
     checkpoint = checked_file(run,'joint.pt')
     identities = capture_identities([receipt_path, checkpoint])
     r = read_json(receipt_path)
-    require(isinstance(r,dict) and r.get('complete') is True and r.get('format') == 2
-            and r.get('checkpoint') == 'joint.pt', 'Completed schema2 joint receipt required')
+    require(isinstance(r,dict) and r.get('complete') is True and r.get('format') == (3 if nnunet else 2)
+            and r.get('checkpoint') == 'joint.pt', 'Completed explicitly selected schema2/schema3 joint receipt required')
     digest = r.get('checkpoint_sha256') if digest is None else digest
     require(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest), 'Checkpoint SHA256 required in receipt')
-    p = r.get('protocol'); validate_protocol(p)
+    p = r.get('protocol'); validate_protocol(p,nnunet=nnunet)
     require(r.get('classification') == p['classification'] and
             type(r.get('steps')) is int and r['steps'] == p['steps'], 'Receipt step/classification mismatch')
     require(type(p.get('epochs')) is int and p['epochs'] == 80,
@@ -98,22 +98,26 @@ def restore_segmenter(values):
     return model
 
 
-def load_audited_segmenter(run, digest, *, target):
+def load_audited_segmenter(run, digest, *, target, nnunet=False):
     """Full existing schema/moments/BN audit before S construction; CPU only.
 
     Caller supplies the audited training metadata binding and preflights RAM.
     Joint schema, Adam, BN, alpha and same-descriptor loading remain unchanged.
     """
     from experiments.genseg_joint.preview import load_checkpoint
-    r, identities = audit_receipt(run,digest)
+    r, identities = audit_receipt(run,digest,nnunet=nnunet)
     from experiments.genseg_joint.joint_checkpoint import audit_joint
-    bound, bound_identities = audit_joint(target,run,digest)
+    bound, bound_identities = audit_joint(target,run,digest,nnunet=nnunet)
     require(bound == r, 'Bound target receipt changed')
     identities.update(bound_identities)
     payload = load_checkpoint(run,'joint.pt',digest)  # same descriptor, hash before/after, weights_only
     assert_identities(identities)
-    validate_payload(payload,r)  # preserve G/D/S, optimizer, alpha and BN validation
-    model = restore_segmenter(payload['S'])
+    validate_payload(payload,r,nnunet=nnunet)  # preserve G/D/S, optimizer, alpha and BN validation
+    if nnunet:
+        from experiments.genseg_joint.nnunet_s import restore
+        model=restore(payload['S'],payload['model_config']['S'])
+    else:
+        model = restore_segmenter(payload['S'])
     assert_identities(identities)
     require(sha256(Path(run)/'joint.pt') == digest, 'Checkpoint hash changed after restore')
     require(r['protocol']['implementation_files_sha256'] == implementation_identity(),
@@ -153,7 +157,13 @@ def infer_prepared_volume(model, normalized_image, *, valid_support, pad_multipl
     with torch.inference_mode():
         for z, plane in enumerate(image):
             if resource_guard is not None: resource_guard()
-            padded = pad_plane(plane,pad_multiple,0)
+            descriptor=getattr(model,'genseg_s_descriptor',None)
+            if descriptor is None:
+                padded = pad_plane(plane,pad_multiple,0)
+            else:
+                from experiments.genseg_joint.nnunet_s import padded_shape
+                h,w=padded_shape(descriptor,plane.shape,multiple=pad_multiple)
+                padded=np.pad(plane,((0,h-plane.shape[0]),(0,w-plane.shape[1])),constant_values=0)
             tensor = torch.from_numpy(np.ascontiguousarray(padded[None,None])).to(device)
             logits = model(tensor)
             require(logits.shape == tensor.shape and bool(torch.isfinite(logits).all()),
@@ -235,8 +245,9 @@ def source_files(pm, cm):
     return {str(p):sha256(p) for p in sorted(paths)}
 
 
-def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None):
-    """No patient arrays, external properties, label contents or models are read.
+def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None, *, nnunet=False):
+    """No patient arrays, external properties or label contents are read.
+    New S layout is checked on meta device without allocating model weights.
 
     This is a metadata binding for audit_joint, not TargetDataset reconstruction.
     Training target contents are pinned by the original manifest hash; they are
@@ -248,8 +259,11 @@ def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None):
     from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
     from nnunetv2.preprocessing.preprocessors.default_preprocessor import DefaultPreprocessor
     from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
-    receipt, identities = audit_receipt(run,digest)
+    receipt, identities = audit_receipt(run,digest,nnunet=nnunet)
     source = Source(source_folder,raw_root)
+    if nnunet:
+        from experiments.genseg_joint.nnunet_s import from_source
+        require(receipt['protocol']['model_config']['S']==from_source(source),'S factory differs from actual SOURCE plans/dataset/split')
     require_outer19(source.val)
     manifest_path = checked_file(targets,'targets.json')
     require(sha256(manifest_path) == TARGET_SHA256, 'Pinned target manifest mismatch')
@@ -283,13 +297,19 @@ def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None):
              Path(baseline)/'generator.json',checkpoint,weights,Path(run)/'complete.json',Path(run)/'joint.pt']
     identities.update(capture_identities(paths))
     hashes = {str(p):sha256(p) for p in paths}
-    code = source_files(pm,cm)
+    def inference_identity():
+        files=source_files(pm,cm)
+        if nnunet:
+            from experiments.genseg_joint.nnunet_s import runtime_source_files
+            files.update({str(p.resolve()):sha256(p) for p in runtime_source_files().values()})
+        return files
+    code = inference_identity()
     def verify(expected, full=True):
         require(expected == identity, 'Target metadata identity changed')
         assert_identities(identities)
         if full:
             require(all(sha256(p)==v for p,v in hashes.items()), 'Bound metadata/checkpoint changed')
-        require(source_files(pm,cm)==code and implementation_identity()==receipt['protocol']['implementation_files_sha256'],
+        require(inference_identity()==code and implementation_identity()==receipt['protocol']['implementation_files_sha256'],
                 'Inference/training sources changed')
     target = SimpleNamespace(train=source.train,val=source.val,identity=identity,
         manifest_sha256=TARGET_SHA256,verify_identity=verify)
@@ -304,6 +324,9 @@ def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None):
         fill=manifest['background_fill'],saved_scaling=receipt['protocol']['scaling'],
         frozen_protocol=PROTOCOL,training_target_arrays_reloaded=False,
         support_geometry=dict(plans=source.plans,plans_file=str(source.plans_path),configuration='2d'))
+    if nnunet:
+        audit.update(s_architecture=receipt['protocol']['model_config']['S'],checkpoint_format=3,
+            s_padding='bottom_right_image0_lcm256_actual_axis_strides; single_logit_sigmoid_ge_0.5')
     verify(identity)
     return SimpleNamespace(receipt=receipt,source=source,target=target,pm=pm,cm=cm,
         manifest=manifest,audit=audit,verify=lambda full=True:verify(identity,full),targets=Path(targets),weights=weights,
@@ -586,7 +609,8 @@ def predict(binding, run, output, cache, *, model_reserve_bytes, case_reserve_by
                 prepared_sha256=hashlib.sha256(prepared.tobytes()).hexdigest())
             del data,x,valid,support,prepared,keep,native,raw_image
         guard(model_reserve_bytes+case_reserve_bytes,phase='startup')
-        model,_=load_audited_segmenter(run,binding.receipt['checkpoint_sha256'],target=binding.target)
+        model,_=load_audited_segmenter(run,binding.receipt['checkpoint_sha256'],target=binding.target,
+            **({'nnunet':True} if binding.receipt.get('format')==3 else {}))
         model=model.to('cuda:0'); before=state_digest(model)
         with (output/'resources.jsonl').open('x',encoding='utf-8') as log:
             for cid in ids:
@@ -656,6 +680,7 @@ def main(argv=None):
     for name in ('audit','predict'):
         p=sub.add_parser(name)
         p.add_argument('--run',type=Path,required=True)
+        p.add_argument('--s-kind',choices=['author_unet','nnunet2d'],default='author_unet')
         p.add_argument('--checkpoint-sha256')  # default comes from complete, cross-checked with joint.pt
         for flag in ('source','raw-root','targets','baseline'):
             p.add_argument('--'+flag,type=Path,required=True)
@@ -675,11 +700,11 @@ def main(argv=None):
     if a.command=='predict':
         protected=[REPO,a.run,a.source.parent,a.raw_root,a.targets,a.baseline]
         fresh_output(a.output,protected); fresh_output(a.mask_cache,protected+[a.output])
-    b=bind_metadata(a.run,a.source,a.raw_root,a.targets,a.baseline,a.checkpoint_sha256)
+    b=bind_metadata(a.run,a.source,a.raw_root,a.targets,a.baseline,a.checkpoint_sha256,nnunet=a.s_kind=='nnunet2d')
     b.targets=a.targets
     if a.command=='audit':
         print(json.dumps(b.audit,indent=2,allow_nan=False))
-        print('METADATA_AUDIT_PASS; no patient arrays, models, GT or CUDA loaded')
+        print('METADATA_AUDIT_PASS; no patient arrays, allocated model weights, GT or CUDA loaded')
     else:
         predict(b,a.run,a.output,a.mask_cache,
             model_reserve_bytes=a.model_reserve_gib*1024**3,case_reserve_bytes=a.case_reserve_gib*1024**3)

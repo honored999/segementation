@@ -12,9 +12,18 @@ from torch.func import functional_call
 from experiments.genseg30.contract import require
 
 
+class ParameterMap(dict):
+    """Only official unused non-DS heads may be disconnected."""
+    def __init__(self, values, inactive=()):
+        super().__init__(values); self.inactive=set(inactive)
+
+
 def virtual_sgd(parameters, loss, lr):
-    grads = torch.autograd.grad(loss, tuple(parameters.values()), create_graph=True)
-    return {k: p-lr*g for (k,p),g in zip(parameters.items(),grads)}
+    inactive=getattr(parameters,'inactive',set())
+    grads = torch.autograd.grad(loss, tuple(parameters.values()), create_graph=True,allow_unused=bool(inactive))
+    require(all((g is None)==(k in inactive) for k,g in zip(parameters,grads)),
+        'Unexpected disconnected/active virtual parameter')
+    return {k: p if g is None else p-lr*g for (k,p),g in zip(parameters.items(),grads)}
 
 
 def virtual_chain(gp, sp, generator_loss, segmentation_train_loss, validation_loss, g_lr, s_lr):
@@ -53,11 +62,25 @@ class FunctionalModel:
         self.buffers = {k:v.detach().clone() for k,v in net.named_buffers()}
 
     def parameters(self):
-        return {k:v.detach().clone().requires_grad_(True) for k,v in self.net.named_parameters()}
+        return ParameterMap({k:v.detach().clone().requires_grad_(True) for k,v in self.net.named_parameters()},
+            getattr(self.net,'genseg_inactive_parameters',()))
 
     def __call__(self, parameters, x):
         # Even training-mode BN may modify only private buffers, never module live state.
         buffers = {k:v.clone() for k,v in self.buffers.items()}
+        descriptor=getattr(self.net,'genseg_s_descriptor',None)
+        if descriptor is not None:
+            # Expand every alias explicitly. PyTorch tied-weight restoration can
+            # otherwise leave shared module paths bound to virtual candidates.
+            parameters=dict(parameters)
+            parameters.update({k:parameters[owner] for k,owner in descriptor['aliases'].items()})
+            bindings=[(m,k,v) for m in self.net.modules() for k,v in m._parameters.items()]
+            try:
+                return functional_call(self.net,(parameters,buffers),(x,),strict=True,tie_weights=False)
+            finally:
+                # Restore original Parameter objects, including repeated module
+                # references. Never copy virtual tensors into live parameters.
+                for module,key,value in bindings: module._parameters[key]=value
         return functional_call(self.net, (parameters,buffers), (x,), strict=True)
 
 
