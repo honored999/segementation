@@ -93,7 +93,7 @@ def test_production_s_strict_restore_output_and_eval_immutability():
     before = seg.state_digest(restored)
     # Small padding multiple here is engineering-only; production default remains 256.
     volume = x.numpy()[0].repeat(2,axis=0)
-    actual = seg.infer_prepared_volume(restored, volume, pad_multiple=32)
+    actual = seg.infer_prepared_volume(restored, volume, valid_support=np.ones(volume.shape,bool), pad_multiple=32)
     assert actual.shape == volume.shape and set(np.unique(actual)) <= {0,1}
     assert seg.state_digest(restored) == before
     assert all(not m.training for m in restored.modules())
@@ -105,10 +105,12 @@ def test_fixed_threshold_full_planes_and_no_gt_argument():
     model = torch.nn.Conv2d(1,1,1).eval()
     with torch.no_grad(): model.weight.fill_(1); model.bias.zero_()
     x = np.array([[[-1,0,1],[2,-2,0]], [[0,0,0],[0,0,0]]], np.float32)
-    result = seg.infer_prepared_volume(model, x)
-    np.testing.assert_array_equal(result, x >= 0)
+    support=np.ones(x.shape,bool); support[0,0,2]=False; support[1,0,0]=False
+    result = seg.infer_prepared_volume(model, x, valid_support=support)
+    np.testing.assert_array_equal(result[support], (x>=0)[support])
+    assert not result[~support].any()
     model.train()
-    with pytest.raises(ValueError, match='eval'): seg.infer_prepared_volume(model, x)
+    with pytest.raises(ValueError, match='eval'): seg.infer_prepared_volume(model, x, valid_support=np.ones(x.shape,bool))
 
 
 def test_crop_pad_transpose_and_real_resampler():
@@ -257,7 +259,7 @@ def test_asymmetric_real_preprocess_restore_writer(tmp_path):
     plans = read_json(seg.REPO/'standalone_nnunet2d/reference/nnUNetPlans.json')
     plans['transpose_forward'] = [2,0,1]; plans['transpose_backward'] = [1,2,0]
     pm = PlansManager(plans); cm = pm.get_configuration('2d')
-    raw = np.zeros((7,9,4),np.float32); raw[1:6,2:8,1:3] = 5
+    raw = np.zeros((7,9,4),np.float32); raw[1:6,2:8,1:3] = 5; raw[1:3,2:4,1] = 0
     image = sitk.GetImageFromArray(raw)
     image.SetSpacing((3.,cm.spacing[1]*2,cm.spacing[0]*2))
     image.SetOrigin((12.,-3.,9.)); image.SetDirection((0.,-1.,0.,1.,0.,0.,0.,0.,1.))
@@ -265,15 +267,19 @@ def test_asymmetric_real_preprocess_restore_writer(tmp_path):
     rw = pm.image_reader_writer_class(); data, props = rw.read_images([str(path)])
     x, valid, props = seg.preprocess_image(data,props,pm,cm,{'labels':{'background':0,'lesion':1}})
     assert x.shape == (1,2,10,12)  # real unequal-spacing resampling
-    pred = np.zeros(x.shape[1:],np.uint8); pred[0,2:6,2:8] = 1; pred[1,6:8,8:10] = 1
+    support=valid[0]>=0
+    model=torch.nn.Conv2d(1,1,1).eval()
+    with torch.no_grad(): model.weight.zero_(); model.bias.fill_(10)
+    pred=seg.infer_prepared_volume(model,x[0],valid_support=support)
+    np.testing.assert_array_equal(pred,support)
     restored = seg.restore_binary_geometry(pred,pm,cm,props)
-    expected = np.zeros((4,7,9),np.uint8); expected[1,2:4,3:6] = 1; expected[2,4,6] = 1
+    expected = (raw>0).transpose(2,0,1).astype(np.uint8)
     np.testing.assert_array_equal(restored,expected.transpose(1,2,0))
     out = tmp_path/'pred.nii.gz'
-    geometry = seg.export_prediction(pred,out,path,pm,cm,props)
+    geometry = seg.export_prediction(pred,out,path,pm,cm,props,valid_support=valid[0]>=0)
     np.testing.assert_array_equal(sitk.GetArrayFromImage(sitk.ReadImage(str(out))),restored)
     assert geometry['size_xyz'] == list(image.GetSize())
-    with pytest.raises(ValueError,match='exists'): seg.export_prediction(pred,out,path,pm,cm,props)
+    with pytest.raises(ValueError,match='exists'): seg.export_prediction(pred,out,path,pm,cm,props,valid_support=valid[0]>=0)
 
 def prediction_fixture(tmp_path, monkeypatch):
     import SimpleITK as sitk
@@ -284,7 +290,7 @@ def prediction_fixture(tmp_path, monkeypatch):
     images=raw_root/base.name/'imagesTr'; images.mkdir(parents=True)
     plans=read_json(seg.REPO/'standalone_nnunet2d/reference/nnUNetPlans.json')
     pm=PlansManager(plans); cm=pm.get_configuration('2d')
-    data=np.zeros((2,6,7),np.float32); data[:,1:5,1:6]=np.arange(40).reshape(2,4,5)+1
+    data=np.zeros((2,6,7),np.float32); data[:,1:5,1:6]=np.arange(40).reshape(2,4,5)+1; data[:,1,1]=0
     img=sitk.GetImageFromArray(data); img.SetSpacing((*cm.spacing[::-1],3.)); img.SetOrigin((2.,3.,4.))
     masks=tmp_path/'masks'; masks.mkdir()
     hd={}
@@ -314,8 +320,9 @@ def prediction_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(seg,'native_keep',native)
     metadata_root=tmp_path/'bound_metadata'; metadata_root.mkdir()
     metadata=metadata_root/'metadata.json'; metadata.write_text('{}')
-    hashes={str(metadata):sha256(metadata)}
-    audit=dict(metadata_files_sha256=hashes,inference_sources_sha256=hashes,training_sources_sha256=seg.implementation_identity(),protected_roots=[str(raw_root),str(base)])
+    plans_path=metadata_root/'plans.json'; plans_path.write_text(json.dumps(plans))
+    hashes={str(metadata):sha256(metadata),str(plans_path):sha256(plans_path)}
+    audit=dict(support_geometry=dict(plans=plans,plans_file=str(plans_path),configuration='2d'),metadata_files_sha256=hashes,inference_sources_sha256=hashes,training_sources_sha256=seg.implementation_identity(),protected_roots=[str(raw_root),str(base)])
     source=SimpleNamespace(val=ids,raw_root=raw_root,base=base,protected=[seg.REPO,raw_root,base],
                            dataset_json={'labels':{'background':0,'lesion':1}})
     binding=SimpleNamespace(source=source,pm=pm,cm=cm,verify=lambda **kw:None,
@@ -334,6 +341,44 @@ def test_actual_prediction_completion_and_scoring_gate(tmp_path,monkeypatch):
     assert receipt['cache_root']==str(cache.resolve())
     assert read_json(output/'started.json')['cache_root']==str(cache.resolve())
     ids=seg.verify_predictions(output,receipt,images)
+    rec=receipt['cases'][ids[0]]
+    with np.load(rec['prepared_file'],allow_pickle=False) as arrays:
+        assert set(arrays.files)=={'image','valid_support'}
+        assert arrays['valid_support'].dtype==np.bool_
+        saved={k:arrays[k].copy() for k in arrays.files}
+    assert rec['valid_support']['source']==seg.SUPPORT_SOURCE
+    assert rec['valid_support']['protocol']==seg.PROTOCOL['id']
+    old_bytes=Path(rec['prepared_file']).read_bytes()
+    # GT refusal substitute: support rejection must precede even geometry(GT).
+    original_geometry=seg.geometry
+    def no_gt(path):
+        assert 'no_GT' not in str(path), 'GT accessed before support admission'
+        return original_geometry(path)
+    monkeypatch.setattr(seg,'geometry',no_gt)
+    for fault in ('missing','dtype','shape','source','hash','protocol','geometry_binding','outside'):
+        broken=deepcopy(receipt); r=broken['cases'][ids[0]]
+        fields={k:v.copy() for k,v in saved.items()}
+        pred_path=output/(ids[0]+'.nii.gz'); pred_bytes=pred_path.read_bytes()
+        if fault=='missing': fields.pop('valid_support')
+        if fault=='dtype': fields['valid_support']=fields['valid_support'].astype(np.uint8)
+        if fault=='shape': fields['valid_support']=fields['valid_support'][:1]
+        if fault=='source': r['valid_support']['source']='prepared_image!=0'
+        if fault=='hash': r['valid_support']['sha256']='0'*64
+        if fault=='protocol': r['valid_support']['protocol']='old'
+        if fault=='geometry_binding': broken['audit']['support_geometry']['plans']['transpose_forward']=[2,1,0]
+        if fault=='outside':
+            img=sitk.ReadImage(str(pred_path)); a=sitk.GetArrayFromImage(img)
+            native=seg.restore_binary_geometry(fields['valid_support'].astype(np.uint8),binding.pm,binding.cm,read_json(r['properties_file'])).astype(bool)
+            a[~native]=1
+            changed=sitk.GetImageFromArray(a); changed.CopyInformation(img)
+            sitk.WriteImage(changed,str(pred_path)); r['prediction_sha256']=sha256(pred_path)
+        with Path(r['prepared_file']).open('wb') as stream: np.savez_compressed(stream,**fields)
+        r['prepared_file_sha256']=sha256(r['prepared_file'])
+        (output/(ids[0]+'.json')).write_text(json.dumps(r),encoding='utf-8')
+        (output/'complete.json').write_text(json.dumps(broken),encoding='utf-8')
+        with pytest.raises(ValueError): seg.accept_for_scoring(output,images,tmp_path/'no_GT',tmp_path/'metrics_bad')
+        Path(r['prepared_file']).write_bytes(old_bytes); pred_path.write_bytes(pred_bytes)
+    (output/(ids[0]+'.json')).write_text(json.dumps(rec),encoding='utf-8')
     for bad_root in (None,str(tmp_path),str(output),str(cache/ids[0])):
         broken=deepcopy(receipt)
         if bad_root is None: broken.pop('cache_root')
@@ -541,3 +586,17 @@ def test_native_hd_command_receipt_and_resource_abort(tmp_path,monkeypatch,fault
         assert rec['raw_sha256']==sha256(raw) and rec['weights_sha256']==sha256(weights)
         assert read_json(cache/'synthetic'/'complete.json')==rec
         assert 'between_units' in (cache/'synthetic'/'resources.jsonl').read_text()
+
+
+def test_positive_logits_image_support_and_zero_valid_pixels():
+    model=torch.nn.Conv2d(1,1,1).eval()
+    with torch.no_grad(): model.weight.zero_(); model.bias.fill_(10)
+    image=np.zeros((2,3,5),np.float32)
+    support=np.zeros(image.shape,bool); support[:,1:,1:4]=True
+    audit={}
+    pred=seg.infer_prepared_volume(model,image,valid_support=support,audit=audit)
+    np.testing.assert_array_equal(pred,support)
+    assert audit['cleared_preprocessed_foreground']==int((~support).sum())
+    for bad in (support.astype(np.uint8),support[:1]):
+        with pytest.raises(ValueError,match='support'):
+            seg.infer_prepared_volume(model,image,valid_support=bad)

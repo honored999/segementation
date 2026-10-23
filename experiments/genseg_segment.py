@@ -22,13 +22,16 @@ from experiments.genseg_joint.models import author_unet
 from experiments.genseg_joint.runtime import implementation_identity, TARGET_SHA256
 
 PROTOCOL = dict(
-    id='genseg_epoch80_image_only_v1_20261023', threshold=0.5,
+    id='genseg_epoch80_image_only_support_v2_20261023', threshold=0.5,
     preprocessing='bound_nnUNet_seg_None_transpose_crop_normalize_then_data_and_seg_resample',
     retention='raw_DWI_HD_BET_2.0.1_default_TTA_native_plane_3mm_empty_slice_keep_empty_volume_fail',
     input_order='preprocess_then_keep_fill_baseline_min_then_saved_inner61_scale_no_clip_then_image_mask_cleanup_then_bottom_right_zero_pad256',
-    export='threshold_before_seg_inverse_resample_inverse_crop_inverse_axes_bound_writer',
+    export='threshold_then_image_support_zero_then_seg_inverse_resample_inverse_crop_inverse_axes_then_same_inverse_support_zero_bound_writer',
+    support='DefaultPreprocessor.run_case_npy(seg=None)_returned_mask[0]>=0; fresh_bool_cache; same_inverse_geometry',
     difference='supervised_three_class_seg>=0_replaced_by_image_only_0_minus1_mask; resampling_boundaries_and_masked_normalization_statistics_not_pixel_equivalent',
-    evidence='outer19_fold0_development; inherited_76_preprocessing_statistics; no_tuning_no_independent_test_claim')
+    evidence='outer19_fold0_development; inherited_76_preprocessing_statistics; post_outer19_error_observation_inference_repair_no_independent_test_or_training_gain_claim')
+SUPPORT_SOURCE = 'DefaultPreprocessor.run_case_npy(seg=None):returned_mask[0]>=0'
+
 METRICS_SHA256 = 'ab453e1703b9e72828f19a92a417b875506a7acd30a2926fd197739487b787bb'
 
 
@@ -127,16 +130,20 @@ def state_digest(model):
     return digest.hexdigest()
 
 
-def infer_prepared_volume(model, normalized_image, *, pad_multiple=256, resource_guard=None):
+def infer_prepared_volume(model, normalized_image, *, valid_support, pad_multiple=256, resource_guard=None, audit=None):
     """Engineering primitive only: input must ALREADY satisfy training contract.
 
-    Takes no labels/ROI/valid-mask argument. It neither establishes nor guesses
+    Requires the audited image-side support; takes no labels or lesion ROI.
+    It neither establishes nor guesses
     raw-DWI preprocessing. Full planes, including negative/background planes,
     are evaluated; no TTA, threshold search or component postprocessing.
     """
     image = np.asarray(normalized_image)
     require(image.ndim == 3 and all(n > 0 for n in image.shape) and
             image.dtype == np.float32 and np.isfinite(image).all(), 'Finite float32 [Z,H,W] required')
+    require(isinstance(valid_support,np.ndarray) and valid_support.dtype==np.bool_ and
+            valid_support.shape==image.shape, 'Boolean image support/grid required')
+    cleared=0
     require(all(not m.training for m in model.modules()), 'All S modules must be eval')
     require(type(pad_multiple) is int and pad_multiple > 0, 'Positive padding multiple required')
     before = state_digest(model)
@@ -151,9 +158,12 @@ def infer_prepared_volume(model, normalized_image, *, pad_multiple=256, resource
             logits = model(tensor)
             require(logits.shape == tensor.shape and bool(torch.isfinite(logits).all()),
                     'Expected finite single-channel S logits')
-            output[z] = (torch.sigmoid(logits[0,0,:plane.shape[0],:plane.shape[1]]) >= .5).cpu().numpy()
+            thresholded=(torch.sigmoid(logits[0,0,:plane.shape[0],:plane.shape[1]]) >= .5).cpu().numpy()
+            cleared+=int(np.count_nonzero(thresholded & ~valid_support[z]))
+            output[z]=thresholded & valid_support[z]
     require(all(m.training == mode for m,mode in modes) and before == state_digest(model),
             'S parameters/BN/modes changed during inference')
+    if audit is not None: audit['cleared_preprocessed_foreground']=cleared
     return output
 
 
@@ -292,7 +302,8 @@ def bind_metadata(run, source_folder, raw_root, targets, baseline, digest=None):
         protected_roots=[str(Path(p).resolve()) for p in source.protected+[Path(run),Path(targets),Path(baseline)]],
         hd_bet=dict(recipe=RECIPE,weights_sha256=weight_hash,weights_file=str(weights),version=version),
         fill=manifest['background_fill'],saved_scaling=receipt['protocol']['scaling'],
-        frozen_protocol=PROTOCOL,training_target_arrays_reloaded=False)
+        frozen_protocol=PROTOCOL,training_target_arrays_reloaded=False,
+        support_geometry=dict(plans=source.plans,plans_file=str(source.plans_path),configuration='2d'))
     verify(identity)
     return SimpleNamespace(receipt=receipt,source=source,target=target,pm=pm,cm=cm,
         manifest=manifest,audit=audit,verify=lambda full=True:verify(identity,full),targets=Path(targets),weights=weights,
@@ -344,15 +355,23 @@ def check_binary(path):
     require(arr.ndim==3 and np.isin(arr,(0,1)).all(), 'Prediction must be finite binary full volume')
 
 
-def export_prediction(pred, output, raw, pm, cm, props):
+def export_prediction(pred, output, raw, pm, cm, props, *, valid_support, audit=None):
     output=Path(output)
     require(not output.exists(), 'Prediction output exists; overwrite refused')
+    require(valid_support.dtype==np.bool_ and valid_support.shape==pred.shape, 'Boolean image support/grid required')
+    require(not np.any(pred[~valid_support]), 'Preprocessed prediction outside image support')
     restored=restore_binary_geometry(pred,pm,cm,props)
+    support=restore_binary_geometry(valid_support.astype(np.uint8),pm,cm,props).astype(bool)
+    if audit is not None:
+        audit['cleared_restored_foreground']=int(np.count_nonzero(restored[~support]))
+        audit['restored_support']=support_identity(support)
+    restored[~support]=0
     pm.image_reader_writer_class().write_seg(restored,str(output),props)
     same_geometry(geometry(output),geometry(raw)); check_binary(output)
     # Matching writer and reader must also reproduce the actual label array.
     reread,_=pm.image_reader_writer_class().read_seg(str(output))
     require(np.array_equal(reread[0],restored), 'Writer roundtrip changed binary voxels')
+    require(not np.any(reread[0][~support]), 'Written prediction outside image support')
     return geometry(output)
 
 
@@ -417,6 +436,25 @@ def native_keep(binding, patient, raw, cache, guard):
     return keep,receipt
 
 
+def support_identity(support):
+    return dict(source=SUPPORT_SOURCE,protocol=PROTOCOL['id'],shape=list(support.shape),
+                dtype='bool',sha256=hashlib.sha256(support.tobytes()).hexdigest())
+
+
+def load_prepared(rec):
+    """Strict fresh-cache admission; no legacy cache or inferred/all-one support."""
+    require(sha256(rec['prepared_file'])==rec['prepared_file_sha256'], 'Derived input cache hash mismatch')
+    with np.load(rec['prepared_file'],allow_pickle=False) as arrays:
+        require(set(arrays.files)=={'image','valid_support'}, 'Missing/unexpected image support cache fields')
+        image=arrays['image']; support=arrays['valid_support']
+    require(image.ndim==3 and image.dtype==np.float32 and np.isfinite(image).all(), 'Invalid prepared image')
+    require(support.dtype==np.bool_ and support.shape==image.shape and
+            rec.get('preprocessed_shape')==[1,*image.shape], 'Invalid image support dtype/shape')
+    require(rec.get('valid_support')==support_identity(support), 'Image support source/protocol/shape/hash mismatch')
+    require(hashlib.sha256(image.tobytes()).hexdigest()==rec['prepared_sha256'], 'Prepared array changed')
+    return image,support
+
+
 def verify_predictions(output, receipt, raw_folder):
     """Recheck every artifact; complete existence alone never admits scoring."""
     output=Path(output).resolve(strict=True); raw_folder=Path(raw_folder)
@@ -437,6 +475,16 @@ def verify_predictions(output, receipt, raw_folder):
         require(isinstance(receipt.get('audit',{}).get(field),dict) and bool(receipt['audit'][field]), 'Missing inference audit hashes')
     require(receipt.get('state_before')==receipt.get('state_after') and
             isinstance(receipt.get('state_before'),str) and len(receipt['state_before'])==64, 'S state mismatch')
+    from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+    chain=receipt.get('audit',{}).get('support_geometry')
+    require(isinstance(chain,dict) and chain.get('configuration')=='2d' and
+            isinstance(chain.get('plans'),dict), 'Missing image support geometry binding')
+    plans_path=chain.get('plans_file')
+    hashes=receipt['audit']['metadata_files_sha256']
+    require(isinstance(plans_path,str) and plans_path in hashes and
+            sha256(plans_path)==hashes[plans_path] and read_json(plans_path)==chain['plans'],
+            'Image support geometry plans identity mismatch')
+    pm=PlansManager(chain['plans']); cm=pm.get_configuration(chain['configuration'])
     for cid in ids:
         rec=receipt['cases'][cid]
         require(rec.get('prediction_file')==cid+'.nii.gz', 'Case filename mismatch')
@@ -450,6 +498,17 @@ def verify_predictions(output, receipt, raw_folder):
             path=Path(rec[field]).resolve(strict=True)
             require(path==case/name, 'Derived input escaped cache case directory')
             require(sha256(path)==rec[digest_field], 'Derived input cache hash mismatch')
+        prepared,support=load_prepared(rec)
+        del prepared
+        props=read_json(rec['properties_file'])
+        require('class_locations' not in props, 'Supervised cached properties forbidden')
+        native=restore_binary_geometry(support.astype(np.uint8),pm,cm,props).astype(bool)
+        require(rec.get('restored_support')==support_identity(native), 'Restored image support identity mismatch')
+        require(all(type(rec.get(k)) is int and rec[k]>=0 for k in
+                ('cleared_preprocessed_foreground','cleared_restored_foreground')), 'Missing support clearing audit')
+        reread,_=pm.image_reader_writer_class().read_seg(str(pred))
+        require(reread.shape==(1,*native.shape) and not np.any(reread[0][~native]),
+                'Prediction outside restored image support')
         mask=Path(rec['hd_bet']['mask_file']).resolve(strict=True)
         require(mask==case/'hd_bet_bet.nii.gz', 'Derived mask escaped cache case directory')
         require(sha256(mask)==rec['hd_bet']['mask_sha256'], 'Derived mask hash mismatch')
@@ -512,11 +571,12 @@ def predict(binding, run, output, cache, *, model_reserve_bytes, case_reserve_by
             require(sha256(raw)==raw_hash==hd['raw_sha256'], 'Raw changed during preprocessing')
             case_dir=cache/cid; case_dir.mkdir(exist_ok=True)
             array_path=case_dir/'prepared.npz'; properties_path=case_dir/'properties.json'
-            with array_path.open('xb') as stream: np.savez_compressed(stream,image=prepared)
+            support=(valid[0]>=0)
+            with array_path.open('xb') as stream: np.savez_compressed(stream,image=prepared,valid_support=support)
             # Fresh reader/preprocessor properties only; no external pickle/class_locations.
             safe_props=json.loads(json.dumps(props,default=lambda v:np.asarray(v).tolist(),allow_nan=False))
             write_json(properties_path,safe_props)
-            cases[cid]=dict(hd_bet=hd,raw_sha256=raw_hash,
+            cases[cid]=dict(hd_bet=hd,raw_sha256=raw_hash,valid_support=support_identity(support),
                 prepared_file=str(array_path.resolve()),prepared_file_sha256=sha256(array_path),
                 properties_file=str(properties_path.resolve()),properties_sha256=sha256(properties_path),
                 preprocessing_properties={k:np.asarray(props[k]).tolist() for k in
@@ -524,7 +584,7 @@ def predict(binding, run, output, cache, *, model_reserve_bytes, case_reserve_by
                 image_mask_values=np.unique(valid).tolist(),preprocessed_shape=list(x.shape),
                 keep_sha256=hashlib.sha256(keep.tobytes()).hexdigest(),
                 prepared_sha256=hashlib.sha256(prepared.tobytes()).hexdigest())
-            del data,x,valid,prepared,keep,native,raw_image
+            del data,x,valid,support,prepared,keep,native,raw_image
         guard(model_reserve_bytes+case_reserve_bytes,phase='startup')
         model,_=load_audited_segmenter(run,binding.receipt['checkpoint_sha256'],target=binding.target)
         model=model.to('cuda:0'); before=state_digest(model)
@@ -537,23 +597,20 @@ def predict(binding, run, output, cache, *, model_reserve_bytes, case_reserve_by
                 raw_hash=sha256(raw)
                 require(raw_hash==rec['raw_sha256'] and sha256(rec['prepared_file'])==rec['prepared_file_sha256'] and
                         sha256(rec['properties_file'])==rec['properties_sha256'], 'Raw/derived input cache changed')
-                with np.load(rec['prepared_file'],allow_pickle=False) as arrays:
-                    require(set(arrays.files)=={'image'}, 'Unexpected derived input cache fields')
-                    prepared=arrays['image']
-                require(hashlib.sha256(prepared.tobytes()).hexdigest()==rec['prepared_sha256'], 'Prepared array changed')
+                prepared,support=load_prepared(rec)
                 props=read_json(rec['properties_file'])
                 require('class_locations' not in props, 'Supervised cached properties forbidden')
                 def sample_resources():
                     value=guard(phase='between_units')
                     log.write(json.dumps(value,allow_nan=False)+'\n'); log.flush()
-                pred=infer_prepared_volume(model,prepared,resource_guard=sample_resources)
+                pred=infer_prepared_volume(model,prepared,valid_support=support,resource_guard=sample_resources,audit=rec)
                 filename=cid+'.nii.gz'
-                geom=export_prediction(pred,output/filename,raw,binding.pm,binding.cm,props)
+                geom=export_prediction(pred,output/filename,raw,binding.pm,binding.cm,props,valid_support=support,audit=rec)
                 require(sha256(raw)==raw_hash, 'Raw image changed during prediction')
                 cases[cid].update(prediction_file=filename,prediction_sha256=sha256(output/filename),geometry=geom)
                 write_json(output/(cid+'.json'),cases[cid])
                 print('PREDICT '+cid,flush=True)
-                del prepared,pred
+                del prepared,support,pred
         binding.verify(); after=state_digest(model)
         receipt=dict(complete=True,protocol=PROTOCOL,external_ids=ids,cases=cases,cache_root=str(cache),
             state_before=before,state_after=after,audit=binding.audit,

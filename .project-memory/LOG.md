@@ -1,3 +1,7 @@
+## 2026-10-23 - S output image-support correction v2 (branch-local)
+- User supplied v1 macro Dice4.2887% and FP partition:99.6075% outside raw nonzero support. Fix applies exact image-derived preprocessing support at threshold/export, persists and revalidates support provenance/geometry; no GT mask, threshold/model/training/metric change. Old results preserved.
+- Fixer9 CPU passes10.28s; independent focused support STATIC PASS; parent hashes/diff checked, no code/test edits or rerun. Same final80epoch checkpoint, fresh trial02; server v2 clearing counts and scores pending, no efficacy claim. G preview ring/hole deterioration remains unresolved separately.
+- Branch memory/Git integration only; protected main checkout/raw/old outputs/master unchanged. Next server sync and audit→predict→accept→original seven metrics; describe as post-observation inference repair, not training gain or blind test.
 ## 2026-10-23 - Epoch80 S prediction and seven-metric admission (branch-local)
 - Accepted manually implemented image-only outer19 preprocessing, S-only audited inference, original-space export and complete19/hash/geometry gates; original metric script unchanged. Supervised-mask differences explicitly frozen; no GT-derived inputs or score-driven tuning.
 - Independent full static review then focused B1/B2 re-review PASS; CACHE/METRICS isolation and subprocess error preservation closed. Worker20 continuation cases and11 focused cases across runs reported; parent exact hashes/CRLF-aware whitespace checked without rerun or source/test edits.
