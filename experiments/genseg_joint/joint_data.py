@@ -163,4 +163,11 @@ class PositiveSampler:
         return label,dict(record,category='positive',foreground_pixels=foreground,flip_y=fy,flip_x=fx)
 
     def state_dict(self):
-        return dict(steps=self.steps,positive_planes=len(self.planes),rng=self.rng.bit_generator.state)
+        return dict(steps=self.steps,positive_planes=len(self.planes),planes=[[p,z] for p,z in self.planes],rng=self.rng.bit_generator.state)
+
+    def load_state_dict(self,state):
+        from copy import deepcopy
+        require(set(state)=={'steps','positive_planes','planes','rng'} and
+            state['planes']==[[p,z] for p,z in self.planes] and state['positive_planes']==len(self.planes) and
+            type(state['steps']) is int and state['steps']>0,'Positive sampler inventory/count mismatch')
+        self.rng.bit_generator.state=deepcopy(state['rng']); self.steps=state['steps']

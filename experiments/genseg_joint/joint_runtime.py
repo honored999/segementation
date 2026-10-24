@@ -34,18 +34,29 @@ def check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_work
         arrays_loaded=False,weights_loaded=False,training_started=False)
 
 
-def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes,nnunet=False):
+def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,gpu,cache_budget_bytes,model_reserve_bytes,loader_workspace_bytes,nnunet=False,resume_from=None,resume_sha256=None):
     require((steps is None)!=(epochs is None),'Choose exactly one of steps or epochs')
     budget=steps if epochs is None else epochs
     require(type(budget) is int and budget>0,'Explicit positive unit/epoch budget required')
     require(type(model_reserve_bytes) is int and model_reserve_bytes>0,'Explicit conservative model/optimizer/higher-order RAM reserve required')
+    from . import joint_resume as recovery
+    enabled=nnunet and epochs is not None
+    require((resume_from is None)==(resume_sha256 is None),'Paired recovery path/hash required')
+    require(resume_from is None or enabled,'Recovery only supports nnU-Net epochs')
+    require(not enabled or epochs<=80,'Epoch recovery total budget must be <=80')
+    guard=ResourceGuard(gpu)
+    if resume_from is not None: guard(4*Path(resume_from).stat().st_size+model_reserve_bytes)
+    parent=None if resume_from is None else recovery.load(resume_from,resume_sha256)
+    if parent is not None:
+        require(parent['planned_epochs']==epochs and parent['completed_epochs']<epochs,'Recovery total budget mismatch/completed')
     admission=check(target,pretrained_run,pretrained_sha256,cache_budget_bytes,loader_workspace_bytes,model_reserve_bytes,nnunet=nnunet)
     descriptor=admission.get("s_descriptor")
-    output=check_output(output,list(target.protected)+[Path(pretrained_run)])
-    guard=ResourceGuard(gpu)
+    output=check_output(output,list(target.protected)+[Path(pretrained_run)]+([] if resume_from is None else [Path(resume_from).resolve().parent]))
     initial=guard(model_reserve_bytes)
     import torch
     require(not torch.cuda.is_initialized(),'Binding must precede CUDA initialization')
+    if parent is not None:
+        require(parent['payload']['protocol']['initial_resources']['gpu_uuid']==initial['gpu_uuid'],'Recovery GPU UUID mismatch')
     guard.bind()
     require(torch.cuda.is_available(),'CUDA required for future production run')
     torch.cuda.set_per_process_memory_fraction(initial['allocator_fraction'],0)
@@ -59,7 +70,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
         resource_guard=lambda remaining:guard(int(remaining)+model_reserve_bytes),
         loader_workspace_bytes=loader_workspace_bytes)
     cohort=snapshot.cohort
-    scale=cohort.fit_scale(skip_all_ignore=True)
+    scale=cohort.fit_scale(skip_all_ignore=True) if parent is None else parent['payload']['protocol']['scaling']
     sampler=PositiveSampler(cohort)
     real_sampler=None if epochs is None else EpochSampler(cohort,np.random.default_rng(20261018))
     if real_sampler is not None:
@@ -67,7 +78,7 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
     source=source_identity()
     code=implementation_identity()
     from .joint_checkpoint import nn_policy
-    protocol=dict(nn_policy() if nnunet else POLICY,steps=steps,split=cohort.split,scaling=scale,source=source,
+    protocol=dict(nn_policy(recovery=enabled) if nnunet else POLICY,steps=steps,split=cohort.split,scaling=scale,source=source,
         target_identity=target.identity,target_manifest_sha256=target.manifest_sha256,
         model_config={'G':{'width':64,'downs':8,'seed':20261018},'S':descriptor if nnunet else 'pinned_author_UNet(1,1,bilinear=False)'},
         pretrained_sha256=pretrained_sha256,pretrained_run=str(Path(pretrained_run).resolve()),
@@ -90,6 +101,12 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
         protocol.update(epochs=epochs,total_valid_planes=len(real_sampler.planes),
             real_sampling='inner61_valid_planes_without_replacement_including_negatives',
             epoch_progress=real_sampler.progress()['epoch_progress'])
+    lineage=[] if parent is None else parent['lineage']+[dict(parent_run=str(Path(resume_from).resolve().parent),checkpoint_sha256=resume_sha256,completed_epochs=parent['completed_epochs'],completed_units=parent['payload']['steps'])]
+    if enabled:
+        protocol.update(epoch_recovery=recovery.FORMAT,resume_lineage=lineage,
+            selection='last_complete_unit; no_external19_arrays_or_metrics; epoch_resume_enabled',
+            checkpoint_selection='final_only_no_best_no_early_stop; epoch_recovery_separate')
+        print(json.dumps(dict(epoch_recovery=recovery.FORMAT,save_every_epochs=1,retain=2,total_epochs=epochs,resumed_units=0 if parent is None else parent['payload']['steps'])),flush=True)
     timing=dict(snapshot.timings,startup=time.perf_counter()-started,log=0.,checkpoint_measurement='final_wall_in_timing.json_not_known_before_serialization')
     def full_audit():
         snapshot.full_audit(); assert_identities(identities)
@@ -105,10 +122,16 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
     try:
         full_audit(); guard(model_reserve_bytes)
         g,d,s=create_models(seed=20261018,device='cuda:0',s_descriptor=descriptor) if nnunet else create_models(seed=20261018,device='cuda:0')
-        load_transition(target,pretrained_run,pretrained_sha256,g,d,scale)
+        if parent is None: load_transition(target,pretrained_run,pretrained_sha256,g,d,scale)
         engine=RepairJointEngine(g,d,s)
+        if parent is not None:
+            full_audit()
+            require(parent['payload']['snapshot']['input_hashes']==snapshot.hashes,'Recovery input content mismatch')
+            recovery.restore(engine,parent,real_sampler,sampler,rng,protocol)
+            protocol['epoch_progress']=real_sampler.progress()['epoch_progress']
+            del parent
         with (output/'steps.jsonl').open('x',encoding='utf-8') as log:
-            for index in range(steps):
+            for index in range(engine.steps,steps):
                 unit=time.perf_counter()
                 start=time.perf_counter(); light_audit(); audit_wall=time.perf_counter()-start
                 start=time.perf_counter(); torch.cuda.synchronize(); resources=guard(phase='between_units'); resource_wall=time.perf_counter()-start
@@ -140,6 +163,10 @@ def run(target,output,*,pretrained_run,pretrained_sha256,steps=None,epochs=None,
                 start=time.perf_counter(); log.write(json.dumps(entry,allow_nan=False)+'\n'); log.flush()
                 timing['log']+=time.perf_counter()-start
                 del arrays,metrics,entry
+                if enabled and real_sampler.position==len(real_sampler.planes):
+                    recovery.save_epoch(output,engine,protocol,recovery.capture_rng(rng,sampler,real_sampler),
+                        snapshot=dict(input_hashes=snapshot.hashes,input_stats=snapshot.stats),timing=timing,
+                        full_audit=full_audit,guard=lambda reserve:guard(reserve,phase='between_units'),lineage=lineage)
         full_audit()
         timing['startup_and_units']=time.perf_counter()-started
         start=time.perf_counter()

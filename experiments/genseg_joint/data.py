@@ -60,7 +60,7 @@ class EpochSampler:
     """One scan of inner61; keep indices only, never retain patient arrays.
 
     Every epoch is a seeded permutation without replacement. All-ignore planes
-    are excluded from the denominator. State is recorded, but resume is absent.
+    are excluded from the denominator. State supports strict complete-epoch recovery.
     """
     def __init__(self,cohort,rng):
         self.cohort=cohort; self.rng=rng; self.planes=[]
@@ -88,3 +88,16 @@ class EpochSampler:
         return {'format':1,'planes':[[p,z] for p,z in self.planes],'order':list(self.order),
             'position':self.position,'steps':self.steps,'rng':self.rng.bit_generator.state,
             'progress':self.progress()}
+
+    def load_state_dict(self,state):
+        from copy import deepcopy
+        require(set(state)=={'format','planes','order','position','steps','rng','progress'} and state['format']==1,
+            'Epoch sampler schema mismatch')
+        total=len(self.planes)
+        require(state['planes']==[[p,z] for p,z in self.planes] and
+            all(type(v) is int for v in state['order']) and sorted(state['order'])==list(range(total)) and
+            state['position']==total and type(state['steps']) is int and state['steps']>0 and state['steps']%total==0,
+            'Epoch sampler inventory/permutation/boundary mismatch')
+        self.rng.bit_generator.state=deepcopy(state['rng'])
+        self.order=list(state['order']); self.position=state['position']; self.steps=state['steps']
+        require(state['progress']==self.progress(),'Epoch sampler progress mismatch')

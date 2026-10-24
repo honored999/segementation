@@ -49,17 +49,28 @@ POLICY = dict(strategy=STRATEGY,phase='joint',classification=CLASSIFICATION,
     timing_policy='stage_host_enqueue_wall; CUDA_execution_and_sync_charged_to_unit_boundary')
 
 
-def nn_policy():
+def nn_policy(*, recovery=False):
     from .nnunet_s import STRATEGY as strategy, CLASSIFICATION as classification
-    return dict(POLICY,strategy=strategy,classification=classification,
+    result = dict(POLICY,strategy=strategy,classification=classification,
         transition='weights_only_G_D_BN_both_alpha; fresh_plans_nnunet2d_S; fresh_all_moments_RNG_sampler; no_resume',
         virtual_optimizer='one_step_SGD_G2e-5_S1e-5_eval_GD_BN_private_S_IN_no_buffers')
+    if recovery:
+        result['transition']='initial_GD20_weights_only; epoch_resume_full_state_v1'
+    return result
 
 
 def validate_protocol(p,*,nnunet=False):
     require(isinstance(p,dict),'Joint protocol required')
-    for k,v in (nn_policy() if nnunet else POLICY).items(): require(p.get(k)==v,'Repair joint protocol mismatch: '+k)
+    for k,v in (nn_policy(recovery=p.get('epoch_recovery')=='genseg_nnunet_epoch_resume_v1') if nnunet else POLICY).items(): require(p.get(k)==v,'Repair joint protocol mismatch: '+k)
     require(type(p.get('steps')) is int and p['steps']>0,'Positive completed joint count required')
+    if p.get('epoch_recovery') is not None:
+        require(nnunet and p['epoch_recovery']=='genseg_nnunet_epoch_resume_v1' and
+            type(p.get('epochs')) is int and 0<p['epochs']<=80 and
+            type(p.get('total_valid_planes')) is int and p['total_valid_planes']>0 and
+            p['steps']==p['epochs']*p['total_valid_planes'] and isinstance(p.get('resume_lineage'),list) and
+            p.get('selection')=='last_complete_unit; no_external19_arrays_or_metrics; epoch_resume_enabled' and
+            p.get('checkpoint_selection')=='final_only_no_best_no_early_stop; epoch_recovery_separate',
+            'Epoch recovery protocol mismatch')
     require(p.get('source')==source_identity(),'Pinned source mismatch')
     split=p.get('split',{})
     require(set(split)=={'train','validation','external'} and
