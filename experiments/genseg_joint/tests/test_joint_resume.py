@@ -220,3 +220,17 @@ def test_runtime_interrupt_then_new_attempt_resume(tmp_path,monkeypatch):
     receipt=read_json(new/'complete.json'); assert receipt['steps']==4
     assert receipt['protocol']['resume_lineage'][0]['checkpoint_sha256']==digest
     assert before=={v.name:v.read_bytes() for v in old.iterdir()}
+
+
+def test_save_load_restore_without_file_digest(tmp_path,monkeypatch):
+    import hashlib
+    monkeypatch.delattr(hashlib,'file_digest',raising=False)
+    e,p,real,pos,rng=setup(tmp_path/'a'); epoch(e,p,real,pos,rng)
+    expected={k:deepcopy(n.state_dict()) for k,n in e.networks()}
+    expected_rng=recovery.capture_rng(rng,pos,real)
+    path,digest=save(tmp_path/'out',e,p,real,pos,rng)
+    b,q,rr,pp,rg=setup(tmp_path/'b')
+    recovery.restore(b,recovery.load(path,digest),rr,pp,rg,q)
+    assert b.steps==b.gan.steps==2
+    equal(expected,{k:n.state_dict() for k,n in b.networks()})
+    equal(expected_rng,recovery.capture_rng(rg,pp,rr))

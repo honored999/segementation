@@ -1,5 +1,14 @@
 # Next
 
+## Current epoch-recovery focus (2026-10-24; supersedes inherited actions below)
+1. Publish only the accepted nine epoch-recovery task files plus these three branch-state documents to origin/codex/genseg-nnunet2d-epoch-resume under the user authorization now received; do not merge master.
+2. Synchronize to a separate server checkout, preserving any currently running original nnU-Net 80-epoch process. Recheck source/reference byte identities and actual runtime before execution.
+3. Provide the user-approved fresh total80-epoch CMD command in a new checkout/output. Real periodic-save/restore remains unverified; observe first-epoch serialization and CPU/global-VRAM peaks. The parent does not launch or stop server processes.
+4. Use only new-format committed checkpoints with independent hashes and fresh output directories. An already-running old process cannot gain recovery points retroactively.
+Blockers: no code-review blockers; release authorized; real production save/restore evidence pending.
+
+
+
 ## Current focus
 
 - Decide whether to run a separately authorized, isolated Lite-UPerNet

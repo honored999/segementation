@@ -1,3 +1,9 @@
+## 2026-10-24 - nnU-Net S epoch recovery accepted (branch-local)
+- Changed: complete-epoch two-generation recovery, full optimizer/RNG/sampler restoration and original total-budget enforcement; same-descriptor chunked SHA256 preserves Python3.10 compatibility. Source attempts remain read-only and final completion is separate.
+- Evidence: implementer17 CPU passes historical; fixer15 passes13.28s plus missing-API RED; independent full Level3 STATIC PASS; parent exact HANDOFF/eight-file hashes and full baseline diff checked. No parent source/test edits or repeated tests.
+- User authorized scoped new-branch publication and direct fresh total80-epoch server commands. Real Python3.10/CUDA save/restore/peak validation remains pending; parent does not start/stop server processes or update active server code. Optional pointer hardening deferred. Master/global memory unchanged.
+
+
 ## 2026-10-23 - S output image-support correction v2 (branch-local)
 - User supplied v1 macro Dice4.2887% and FP partition:99.6075% outside raw nonzero support. Fix applies exact image-derived preprocessing support at threshold/export, persists and revalidates support provenance/geometry; no GT mask, threshold/model/training/metric change. Old results preserved.
 - Fixer9 CPU passes10.28s; independent focused support STATIC PASS; parent hashes/diff checked, no code/test edits or rerun. Same final80epoch checkpoint, fresh trial02; server v2 clearing counts and scores pending, no efficacy claim. G preview ring/hole deterioration remains unresolved separately.

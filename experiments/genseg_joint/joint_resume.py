@@ -84,15 +84,21 @@ def validate(container):
         v['completed_units']==v['completed_epochs']*total for v in container['lineage']), 'Recovery lineage invalid')
     return container
 
+def _hash_stream(stream):
+    import hashlib
+    digest=hashlib.sha256()
+    for chunk in iter(lambda:stream.read(1024*1024),b''): digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load(path,digest):
     path=Path(path)
     require(not path.is_symlink() and re.fullmatch('[0-9a-f]{64}',digest or ''), 'Recovery path/hash invalid')
     with path.open('rb') as stream:
-        import hashlib
-        before=hashlib.file_digest(stream,'sha256').hexdigest()
+        before=_hash_stream(stream)
         require(before==digest,'Recovery hash mismatch')
         stream.seek(0); result=torch.load(stream,map_location='cpu',weights_only=True)
-        stream.seek(0); require(hashlib.file_digest(stream,'sha256').hexdigest()==before==sha256(path),'Recovery changed while reading')
+        stream.seek(0); require(_hash_stream(stream)==before==sha256(path),'Recovery changed while reading')
     return validate(result)
 
 def save_epoch(output,engine,protocol,rng,*,snapshot,timing,full_audit,guard,lineage):
