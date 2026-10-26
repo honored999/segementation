@@ -12,8 +12,6 @@ set "ORIGINAL_RAW=C:\lijialin\models3d\nnUNet\nnUNet_raw"
 set "ORIGINAL_PP=C:\lijialin\models3d\nnUNet\nnUNet_preprocessed"
 set "OUTPUT_PARENT=C:\lijialin\HD-BET_outputs"
 set "REPO=%~dp0"
-call "%CONDA_BAT%" activate "%ENV_NAME%"
-if errorlevel 1 goto fail
 set "STAMP="
 for /f "delims=" %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss_fff"') do set "STAMP=%%T"
 if not defined STAMP goto fail
