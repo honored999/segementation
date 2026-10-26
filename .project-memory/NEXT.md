@@ -4,17 +4,16 @@ Scope: branch-local codex/upernet-no-stage7; not canonical master memory.
 
 ## Current focus
 
-- Configurable-depth ordinary PlainConvUNet Trainer implemented; independent exact-snapshot static review PASS. Prior NoStage7 UPerNet implementation remains preserved at f1b9ca8.
-- Per user instruction, no new tests, imports, model construction or runtime validation were executed for the new Trainer. Earlier NoStage7 tests do not validate this new implementation.
+- Deliver the two-stage drop-deepest/DS/TopK10 BAT; independent static review PASS. Trainer 01ec900 supports optional deep supervision; historical single-output runs remain distinct.
 
 ## Next actions
 
-1. Current source/README have independent static PASS and user-authorized branch commit/push. Update the matching server worktree from origin/codex/upernet-no-stage7 after delivery.
-2. Deploy the new Trainer source to the training server and follow README_plainconv_depth.md to create the independent nnUNetPlansPlainConvDepth.json from the original source plans; reuse original data_identifier and fixed patient splits.
-3. Select 2d_stage7 (all original stages), 2d_stage6 (remove stage7), or 2d_stage5 (remove stages6 and7). Use the same ordinary decoder, TopK10/early-stopping/single-output policy across these depth comparisons, with fresh per-configuration outputs.
-4. Validate checkpoint_final with --val and compare original full-volume per-case Dice/Recall/Precision/HD95/FP/FN against the same case set. Fold0 is a development screen; formal conclusions require controlled five-fold OOF.
+1. Synchronize the matching server worktree; do not claim runtime validation.
+2. Run run_plainconv_depth_pretrain_finetune.bat on the confirmed server. It activates nnunet5090, selects physical GPU1 by UUID, reuses existing preprocessed data/splits, trains both fold0 stages with best validation, then computes two original-full-volume metric sets.
+3. Preserve any failure output. The BAT starts fresh and does not automatically resume or overwrite previous runs.
+4. Collect both printed metric directories and run_receipt.json. Source and target results describe different cohorts; fold0 is development evidence, not five-fold OOF.
 
 ## Pending evidence
 
-- Official runtime discovery/reconstruction, forward/checkpoint/CUDA compatibility and performance of the new Trainer are not locally validated.
-- Original plans/preprocessed source data/fixed splits remain unchanged. No real data or training runs were performed by this local task.
+- Server paths/dependencies, real training, weight initialization and resulting full-volume metrics remain NOT_RUN locally.
+- Source raw data, original plans/splits and old experiments remain protected.

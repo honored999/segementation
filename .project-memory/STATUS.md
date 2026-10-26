@@ -26,3 +26,10 @@ Scope: branch-local codex/upernet-no-stage7, baseline 8a41ce3b0d4e2c980c9e9063a6
 
 - User authorized committing and pushing the accepted new Trainer/README for server delivery. Production implementation was delegated; prior Trainer/Mixins/tests unchanged. Branch-local records only; canonical master memory untouched.
 - Static reviewed SHA256: Trainer A3A0E50192C8B3E2C360C06353050CBA5E373C9B023042E944109B86146CCFEC; README E41AB426137CB2D366434A1799E2E487B2351E59C1C32AC361AAC4C9C762A212. No runtime acceptance implied.
+
+## 2026-10-26 - Optional deep supervision and two-stage BAT
+
+- Trainer commit 01ec900 adds configuration-level enable_deep_supervision (boolean, default false); retained decoder scales follow encoder_last_stage. This supersedes the earlier always-single-output restriction for this Trainer only. TopK10 and early stopping remain unchanged.
+- Added run_plainconv_depth_pretrain_finetune.bat and a metadata-only preparation helper for fresh Dataset508 fold0 pretraining, then HD-BET3mm Dataset501 fold0 full-parameter fine-tuning from that run's best weights, followed by two original-full-volume metric evaluations. Both stages remove exactly the deepest stage and enable deep supervision.
+- Confirmed server defaults: nnunet5090, physical GPU1, existing HD-BET trial01 prepared data. Derived plans preserve each dataset's own data_identifier and existing splits; outputs use a fresh timestamp root.
+- Static inspection and independent final BAT/helper review PASS; dataset-name routing guard verified on the final snapshot. No tests, model/checkpoint loads, patient processing, server execution, training or evaluation were run locally. This feature branch is not integrated into master.

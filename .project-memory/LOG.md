@@ -1,5 +1,11 @@
 # Log
 
+## 2026-10-26 - Two-stage drop-deepest deep-supervision BAT
+
+- Changed: delegated BAT/helper/README implementation; metadata-only derived plans, fixed fold0 source pretraining and HD-BET full fine-tuning, best-checkpoint validation, two metric directories printed on success. Main agent edited coordination memory only in this task.
+- Validation: static source review and independent final snapshot review PASS, including dataset-name routing guard. Per user instruction, no tests, models, real data, BAT, server training or evaluation executed locally.
+- Next: accept static review, deliver on the existing feature branch, then obtain server execution evidence. Canonical master state is unchanged.
+
 ## 2026-10-04 - Configurable-depth ordinary PlainConvUNet Trainer
 
 - Changed: one separate external Trainer reads encoder_last_stage from saved plans/configuration, constructs retained encoder stages and corresponding official UNetDecoder directly, and inherits TopK10/early-stopping/single-output policy. Added short derived-plans/server-command instructions; old UPerNet Trainers unchanged.
