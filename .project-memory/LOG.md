@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-27 - User-selected standard label suffix priority
+- Minimal naming-only fix: retain pure-DWI-first selection, then prefer normal .nii/.nii.gz over extra-dot suffixes within each type. Extra-dot files remain fallback; same-rank equality/conflict checks unchanged.
+- Validation: AST and simple static diff review only, per user request. No tests, conversion or raw-data edits; leaf worker implemented.
+
 ## 2026-10-27 - User-selected pure DWI label priority
 - Minimal label-only fix: pure DWI names outrank combined DWIADC per patient/timepoint, independent of path traversal order. Same-priority byte-equality and conflict checks retained; b selection and geometry unchanged.
 - Validation: syntax/AST and simple static diff review only, as requested. No tests, actual conversion, or raw-data changes; implementation delegated to a leaf worker.

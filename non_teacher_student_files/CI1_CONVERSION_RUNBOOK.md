@@ -31,7 +31,7 @@ must match a regular orthogonal grid along the normalized orientation normal.
 The maximum Euclidean residual is 0.001 mm (to allow stored decimal rounding);
 in-plane drift, shear and unsupported nonuniform 3D positions are rejected.
 
-NIfTI labels containing `DWI` but no `ADC` take priority per patient/timepoint; `DWIADC` is eligible only when no pure DWI exists.
+NIfTI labels containing `DWI` but no `ADC` take priority per patient/timepoint; `DWIADC` is eligible only when no pure DWI exists. Within each priority, normal `.nii`/`.nii.gz` endings outrank `..nii`/`..nii.gz`; extra-dot labels remain eligible as fallback.
 ADC-only/FLAIR files are excluded; `pred`, `output`, `deepisles`, and `xy_fixed`
 paths remain forbidden. Pairing stays patient/timepoint based; `D1（2）` parsing
 is unchanged. Byte-identical duplicate labels are deduplicated, retaining the
