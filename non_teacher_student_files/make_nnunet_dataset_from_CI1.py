@@ -319,12 +319,13 @@ def parse_b_value(value: str) -> str:
     return str(value)
 
 
-def select_dwi_dicom_files(dicom_dir: Path, b_value: str = "high") -> DwiSelection:
-    """Select one complete b volume using headers only, before slice deduplication.
+def select_dwi_dicom_files(
+    dicom_dir: Path, b_value: str = "high", reference_image: sitk.Image | None = None,
+) -> DwiSelection:
+    """Select a complete b volume; resolve series by reference geometry/number.
 
-    The helper defaults to high for existing direct callers; the CLI requires a
-    choice. Unknown b values, multiple DWI series and repeated selected-b frames
-    are rejected rather than resolved by InstanceNumber or filename order.
+    The helper defaults to high for existing callers; the CLI requires a choice.
+    Reference matching uses size/spacing/origin/direction only, never voxel values.
     """
     requested = parse_b_value(b_value)
     pydicom = require_pydicom()
@@ -342,13 +343,65 @@ def select_dwi_dicom_files(dicom_dir: Path, b_value: str = "high") -> DwiSelecti
             dwi_uids.add(uid)
     if not dwi_uids:
         raise RuntimeError(f"No DWI DICOM series found in {dicom_dir}")
-    if len(dwi_uids) != 1 or "" in dwi_uids:
-        raise RuntimeError(f"Ambiguous or missing DWI series UID in {dicom_dir}: {sorted(dwi_uids)}")
-    uid = next(iter(dwi_uids))
+    if "" in dwi_uids:
+        raise RuntimeError(f"Missing DWI series UID in {dicom_dir}")
+    if len(dwi_uids) == 1:
+        uid = next(iter(dwi_uids))
+        return _select_series_b_volume(uid, grouped[uid], requested)
+
+    # Validate every candidate with the unchanged whole-series checks. Invalid
+    # b/geometry must reject the case, not silently remove a competing series.
+    candidates = [
+        _select_series_b_volume(uid, grouped[uid], requested)
+        for uid in sorted(dwi_uids)
+    ]
+    matches = []
+    if reference_image is not None:
+        for candidate in candidates:
+            image = read_selected_dwi_image(candidate)
+            if image.GetSize() == reference_image.GetSize() and all(
+                geometry_close(getattr(image, f"Get{name}")(),
+                               getattr(reference_image, f"Get{name}")())
+                for name in ("Spacing", "Origin", "Direction")
+            ):
+                matches.append(candidate)
+
+    def series_number(candidate: DwiSelection) -> int | None:
+        values = {str(getattr(header, "SeriesNumber", "")).strip()
+                  for _, header in grouped[candidate.series_uid]}
+        if len(values) != 1:
+            return None
+        value = next(iter(values))
+        return int(value) if re.fullmatch(r"[+-]?\d+", value) else None
+
+    if len(matches) == 1:
+        chosen = matches[0]
+        reason = "unique_label_geometry_match"
+    else:
+        numbers = [series_number(candidate) for candidate in candidates]
+        if any(number is None for number in numbers):
+            raise RuntimeError("Cannot choose lowest SeriesNumber: missing/noninteger/inconsistent numbering")
+        minimum = min(number for number in numbers if number is not None)
+        minima = [candidate for candidate, number in zip(candidates, numbers) if number == minimum]
+        if len(minima) != 1:
+            raise RuntimeError(f"Ambiguous lowest DICOM SeriesNumber={minimum}")
+        chosen = minima[0]
+        reason = f"lowest_numeric_SeriesNumber; geometry_matches={len(matches)}"
+    number = series_number(chosen)
+    reason = (f"{chosen.selection_reason}; {reason}; selected_series_uid={chosen.series_uid}; "
+              f"selected_SeriesNumber={number if number is not None else 'unknown'}")
+    return DwiSelection(chosen.files, chosen.requested_b_value, chosen.selected_b_value,
+                        chosen.series_uid, chosen.available_b_values, reason)
+
+
+def _select_series_b_volume(
+    uid: str, headers: Sequence[tuple[Path, object]], requested: str,
+) -> DwiSelection:
+    """Apply the original b/coverage/position guards independently per series."""
     frames: list[tuple[Path, float, tuple[float, ...], float, tuple[float, ...]]] = []
     reference_geometry = None
     normal = None
-    for path, header in grouped[uid]:
+    for path, header in headers:
         try:
             frame_count = int(getattr(header, "NumberOfFrames", 1))
         except (TypeError, ValueError) as exc:
@@ -479,9 +532,9 @@ def convert_cases(
         try:
             if is_forbidden_label_path(candidate.label_path):
                 raise RuntimeError(f"Forbidden predicted/generated label: {candidate.label_path}")
-            selection = select_dwi_dicom_files(candidate.dicom_dir, b_value)
-            image = read_selected_dwi_image(selection)
             label = read_nifti_image(candidate.label_path)
+            selection = select_dwi_dicom_files(candidate.dicom_dir, b_value, reference_image=label)
+            image = read_selected_dwi_image(selection)
             if image.GetSize() != label.GetSize():
                 raise RuntimeError(f"Shape mismatch image={image.GetSize()} label={label.GetSize()}")
             for name in ("Spacing", "Origin", "Direction"):

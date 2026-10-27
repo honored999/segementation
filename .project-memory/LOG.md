@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-27 - Resolve multiple DWI acquisition series
+- Reused per-series b/coverage/geometry guards. A unique label-header geometry match is preferred, otherwise the unique lowest numeric SeriesNumber; invalid candidates, missing fallback numbers or ties remain explicit failures. Final label geometry check remains.
+- Provenance records selected UID/number/reason. Validation: AST, diff checks and independent PASS STATIC only; no tests or actual conversion, per user request. Leaf worker implemented; parent integrated.
+
 ## 2026-10-27 - Recognize attached-name timepoints
 - One-line regex fix accepts nameDx-DWI as well as name-Dx-DWI, retaining the existing trailing boundary and DWI-containing-label rules. Filename-only local audit increased candidate patient/timepoint keys from 98 to 131; actual conversion acceptance remains unverified.
 - Validation: AST and simple static diff review only. No tests, real conversion, or raw-data edits; implementation delegated to a leaf worker.

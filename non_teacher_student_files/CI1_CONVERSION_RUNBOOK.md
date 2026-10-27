@@ -22,7 +22,7 @@ for compatibility; the CLI has no automatic choice.
 
 Selection reads headers, filters the whole series to ONE b, then checks the
 selected b covers the union of source slice positions. Missing/unknown b,
-ambiguous selected-b duplicates, multiple candidate DWI series, unsupported
+ambiguous selected-b duplicates, missing series UIDs, unsupported
 multiframe files, or inconsistent geometry reject the case visibly. There is no
 per-position substitution. Only the exact selected files are passed to the
 SimpleITK DICOM reader; no intensity normalization, registration or resampling.
@@ -30,6 +30,19 @@ Before pixel reading, the selected unrounded 3D ImagePositionPatient sequence
 must match a regular orthogonal grid along the normalized orientation normal.
 The maximum Euclidean residual is 0.001 mm (to allow stored decimal rounding);
 in-plane drift, shear and unsupported nonuniform 3D positions are rejected.
+
+For multiple DWI SeriesUIDs in one source directory, each candidate independently
+passes the same whole-series b/coverage/geometry checks; any invalid candidate
+rejects the case. The exact selected files are read with the native SimpleITK
+reader. Prefer a unique match to the selected label's size, spacing, origin and
+direction (tolerance 1e-5); label voxel contents are never used. Without a unique
+geometry match (including callers with no reference image), choose the lowest
+numeric DICOM SeriesNumber. Missing, noninteger or internally inconsistent numbers
+on any candidate, or a tied minimum, reject this fallback; UID/filename order is
+never a tie breaker. A unique geometry match does not require numeric numbering.
+The later image/label geometry rejection still applies. Single-series selection
+is unchanged. Multi-series selection_reason records the chosen UID, SeriesNumber
+(or unknown for a uniquely geometry-matched series) and selection rationale.
 
 NIfTI labels containing `DWI` but no `ADC` take priority per patient/timepoint; `DWIADC` is eligible only when no pure DWI exists. Within each priority, normal `.nii`/`.nii.gz` endings outrank `..nii`/`..nii.gz`; extra-dot labels remain eligible as fallback.
 ADC-only/FLAIR files are excluded; `pred`, `output`, `deepisles`, and `xy_fixed`
