@@ -1,12 +1,14 @@
 # Status
 
-Updated: 2026-10-21
+Updated: 2026-10-27
 
 ## Integration state
-- Canonical integration branch: master; starting commit for this documentation update: 10079c4.
+- Canonical integration branch: master; starting commit for this conversion integration: 8592d18.
 - Master contains the original H2Former implementation and the existing nnU-Net early-stopping/evaluation work recorded in its history.
-- Most recent experiments live on separate feature branches. This project-wide overview does not merge their production code or establish their acceptance into master.
+- Most experiment code remains on separate feature branches. This conversion integration does not merge or establish acceptance of those other workstreams.
 - Branch pointers were checked locally on 2026-10-21; remote freshness and current full-suite behavior were not verified.
+
+- CI-1 conversion update from task commit `0df8d43` is integrated in this master working tree: explicit high/low/numeric b selection, DWIADC eligibility, strict geometry/output guards and separate rejection provenance. Independent Level 3 review: PASS STATIC; final runtime tests and real conversion were not run per user instruction. Other feature-branch history was not merged.
 
 ## Active project workstreams
 - `codex/genseg-reference` at 5472832: HD-BET3mm preparation/runbooks, GenSeg reference/adaptation and detailed branch-local project memory.
@@ -18,11 +20,11 @@ Updated: 2026-10-21
 - Standalone nnU-Net, H2Former transfer/source-space evaluation, UPerNet variants, multichannel/asymmetry, optical models and Stage2/ROI work remain in separate feature branches. A branch pointer is inventory evidence, not proof of tests, integration or experimental benefit.
 
 ## Scientific invariants
-- Dataset501 is the DWI-only baseline with95 cases; preserve patient-level five-fold splits. Ordinary fold0 is76/19; GenSeg inner61/15 is a distinct training-only partition.
+- Dataset501 remains the established 95-entry DWI baseline. The supplied conversion manifest contains 95 examinations under 25 distinct patient fields; do not call these 95 independent patients. Preserve existing five-fold splits and the existing fold0 76/19 and GenSeg inner61/15 entry partitions; patient-group separation has NOT yet been audited. No split regeneration is authorized.
 - Real images/labels and old checkpoints are protected sources; derived outputs remain separate. GT must not influence inference-time input construction; prediction-guided Stage2 training requires OOF predictions.
 - Formal metrics use original full-volume space. Synthetic/static/preflight and fold0 development results are distinct from formal five-fold OOF evidence.
 - Compare identical cohorts, source checkpoints, Trainer protocols and metric definitions before causal conclusions. Skull stripping and registration are distinct operations.
 
 ## Operational constraints
 - Prefer newconda for Python and request direct command approval per user instruction. No nested subagents.
-- This update changes documentation only; no runtime tests, server data access or fresh experimental validation occurred.
+- Latest acceptance is static-only conversion tooling, not dataset/clinical validation. No real conversion, training, raw-data changes, split changes or remote push occurred in this task.

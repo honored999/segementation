@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Iterable
 
 
+FORBIDDEN_LABEL_KEYWORDS = ("pred", "output", "deepisles", "xy_fixed")
 TIMEPOINT_RE = re.compile(r"(?:^|[-_ ])(D\d+)(?:[-_ ]|$)", re.IGNORECASE)
 
 
@@ -55,7 +56,7 @@ def extract_timepoint(text: str) -> str | None:
 
 def is_dwi_name(name: str) -> bool:
     lower_name = name.lower()
-    return "dwi" in lower_name and "adc" not in lower_name
+    return "dwi" in lower_name
 
 
 def iter_patient_dirs(ci1_root: Path) -> Iterable[Path]:
@@ -66,10 +67,12 @@ def iter_patient_dirs(ci1_root: Path) -> Iterable[Path]:
 
 def find_dwi_segmentations(ci1_root: Path) -> list[DwiSegmentation]:
     grouped: dict[tuple[str, str], DwiSegmentation] = {}
-    duplicate_count = 0
     for patient_dir in iter_patient_dirs(ci1_root):
         for path in sorted(patient_dir.rglob("*"), key=lambda item: str(item)):
             if not path.is_file() or not is_nifti(path) or not is_dwi_name(path.name):
+                continue
+            if any(keyword in str(path).lower() for keyword in FORBIDDEN_LABEL_KEYWORDS):
+                print(f"[SKIP] forbidden label path: {path}")
                 continue
             timepoint = extract_timepoint(path.name)
             if timepoint is None:
@@ -87,14 +90,11 @@ def find_dwi_segmentations(ci1_root: Path) -> list[DwiSegmentation]:
                 grouped[key] = segmentation
                 continue
 
-            duplicate_count += 1
-            existing_depth = len(existing.path.relative_to(patient_dir).parts)
-            new_depth = len(segmentation.path.relative_to(patient_dir).parts)
-            if new_depth < existing_depth:
-                grouped[key] = segmentation
+            raise RuntimeError(
+                f"Ambiguous DWI labels for {segmentation.patient} {segmentation.timepoint}: "
+                f"{existing.path} ; {segmentation.path}. Explicitly resolve labels before conversion."
+            )
 
-    if duplicate_count:
-        print(f"Skipped duplicate DWI segmentations: {duplicate_count}")
     return list(grouped.values())
 
 
@@ -134,13 +134,12 @@ def choose_dicom_series(
     if not candidates:
         return None
 
-    dwi_candidates = [
-        series for series in candidates if "dwi" in series.path.name.lower()
-    ]
-    if dwi_candidates:
-        candidates = dwi_candidates
-
-    return max(candidates, key=lambda series: series.dicom_count)
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"Ambiguous DICOM directories for {segmentation.patient} {segmentation.timepoint}: "
+            + " ; ".join(str(series.path) for series in candidates)
+        )
+    return candidates[0]
 
 
 def write_index(

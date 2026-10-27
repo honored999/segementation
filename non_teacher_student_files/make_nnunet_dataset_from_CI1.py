@@ -1,14 +1,17 @@
 """Convert raw CI-1 DWI lesion data to nnU-Net v2 format.
 
 中文说明：这个脚本从 CI-1 原始数据集中读取 DWI DICOM 原图和人工 GT 标注，
-生成 nnU-Net v2 所需的 Dataset501_StrokeLesion 目录。第一版只做单通道
-DWI，不使用 DeepISLES 预测输出作为训练标签；label 会被二值化为 0/1。
+在显式指定的全新输出目录生成 nnU-Net v2 数据集。只做单通道
+DWI，不使用 DeepISLES 预测输出作为训练标签；label 保留既有二值语义：所有非零值转为 1（不推断原始类别含义）。
+CLI 必须显式提供 --b-value 和全新的 --output-root；不覆盖旧数据。
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -19,15 +22,13 @@ from typing import Iterable, Sequence
 import numpy as np
 import SimpleITK as sitk
 
-from audit_ci1_dwi_adc_masks import background_predicate, read_series_image
-from prepare_ci1_dwi_dataset import build_index
+from ci1_nvauto_common import diffusion_b_value, require_pydicom
+from prepare_ci1_dwi_dataset import FORBIDDEN_LABEL_KEYWORDS, build_index
 
 
-DEFAULT_OUTPUT_ROOT = Path(r"C:\lijialin\models3d\nnUNet\nnUNet_raw\Dataset501_StrokeLesion")
 TIMEPOINT_RE = re.compile(r"(D\d+)", re.IGNORECASE)
 DWI_KEYWORDS = ("dwi", "b800")
 LABEL_KEYWORDS = ("gt", "label", "mask", "lesion", "seg")
-FORBIDDEN_LABEL_KEYWORDS = ("pred", "output", "deepisles", "xy_fixed")
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,21 @@ class WrittenCase:
     source_label: Path
     output_image: Path
     output_label: Path
+    requested_b_value: str = ""
+    selected_b_value: float | None = None
+    source_series_uid: str = ""
+    source_dicom_files: tuple[str, ...] = ()
+    selection_reason: str = ""
+
+
+@dataclass(frozen=True)
+class DwiSelection:
+    files: tuple[Path, ...]
+    requested_b_value: str
+    selected_b_value: float
+    series_uid: str
+    available_b_values: tuple[float, ...]
+    selection_reason: str
 
 
 def is_nifti_path(path: Path) -> bool:
@@ -290,10 +306,121 @@ def save_dicom_image_as_nii_gz(image: sitk.Image, output_path: Path) -> None:
     sitk.WriteImage(image, str(output_path))
 
 
-def read_dwi_dicom_image(dicom_dir: Path) -> sitk.Image:
-    """Read the DWI DICOM series from a CI-1 case directory."""
-    image, _description = read_series_image(dicom_dir, background_predicate("dwi"))
-    return image
+def parse_b_value(value: str) -> str:
+    """Accept an explicit high/low choice or a finite nonnegative numeric b."""
+    if value in ("high", "low"):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("b value must be high, low, or a nonnegative number") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("b value must be finite and nonnegative")
+    return str(value)
+
+
+def select_dwi_dicom_files(dicom_dir: Path, b_value: str = "high") -> DwiSelection:
+    """Select one complete b volume using headers only, before slice deduplication.
+
+    The helper defaults to high for existing direct callers; the CLI requires a
+    choice. Unknown b values, multiple DWI series and repeated selected-b frames
+    are rejected rather than resolved by InstanceNumber or filename order.
+    """
+    requested = parse_b_value(b_value)
+    pydicom = require_pydicom()
+    grouped: dict[str, list[tuple[Path, object]]] = {}
+    dwi_uids: set[str] = set()
+    for path in sorted(dicom_dir.rglob("*.dcm")):
+        try:
+            header = pydicom.dcmread(str(path), stop_before_pixels=True)
+        except Exception as exc:
+            raise RuntimeError(f"Unreadable DICOM header: {path}: {exc}") from exc
+        uid = str(getattr(header, "SeriesInstanceUID", ""))
+        grouped.setdefault(uid, []).append((path, header))
+        description = str(getattr(header, "SeriesDescription", "")).lower()
+        if "dwi" in description and "adc" not in description:
+            dwi_uids.add(uid)
+    if not dwi_uids:
+        raise RuntimeError(f"No DWI DICOM series found in {dicom_dir}")
+    if len(dwi_uids) != 1 or "" in dwi_uids:
+        raise RuntimeError(f"Ambiguous or missing DWI series UID in {dicom_dir}: {sorted(dwi_uids)}")
+    uid = next(iter(dwi_uids))
+    frames: list[tuple[Path, float, tuple[float, ...], float, tuple[float, ...]]] = []
+    reference_geometry = None
+    normal = None
+    for path, header in grouped[uid]:
+        try:
+            frame_count = int(getattr(header, "NumberOfFrames", 1))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid DICOM frame count: {path}") from exc
+        if frame_count != 1:
+            raise RuntimeError(f"Multiframe DICOM is unsupported: {path}")
+        actual_b = diffusion_b_value(header)
+        if actual_b is None or not math.isfinite(actual_b) or actual_b < 0:
+            raise RuntimeError(f"Missing/unknown/invalid b value in DWI header: {path}")
+        try:
+            orientation = np.asarray(header.ImageOrientationPatient, dtype=float)
+            position = np.asarray(header.ImagePositionPatient, dtype=float)
+            spacing = np.asarray(header.PixelSpacing, dtype=float)
+            size = (int(header.Rows), int(header.Columns))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"Missing/invalid DICOM geometry: {path}") from exc
+        if (orientation.shape != (6,) or position.shape != (3,) or spacing.shape != (2,)
+                or not np.isfinite(np.concatenate((orientation, position, spacing))).all()
+                or np.any(spacing <= 0) or min(size) <= 0):
+            raise RuntimeError(f"Invalid DICOM geometry: {path}")
+        if reference_geometry is None:
+            reference_geometry = (orientation, spacing, size)
+            normal = np.cross(orientation[:3], orientation[3:])
+            if (not np.isclose(np.linalg.norm(orientation[:3]), 1, atol=1e-4)
+                    or not np.isclose(np.linalg.norm(orientation[3:]), 1, atol=1e-4)
+                    or not np.isclose(np.dot(orientation[:3], orientation[3:]), 0, atol=1e-4)):
+                raise RuntimeError(f"Invalid DICOM orientation: {path}")
+            normal = normal / np.linalg.norm(normal)
+        else:
+            ref_orientation, ref_spacing, ref_size = reference_geometry
+            if (size != ref_size or not np.allclose(orientation, ref_orientation, atol=1e-5, rtol=0)
+                    or not np.allclose(spacing, ref_spacing, atol=1e-5, rtol=0)):
+                raise RuntimeError(f"Inconsistent DICOM geometry within series {uid}: {path}")
+        key = tuple(float(v) for v in np.round(position, 4))
+        frames.append((path, actual_b, key, float(np.dot(position, normal)), tuple(float(v) for v in position)))
+    available = tuple(sorted({frame[1] for frame in frames}))
+    chosen = max(available) if requested == "high" else min(available) if requested == "low" else float(requested)
+    if chosen not in available:
+        raise RuntimeError(f"Requested b={requested} unavailable in series {uid}; available={available}")
+    # First filter the WHOLE series by b. Only then inspect duplicate positions.
+    selected = [frame for frame in frames if frame[1] == chosen]
+    common_positions = {frame[2] for frame in frames}
+    if {frame[2] for frame in selected} != common_positions:
+        raise RuntimeError(f"Incomplete b={chosen} coverage in series {uid}; requested={requested}, available={available}")
+    if len(selected) != len(common_positions):
+        raise RuntimeError(f"Ambiguous duplicate frames at b={chosen} in series {uid}")
+    selected.sort(key=lambda frame: frame[3])
+    if len(selected) > 1:
+        distances = np.diff([frame[3] for frame in selected])
+        if np.any(distances <= 1e-4) or not np.allclose(distances, distances[0], atol=1e-4, rtol=1e-4):
+            raise RuntimeError(f"Nonuniform/ambiguous slice positions in series {uid}")
+        # Use unrounded positions: projection alone cannot detect in-plane drift.
+        # A 0.001 mm physical residual allows stored decimal rounding, not shear.
+        positions = np.asarray([frame[4] for frame in selected], dtype=float)
+        step = (selected[-1][3] - selected[0][3]) / (len(selected) - 1)
+        expected = positions[0] + np.arange(len(selected))[:, None] * step * normal
+        if np.any(np.linalg.norm(positions - expected, axis=1) > 1e-3):
+            raise RuntimeError(f"Unsupported nonorthogonal/nonuniform 3D slice positions in series {uid}")
+    reason = f"whole_series_{requested}; full_position_coverage; available_b_values={available}"
+    return DwiSelection(tuple(frame[0] for frame in selected), requested, chosen, uid, available, reason)
+
+
+def read_selected_dwi_image(selection: DwiSelection) -> sitk.Image:
+    """Use the exact selected files and SimpleITK's native DICOM geometry."""
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames([str(path) for path in selection.files])
+    return reader.Execute()
+
+
+def read_dwi_dicom_image(dicom_dir: Path, b_value: str = "high") -> sitk.Image:
+    """Read one uniform b volume (helper default high; CLI choice is required)."""
+    return read_selected_dwi_image(select_dwi_dicom_files(dicom_dir, b_value))
 
 
 def build_dataset_json(num_training: int) -> dict[str, object]:
@@ -307,21 +434,39 @@ def build_dataset_json(num_training: int) -> dict[str, object]:
     }
 
 
-def prepare_output_dirs(output_root: Path, clean: bool) -> None:
-    """Create nnU-Net output directories, optionally removing old contents."""
-    if clean and output_root.exists():
-        shutil.rmtree(output_root)
-    (output_root / "imagesTr").mkdir(parents=True, exist_ok=True)
-    (output_root / "labelsTr").mkdir(parents=True, exist_ok=True)
-    (output_root / "imagesTs").mkdir(parents=True, exist_ok=True)
+def validate_output_separation(output_root: Path, source: Path) -> None:
+    """Reject equal, descendant and ancestor paths after resolving links."""
+    output, source = output_root.resolve(), source.resolve()
+    if output == source or output in source.parents or source in output.parents:
+        raise ValueError(f"Output/input overlap is forbidden: output={output}, source={source}")
+
+
+def prepare_output_dirs(output_root: Path, clean: bool = False) -> None:
+    """Create a fresh dataset only; never delete or reuse an existing path."""
+    if clean:
+        raise ValueError("--clean is disabled; choose a fresh --output-root")
+    if output_root.exists() or output_root.is_symlink():
+        raise FileExistsError(f"Output root already exists; choose a fresh path: {output_root}")
+    output_root.mkdir(parents=True, exist_ok=False)
+    for name in ("imagesTr", "labelsTr", "imagesTs"):
+        (output_root / name).mkdir()
 
 
 def convert_cases(
     cases: Sequence[CaseCandidate],
     output_root: Path,
     limit: int = 0,
+    b_value: str = "high",
+    rejected_cases: list[dict[str, object]] | None = None,
 ) -> list[WrittenCase]:
     """Convert candidate cases to nnU-Net files."""
+    b_value = parse_b_value(b_value)
+    for name in ("dataset.json", "conversion_manifest.tsv", "conversion_rejections.tsv"):
+        if (output_root / name).exists() or (output_root / name).is_symlink():
+            raise FileExistsError(f"Refusing to reuse an existing dataset: {output_root}")
+    for candidate in cases:
+        validate_output_separation(output_root, candidate.dicom_dir)
+        validate_output_separation(output_root, candidate.label_path)
     selected_cases = list(cases[:limit]) if limit > 0 else list(cases)
     written: list[WrittenCase] = []
     for candidate in selected_cases:
@@ -330,23 +475,39 @@ def convert_cases(
             f"  dicom: {candidate.dicom_dir}\n"
             f"  label: {candidate.label_path}"
         )
+        selection = None
         try:
-            image = read_dwi_dicom_image(candidate.dicom_dir)
+            if is_forbidden_label_path(candidate.label_path):
+                raise RuntimeError(f"Forbidden predicted/generated label: {candidate.label_path}")
+            selection = select_dwi_dicom_files(candidate.dicom_dir, b_value)
+            image = read_selected_dwi_image(selection)
             label = read_nifti_image(candidate.label_path)
+            if image.GetSize() != label.GetSize():
+                raise RuntimeError(f"Shape mismatch image={image.GetSize()} label={label.GetSize()}")
+            for name in ("Spacing", "Origin", "Direction"):
+                if not geometry_close(getattr(image, f"Get{name}")(), getattr(label, f"Get{name}")()):
+                    raise RuntimeError(f"Geometry mismatch: {name}; no registration/header repair performed")
         except RuntimeError as exc:
-            print(f"  [SKIP] unable to read image or label: {exc}")
+            print(f"  [SKIP] requested b={b_value}: {exc}")
+            if rejected_cases is not None:
+                rejected_cases.append({
+                    "patient": candidate.patient, "timepoint": candidate.timepoint,
+                    "source_dicom_dir": candidate.dicom_dir, "source_label": candidate.label_path,
+                    "requested_b_value": b_value,
+                    "selected_b_value": selection.selected_b_value if selection else "",
+                    "source_series_uid": selection.series_uid if selection else "",
+                    "selection_reason": selection.selection_reason if selection else "",
+                    "source_dicom_files": json.dumps([str(path) for path in selection.files], ensure_ascii=False) if selection else "",
+                    "selected_slice_count": len(selection.files) if selection else "",
+                    "status": "rejected", "failure_reason": str(exc),
+                })
             continue
-        if image.GetSize() != label.GetSize():
-            print(
-                f"  [SKIP] shape mismatch image={image.GetSize()} "
-                f"label={label.GetSize()}"
-            )
-            continue
-        print_geometry_warnings(candidate, image, label)
 
         case_id = f"case{len(written) + 1:03d}"
         output_image = output_root / "imagesTr" / f"{case_id}_0000.nii.gz"
         output_label = output_root / "labelsTr" / f"{case_id}.nii.gz"
+        if any(path.exists() or path.is_symlink() for path in (output_image, output_label)):
+            raise FileExistsError(f"Refusing to overwrite existing case output: {case_id}")
         save_dicom_image_as_nii_gz(image, output_image)
         save_binary_label_image(label, output_label)
         written.append(
@@ -358,33 +519,48 @@ def convert_cases(
                 source_label=candidate.label_path,
                 output_image=output_image,
                 output_label=output_label,
+                requested_b_value=selection.requested_b_value,
+                selected_b_value=selection.selected_b_value,
+                source_series_uid=selection.series_uid,
+                source_dicom_files=tuple(str(path) for path in selection.files),
+                selection_reason=selection.selection_reason,
             )
         )
-        print(f"  [OK] wrote {case_id}")
+        print(f"  [OK] wrote {case_id}; requested b={b_value}, selected b={selection.selected_b_value}")
     return written
 
 
 def write_dataset_json(output_root: Path, num_training: int) -> None:
     """Write dataset.json in the output root."""
     dataset_path = output_root / "dataset.json"
-    with dataset_path.open("w", encoding="utf-8") as handle:
+    with dataset_path.open("x", encoding="utf-8") as handle:
         json.dump(build_dataset_json(num_training), handle, ensure_ascii=False, indent=2)
         handle.write("\n")
 
 
-def write_conversion_manifest(output_root: Path, written_cases: Sequence[WrittenCase]) -> None:
-    """Write a source-to-output manifest for audit purposes."""
-    manifest_path = output_root / "conversion_manifest.tsv"
-    with manifest_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        handle.write(
-            "case_id\tpatient\ttimepoint\tsource_dicom_dir\tsource_label\toutput_image\toutput_label\n"
-        )
+def write_conversion_manifest(
+    output_root: Path, written_cases: Sequence[WrittenCase],
+    rejected_cases: Sequence[dict[str, object]] = (),
+) -> None:
+    """Keep the successful-case manifest separate from rejected-case diagnostics."""
+    fields = ["case_id", "patient", "timepoint", "source_dicom_dir", "source_label",
+              "output_image", "output_label", "requested_b_value", "selected_b_value",
+              "source_series_uid", "source_dicom_files", "selected_slice_count",
+              "selection_reason", "status", "failure_reason"]
+    with (output_root / "conversion_manifest.tsv").open("x", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
+        writer.writeheader()
         for case in written_cases:
-            handle.write(
-                f"{case.case_id}\t{case.patient}\t{case.timepoint}\t"
-                f"{case.source_dicom_dir}\t{case.source_label}\t"
-                f"{case.output_image}\t{case.output_label}\n"
-            )
+            row = dict(vars(case))
+            row["source_dicom_files"] = json.dumps(case.source_dicom_files, ensure_ascii=False)
+            row["selected_slice_count"] = len(case.source_dicom_files)
+            row["status"] = "written"
+            writer.writerow(row)
+    if rejected_cases:
+        with (output_root / "conversion_rejections.tsv").open("x", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
+            writer.writeheader()
+            writer.writerows(rejected_cases)
 
 
 def parse_args() -> argparse.Namespace:
@@ -393,14 +569,19 @@ def parse_args() -> argparse.Namespace:
         description="Convert raw CI-1 DWI lesion data into nnU-Net v2 format."
     )
     parser.add_argument("--ci1-root", type=Path, default=Path("CI-1"))
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--output-root", type=Path, required=True, help="Fresh dataset path outside the input tree.")
+    parser.add_argument("--b-value", type=parse_b_value, required=True,
+                        help="Required manual choice: high, low, or a nonnegative numeric b value.")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="Remove the output dataset directory before conversion.",
+        help="Disabled: existing outputs are never deleted; use a fresh output path.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.clean:
+        parser.error("--clean is disabled; choose a fresh --output-root")
+    return args
 
 
 def main() -> None:
@@ -411,12 +592,17 @@ def main() -> None:
     if not args.ci1_root.is_dir():
         raise NotADirectoryError(f"CI-1 root is not a directory: {args.ci1_root}")
 
-    prepare_output_dirs(args.output_root, clean=args.clean)
+    validate_output_separation(args.output_root, args.ci1_root)
+    if args.output_root.exists() or args.output_root.is_symlink():
+        raise FileExistsError(f"Output root already exists: {args.output_root}")
     cases = find_case_candidates(args.ci1_root)
+    prepare_output_dirs(args.output_root, clean=args.clean)
     print(f"Found candidate cases: {len(cases)}")
-    written_cases = convert_cases(cases, args.output_root, limit=args.limit)
+    rejected_cases: list[dict[str, object]] = []
+    written_cases = convert_cases(cases, args.output_root, limit=args.limit,
+                                  b_value=args.b_value, rejected_cases=rejected_cases)
     write_dataset_json(args.output_root, num_training=len(written_cases))
-    write_conversion_manifest(args.output_root, written_cases)
+    write_conversion_manifest(args.output_root, written_cases, rejected_cases)
     print(f"Wrote nnU-Net dataset: {args.output_root}")
     print(f"Successful training cases: {len(written_cases)}")
 

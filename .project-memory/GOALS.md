@@ -4,6 +4,7 @@
 - Improve reproducible stroke-lesion segmentation while protecting medical source data, fixed patient splits and scientifically valid evaluation.
 
 ## Current milestone
+- Reconcile CI-1 examination/patient provenance and label eligibility before authorizing a new derived dataset; preserve the existing baseline and splits.
 - Consolidate HD-BET3mm initialization/control development evidence and choose the next controlled experiment.
 - Maintain an accurate project-wide inventory while keeping feature-branch code and experimental claims separate from master integration.
 
