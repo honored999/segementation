@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-27 - Minimal identical-label duplicate fix
+- Added a full-byte equality check before duplicate-label rejection; identical files retain the first sorted candidate, differing files still fail. Updated the runbook; b selection and other conversion logic unchanged.
+- Validation: AST parse and simple static diff review only, per user request; no tests, real conversion or raw-data modification. Leaf worker implemented; parent integrated.
+
 ## 2026-10-27 - CI-1 explicit b selection and label discovery
 - Integrated only task commit `0df8d43` content: high/low/numeric b selection before deduplication, DWIADC matching, regular 3D/native-grid guards, fresh-output protection, successful manifest plus separate rejection report, and runbook.
 - Validation: AST parse and Git diff checks; independent Level 3 PASS STATIC after fixing full 3D slice-position validation. Final runtime tests were waived by user; no real conversion or experiment was run.

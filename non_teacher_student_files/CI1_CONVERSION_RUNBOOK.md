@@ -34,8 +34,9 @@ in-plane drift, shear and unsupported nonuniform 3D positions are rejected.
 NIfTI label filenames containing `DWI` case-insensitively include `DWIADC`.
 ADC-only/FLAIR files are excluded; `pred`, `output`, `deepisles`, and `xy_fixed`
 paths remain forbidden. Pairing stays patient/timepoint based; `D1（2）` parsing
-is unchanged. Multiple eligible labels or matching source directories stop
-indexing with explicit candidate paths; resolve ambiguity manually. No arbitrary
+is unchanged. Byte-identical duplicate labels are deduplicated, retaining the
+first candidate in sorted traversal order. Conflicting labels or multiple matching
+source directories stop indexing with explicit candidate paths; resolve ambiguity manually. No arbitrary
 filename or directory-size tie breaker is used for these conflicts.
 
 Image and label size, spacing, origin and direction must agree (geometry

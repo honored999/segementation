@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import filecmp
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,9 @@ def find_dwi_segmentations(ci1_root: Path) -> list[DwiSegmentation]:
             existing = grouped.get(key)
             if existing is None:
                 grouped[key] = segmentation
+                continue
+
+            if filecmp.cmp(existing.path, path, shallow=False):
                 continue
 
             raise RuntimeError(
