@@ -25,7 +25,7 @@ from typing import Iterable
 
 
 FORBIDDEN_LABEL_KEYWORDS = ("pred", "output", "deepisles", "xy_fixed")
-TIMEPOINT_RE = re.compile(r"(?:^|[-_ ])(D\d+)(?:[-_ ]|$)", re.IGNORECASE)
+TIMEPOINT_RE = re.compile(r"(D\d+)(?:[-_ ]|$)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

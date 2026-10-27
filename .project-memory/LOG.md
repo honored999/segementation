@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-27 - Recognize attached-name timepoints
+- One-line regex fix accepts nameDx-DWI as well as name-Dx-DWI, retaining the existing trailing boundary and DWI-containing-label rules. Filename-only local audit increased candidate patient/timepoint keys from 98 to 131; actual conversion acceptance remains unverified.
+- Validation: AST and simple static diff review only. No tests, real conversion, or raw-data edits; implementation delegated to a leaf worker.
+
 ## 2026-10-27 - User-selected standard label suffix priority
 - Minimal naming-only fix: retain pure-DWI-first selection, then prefer normal .nii/.nii.gz over extra-dot suffixes within each type. Extra-dot files remain fallback; same-rank equality/conflict checks unchanged.
 - Validation: AST and simple static diff review only, per user request. No tests, conversion or raw-data edits; leaf worker implemented.

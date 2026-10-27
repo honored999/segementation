@@ -33,8 +33,7 @@ in-plane drift, shear and unsupported nonuniform 3D positions are rejected.
 
 NIfTI labels containing `DWI` but no `ADC` take priority per patient/timepoint; `DWIADC` is eligible only when no pure DWI exists. Within each priority, normal `.nii`/`.nii.gz` endings outrank `..nii`/`..nii.gz`; extra-dot labels remain eligible as fallback.
 ADC-only/FLAIR files are excluded; `pred`, `output`, `deepisles`, and `xy_fixed`
-paths remain forbidden. Pairing stays patient/timepoint based; `D1（2）` parsing
-is unchanged. Byte-identical duplicate labels are deduplicated, retaining the
+paths remain forbidden. Pairing stays patient/timepoint based; both `姓名-D3-DWI` (name-Dx-DWI) and `姓名D3-DWI` (nameDx-DWI) are supported; `D1（2）` remains unsupported. Byte-identical duplicate labels are deduplicated, retaining the
 first candidate in priority/path sorted traversal order. Conflicting labels within the selected priority or multiple matching
 source directories stop indexing with explicit candidate paths; resolve ambiguity manually. No arbitrary
 filename or directory-size tie breaker is used for these conflicts.
