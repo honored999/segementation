@@ -1,5 +1,9 @@
 # Log
 
+## 2026-10-27 - User-selected pure DWI label priority
+- Minimal label-only fix: pure DWI names outrank combined DWIADC per patient/timepoint, independent of path traversal order. Same-priority byte-equality and conflict checks retained; b selection and geometry unchanged.
+- Validation: syntax/AST and simple static diff review only, as requested. No tests, actual conversion, or raw-data changes; implementation delegated to a leaf worker.
+
 ## 2026-10-27 - Minimal identical-label duplicate fix
 - Added a full-byte equality check before duplicate-label rejection; identical files retain the first sorted candidate, differing files still fail. Updated the runbook; b selection and other conversion logic unchanged.
 - Validation: AST parse and simple static diff review only, per user request; no tests, real conversion or raw-data modification. Leaf worker implemented; parent integrated.

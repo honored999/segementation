@@ -69,7 +69,7 @@ def iter_patient_dirs(ci1_root: Path) -> Iterable[Path]:
 def find_dwi_segmentations(ci1_root: Path) -> list[DwiSegmentation]:
     grouped: dict[tuple[str, str], DwiSegmentation] = {}
     for patient_dir in iter_patient_dirs(ci1_root):
-        for path in sorted(patient_dir.rglob("*"), key=lambda item: str(item)):
+        for path in sorted(patient_dir.rglob("*"), key=lambda item: ("ADC" in item.name.upper(), str(item))):
             if not path.is_file() or not is_nifti(path) or not is_dwi_name(path.name):
                 continue
             if any(keyword in str(path).lower() for keyword in FORBIDDEN_LABEL_KEYWORDS):
@@ -89,6 +89,9 @@ def find_dwi_segmentations(ci1_root: Path) -> list[DwiSegmentation]:
             existing = grouped.get(key)
             if existing is None:
                 grouped[key] = segmentation
+                continue
+
+            if "ADC" not in existing.path.name.upper() and "ADC" in path.name.upper():
                 continue
 
             if filecmp.cmp(existing.path, path, shallow=False):

@@ -8,7 +8,7 @@ Updated: 2026-10-27
 - Most experiment code remains on separate feature branches. This conversion integration does not merge or establish acceptance of those other workstreams.
 - Branch pointers were checked locally on 2026-10-21; remote freshness and current full-suite behavior were not verified.
 
-- CI-1 conversion update from task commit `0df8d43` is integrated in this master working tree: explicit high/low/numeric b selection, DWIADC eligibility, strict geometry/output guards and separate rejection provenance. Byte-identical duplicate label files are deduplicated; different contents remain an ambiguity error. Independent Level 3 review: PASS STATIC; final runtime tests and real conversion were not run per user instruction. Other feature-branch history was not merged.
+- CI-1 conversion update from task commit `0df8d43` is integrated in this master working tree: explicit high/low/numeric b selection, DWIADC eligibility, strict geometry/output guards and separate rejection provenance. Label selection prefers pure DWI filenames per patient/timepoint, falling back to combined DWIADC only when pure DWI is absent. Byte-identical duplicates are deduplicated; differing contents within the selected priority remain an ambiguity error. Independent Level 3 review: PASS STATIC; final runtime tests and real conversion were not run per user instruction. Other feature-branch history was not merged.
 
 ## Active project workstreams
 - `codex/genseg-reference` at 5472832: HD-BET3mm preparation/runbooks, GenSeg reference/adaptation and detailed branch-local project memory.
