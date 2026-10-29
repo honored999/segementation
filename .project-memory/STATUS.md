@@ -1,5 +1,12 @@
 # Status
 
+## 2026-10-29 branch update - early stopping
+
+- Branch scope: codex/isles2022-dwi-conversion; not integrated into master.
+- The shared nnU-Net early-stopping base removes the 300-epoch patience warmup; ordinary and TopK10 variants inherit direct counting after the first EMA baseline.
+- Preserve max1000, patience100, min_delta1e-4, best selection and checkpoint state. Old checkpoints retain saved counters without retrospective recounting.
+- Acceptance: independent static review PASS; tests, model loading and training NOT_RUN by explicit user request.
+
 Updated: 2026-09-21
 
 ## Current state

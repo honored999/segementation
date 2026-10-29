@@ -60,26 +60,31 @@ def _state(epoch: int, values: list[float]) -> nnUNetTrainerEarlyStopping:
 def test_defaults_and_official_trainer_are_unchanged() -> None:
     assert issubclass(nnUNetTrainerEarlyStopping, nnUNetTrainer)
     assert nnUNetTrainerEarlyStopping.MAX_EPOCHS == 1000
-    assert nnUNetTrainerEarlyStopping.MIN_TRAINING_EPOCHS == 300
+    assert not hasattr(nnUNetTrainerEarlyStopping, "MIN_TRAINING_EPOCHS")
     assert nnUNetTrainerEarlyStopping.PATIENCE == 100
     assert nnUNetTrainerEarlyStopping.MIN_DELTA == pytest.approx(1e-4)
     assert nnUNetTrainer.num_epochs if hasattr(nnUNetTrainer, "num_epochs") else True
     assert not hasattr(nnUNetTrainer, "_early_stopping_triggered")
 
 
-def test_minimum_epochs_never_triggers_stopping() -> None:
-    trainer = _state(299, [0.5])
-    trainer._early_stopping_best_ema = 0.5
-    trainer._epochs_without_improvement = trainer.PATIENCE - 1
+def test_first_epoch_sets_baseline_then_counts_patience_immediately() -> None:
+    trainer = _state(0, [0.5])
 
     trainer._update_early_stopping()
 
-    assert trainer._epochs_without_improvement == trainer.PATIENCE - 1
+    assert trainer._early_stopping_best_ema == pytest.approx(0.5)
+    assert trainer._epochs_without_improvement == 0
+    assert trainer._early_stopping_triggered is False
+
+    trainer.current_epoch = 1
+    trainer._update_early_stopping()
+
+    assert trainer._epochs_without_improvement == 1
     assert trainer._early_stopping_triggered is False
 
 
 def test_improvement_resets_patience() -> None:
-    trainer = _state(300, [0.5002])
+    trainer = _state(18, [0.5002])
     trainer._early_stopping_best_ema = 0.5
     trainer._epochs_without_improvement = 17
 
@@ -90,10 +95,16 @@ def test_improvement_resets_patience() -> None:
 
 
 def test_patience_stops_after_complete_epoch() -> None:
-    trainer = _state(399, [0.5])
+    trainer = _state(99, [0.5])
     trainer._early_stopping_best_ema = 0.5
-    trainer._epochs_without_improvement = trainer.PATIENCE - 1
+    trainer._epochs_without_improvement = trainer.PATIENCE - 2
 
+    trainer._update_early_stopping()
+
+    assert trainer._epochs_without_improvement == trainer.PATIENCE - 1
+    assert trainer._early_stopping_triggered is False
+
+    trainer.current_epoch = 100
     trainer._update_early_stopping()
 
     assert trainer._epochs_without_improvement == trainer.PATIENCE
@@ -101,7 +112,7 @@ def test_patience_stops_after_complete_epoch() -> None:
 
 
 def test_min_delta_must_be_met() -> None:
-    trainer = _state(300, [0.500099])
+    trainer = _state(1, [0.500099])
     trainer._early_stopping_best_ema = 0.5
 
     trainer._update_early_stopping()
@@ -183,7 +194,7 @@ def test_run_training_without_stop_matches_official_hook_order() -> None:
 
 def test_resumed_triggered_checkpoint_runs_no_additional_epoch_and_still_finishes() -> None:
     trainer = object.__new__(nnUNetTrainerEarlyStopping)
-    trainer.current_epoch = 400
+    trainer.current_epoch = 101
     trainer.num_epochs = 1000
     trainer.num_iterations_per_epoch = 1
     trainer.num_val_iterations_per_epoch = 1

@@ -41,7 +41,7 @@ GPU 也可传完整 GPU UUID，或通过 NNUNET_PHYSICAL_GPU 指定物理索引/
 | 03_511_TopK10_scratch | 511 | nnUNetTrainerTopK10EarlyStopping | 从头 |
 | 04_511_TopK10_ISLES508 | 511 | nnUNetTrainerTopK10EarlyStopping | 官方 -pretrained_weights |
 
-四组均为完整网络、保留 DS；不使用 depth / noDS 变体，不冻结层。标准组沿用官方 CE+Dice；TopK10 组沿用现有 Dice+最难 10% CE。早停复用原实现：max1000、min300、patience100、delta1e-4，监控 ema_fg_dice；最早停止时点遵循现有 Trainer 代码。没有新种子、优化器、停止逻辑或 checkpoint 选择规则。
+四组均为完整网络、保留 DS；不使用 depth / noDS 变体，不冻结层。标准组沿用官方 CE+Dice；TopK10 组沿用现有 Dice+最难 10% CE。早停复用公共 Trainer：max1000、patience100、delta1e-4，监控 ema_fg_dice，不设最低训练轮数。首个完成轮次建立基线，之后未达到 delta 的轮次立即累计；达到 delta 时清零，因此新训练始终无足够改善时最早在完成第 101 轮后停止。checkpoint 的状态键和已保存计数保持兼容；旧 checkpoint 续训保留原计数，不追溯重算过去 warmup 期间的轮次；已触发早停的 checkpoint 续训仍只执行启动/结束清理。种子、优化器及官方 checkpoint_best 严格改善选择规则保持不变。
 
 微调源：
 

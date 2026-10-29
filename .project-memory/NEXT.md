@@ -1,5 +1,11 @@
 # Next
 
+## 2026-10-29 branch next action
+
+- Deploy the reviewed early-stopping change from codex/isles2022-dwi-conversion before a separately authorized future experiment; do not automatically rerun old experiments.
+- Apply the new policy only with an explicit future run decision and recorded source version; preserve earlier experiment outputs. Existing checkpoint counters are carried forward as saved.
+- Runtime validation and experiments are not part of this static-only task. Master remains unchanged.
+
 ## Current focus
 
 - Decide whether to run a separately authorized, isolated Lite-UPerNet

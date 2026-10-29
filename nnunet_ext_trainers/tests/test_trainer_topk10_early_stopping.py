@@ -90,20 +90,20 @@ def test_real_logger_ema(tmp_path):
     assert t._early_stopping_best_ema == pytest.approx(.51)
 
 
-def test_warmup_and_patience_boundary(tmp_path):
+def test_baseline_and_immediate_patience_boundary(tmp_path):
     t = state(tmp_path)
-    for epoch in range(400):
+    for epoch in range(101):
         t.current_epoch = epoch
         t.logger.log('ema_fg_dice', .5, epoch)
         t._update_early_stopping()
-        assert t._epochs_without_improvement == max(0, epoch + 1 - 300)
-        assert t._early_stopping_triggered == (epoch == 399)
+        assert t._epochs_without_improvement == epoch
+        assert t._early_stopping_triggered == (epoch == 100)
 
 
 @pytest.mark.parametrize('delta,expected', [(0.000099, 18), (0.0001, 0), (.0002, 0)])
 def test_improvement_reset(tmp_path, delta, expected):
     t = state(tmp_path)
-    t.current_epoch = 300
+    t.current_epoch = 18
     t._early_stopping_best_ema = .5
     t._epochs_without_improvement = 17
     t.logger.log('ema_fg_dice', .5 + delta, 0)
@@ -114,7 +114,7 @@ def test_improvement_reset(tmp_path, delta, expected):
 
 def test_official_best_selection_independent_of_min_delta(tmp_path):
     t = state(tmp_path)
-    t.current_epoch = 300
+    t.current_epoch = 1
     t._early_stopping_best_ema = t._best_ema = .5
     for key, value in [('ema_fg_dice', .50005), ('train_losses', 1.), ('val_losses', 1.),
                        ('dice_per_class_or_region', [.5]), ('epoch_start_timestamps', 0.)]:
@@ -130,7 +130,7 @@ def test_official_best_selection_independent_of_min_delta(tmp_path):
     assert t._best_ema == pytest.approx(.50005)
     assert t._early_stopping_best_ema == .5
     assert t._epochs_without_improvement == 1
-    assert t.current_epoch == 301
+    assert t.current_epoch == 2
 
 
 class TinyState:
@@ -163,7 +163,7 @@ def checkpoint_fixture(tmp_path):
 @pytest.mark.parametrize('triggered', [False, True])
 def test_tiny_checkpoint_roundtrip_and_resume_control(tmp_path, triggered):
     source = checkpoint_fixture(tmp_path)
-    source.current_epoch = 399 if triggered else 350
+    source.current_epoch = 100 if triggered else 350
     source._early_stopping_best_ema = .69
     source._epochs_without_improvement = 100 if triggered else 42
     source._early_stopping_triggered = triggered

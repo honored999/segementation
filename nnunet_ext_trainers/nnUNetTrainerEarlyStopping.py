@@ -14,7 +14,6 @@ class nnUNetTrainerEarlyStopping(nnUNetTrainer):
     """Official nnU-Net 2.8.1 training with EMA pseudo-Dice early stopping."""
 
     MAX_EPOCHS = 1000
-    MIN_TRAINING_EPOCHS = 300
     PATIENCE = 100
     MIN_DELTA = 1e-4
 
@@ -43,9 +42,6 @@ class nnUNetTrainerEarlyStopping(nnUNetTrainer):
         if monitored_ema >= self._early_stopping_best_ema + self.MIN_DELTA:
             self._early_stopping_best_ema = monitored_ema
             self._epochs_without_improvement = 0
-            return
-
-        if completed_epochs <= self.MIN_TRAINING_EPOCHS:
             return
 
         self._epochs_without_improvement += 1

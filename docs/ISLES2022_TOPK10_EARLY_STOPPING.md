@@ -16,12 +16,16 @@ nnUNetTrainerTopK10 -> official nnUNetTrainer -> object.
 The new class overrides no methods. It inherits TopK10 `_build_loss` (Dice plus
 hardest-10-percent CE, 1:1 weights, original deep supervision), official network,
 optimizer/scheduler, sampling and augmentation, and existing early-stop control.
-Maximum 1000 epochs; no patience accumulation through 300 completed epochs;
-thereafter stop after 100 consecutive epochs without EMA foreground Dice
-improvement of at least 1e-4. Sufficient improvement resets patience.
+Maximum 1000 epochs; no minimum training floor. The first completed epoch sets
+the EMA foreground Dice baseline; subsequent epochs immediately accumulate
+patience when improvement is less than 1e-4. Stop after 100 consecutive such
+epochs, so a fresh run with no sufficient improvement stops after 101 completed
+epochs. Sufficient improvement resets patience.
 `checkpoint_best` still uses the official strict improvement rule independently
-of the stopping min_delta. Checkpoints persist best monitored EMA, patience count
-and triggered flag. A triggered checkpoint still invokes train-start/train-end
+of the stopping min_delta. Checkpoint keys and stored counts remain unchanged:
+best monitored EMA, patience count and triggered flag. Resuming an old checkpoint
+retains its saved count without recounting past warmup epochs.
+A triggered checkpoint still invokes train-start/train-end
 cleanup when resumed but enters no training epoch or optimizer step.
 Full startup/cleanup integration is server-only validation.
 
@@ -74,8 +78,12 @@ experiment requiring an explicit compatible checkpoint and protocol; it is not
 
 ## Local evidence and deferred work
 
+The minimum-floor removal and updated existing tests received static review only;
+no tests, discovery probes, runtime imports or training were run for this change.
+Earlier synthetic/discovery evidence does not validate the changed stopping rule.
+
 New tests exercise real TopK10 loss on 1x2x4x5 CPU logits, weighted multi-output
-loss, real MetaLogger EMA, warmup/patience/reset, official best selection, tiny
+loss, real MetaLogger EMA, baseline/immediate patience/reset, official best selection, tiny
 on-disk checkpoint serialization and terminal resume control with fail-fast
 training sentinels. Base initialization dispatch is checked with a substituted
 base initializer; this is not real production Trainer initialization. Optimizer

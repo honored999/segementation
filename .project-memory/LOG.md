@@ -1,5 +1,11 @@
 # Log
 
+## 2026-10-29 - Remove early-stopping minimum-epoch warmup
+
+- Changed: remove the shared 300-epoch patience gate; keep patience100, max1000, delta1e-4, EMA/best selection and checkpoint serialization unchanged; align existing assertions and current documentation.
+- Validation: independent static review PASS. Tests, runtime imports, models and training NOT_RUN per user instruction.
+- Integration: feature branch only; no master merge or server-run changes.
+
 ## 2026-09-21 - Lite UPerNet variants accepted
 
 - Changed: added isolated H2Former and PlainConvUNet Lite-UPerNet single-output
