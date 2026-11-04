@@ -140,10 +140,140 @@ padding, dilation, crop and electronic bias still require explicit alignment.
 The exported width map is not a digital convolution weight, and an 800-by-800
 PSF cannot directly replace a 3-by-3 network kernel.
 
-## Validation boundary
+## Original fitting task validation boundary
 
-This task used source inspection and static file/diff/hash checks only. No
+The original fitting task used source inspection and static file/diff/hash checks only. No
 Python runtime, runtime imports, fitting, numerical tests, real data, network
 replacement, installation, training, or hardware validation was performed.
 Independent read-only review is owned by the parent agent on the terminal
 snapshot. Static consistency does not establish executable or numerical success.
+
+
+## Independent tilted-plane-wave isoplanatism validation
+
+`validate_isoplanatism.py` reads fixed physical width maps and never calls the
+fitter, optimizer or backward. Run from this directory in newconda:
+
+```powershell
+python validate_isoplanatism.py --artifact <kernel_000_pos.npz> --config <config.json> --out <fresh_external_directory> --device cpu
+python validate_isoplanatism.py --self-check --angles -0.5 0 0.5 --out <fresh_external_directory>
+```
+
+An output destination must be explicitly supplied, outside the source checkout,
+fresh, and disjoint from inputs. Real input and persistent output destinations
+are not supplied for this task: real validation remains
+`BLOCKED_MISSING_OPTIMIZED_ARTIFACT`. No server access is implied.
+`--axes x y`, `--angles`, `--paddings`, `--roi-size` are configurable.
+Real runs include source baseline padding (normally n) and default to n and 2n.
+A single padding is permitted but recorded NOT_CHECKED. Source config must include
+n, dx_nm, distance_um, wavelength_nm, camera_pixel_um, patch_camera and patch_meta;
+patch must match the original int(camera pitch * patch / dx) calculation.
+Missing padding is derived from the locked source entry, never an ASM default.
+Empty-width zero branches are skipped with a reason and input hash.
+
+Every angle, including zero, uses independent original ASM propagation on one
+fixed field. Extended planes embed only zero amplitude outside the physical
+aperture; central crops are compared to the original padding call. No source
+physics files or fitting settings are changed. Arrays are [y,x], physical +y
+is down with origin upper. Measured d is off-axis displacement; translation
+for alignment is -d, implemented by sampling at coordinates +d with bilinear
+zero extension and an explicit mask. Postprocessing transfers tensors to CPU;
+ASM alone runs on the selected device. Integer ROI following rounds to nearest
+(ties to even), clips the requested intersection, reports coverage and never
+recenters a partially lost region.
+
+Outputs: per-angle NPZ (raw/extended complex fields, reference and off-axis
+intensities, measured/theory aligned arrays and masks), common-scale PNGs,
+metrics CSV/JSON, and manifest with input/source hashes, physical parameters,
+versions, resources, engineering tolerances and limitations. Energy is raw
+sum(I)*dx^2, not per-angle normalized. Shape is L2-normalized on the common
+reference support and valid mask; squared error is separate. Undefined Pearson
+or insufficient overlap is null with a reason. Shape changes are continuous
+physical findings, never numerical-invalid merely for exceeding a threshold.
+No application acceptance threshold was specified, so there is no real-device
+isoplanatism PASS/FAIL. Diagnostic tolerances are prospective engineering flags,
+not claims derived from earlier prototypes. Wrapped transfer-function phase
+steps cannot rule out advances above pi; no warning does not exclude aliasing.
+Two paddings and edge diagnostics are evidence, not a proof of no aliasing.
+
+The self-check is a separate 64-sample, 400 nm, 80 um ideal focusing fixture,
+with smooth finite amplitude, not an optimized 800-sample device. It exercises
+real ASM, zero and signed X/Y angles, central crop consistency and two paddings.
+Tests also include analytical shifts, undefined metrics, clipped ROI and an
+ASM truncation stress fixture. Pytest products belong in system temporary
+storage; no persistent experiment is implied by them. The original normal-
+incidence phase library does not model angular unit-cell electromagnetic
+response. z*tan(theta) is an approximate geometric reference. CMOS integration,
+OLED source geometry/coherence and hardware field coverage remain unvalidated.
+Independent Level 3 review must be arranged by the parent coordinator.
+
+
+Continuation engineering evidence (2026-11-04, newconda, disposable system temp):
+`python -m pytest -q -s tools/psf_conversion/tests/test_isoplanatism.py -p no:cacheprovider --confcutdir=tools/psf_conversion/tests --basetemp <system-temp>/cases`
+returned **18 passed in 8.24s** with OMP/MKL threads limited to one and bytecode
+writing disabled. Initial defect reproduction: 3 failed / 6 passed, then focused
+completion: 16 passed, final affected suite: 18 passed. Final preflight CPU 10.4%,
+RAM 59.2%, visible GPU compute 5%, VRAM 1272/6144 MiB. The ideal fixture produced
+12 rows (X/Y, -0.5/0/+0.5 degrees, paddings 64/128), maximum shift error
+0.0072278028546357564 pixels, direct/extended crop error 0, and consistent
+padding diagnostics. The +12 degree truncation fixture gave output/extended
+energy 0.0015057595387051557 and was flagged truncated. CUDA propagation,
+carrier and CPU postprocessing paths passed on a 16-sample fixture.
+These are engineering results, not formal optimized-device or hardware evidence.
+Temporary NPZ/PNG/CSV/JSON/manifest products were removed automatically after
+pytest; no persistent simulation destination was selected. Missing inputs are
+explicitly tested to fail without creating an output directory. JSON uses null
+for undefined metrics; CSV uses an empty cell for a scalar missing value and
+JSON null inside structured cells. Independent Level 3 acceptance is pending.
+
+
+### FIX-01: cross-padding comparisons and unique artifacts
+
+The previous 18-pass engineering record above describes the pre-fix snapshot.
+FIX-01 addresses only the two independently reported blocking issues; original
+fitting, phase and ASM files remain unchanged.
+
+The baseline is explicitly `config.padding` for optimized artifacts and `n=64`
+for the ideal fixture, regardless of the order of `--paddings`; it must be
+included. Every other requested padding is compared to that baseline for each
+artifact/axis/exact angle. Direct shape distance is
+`||P_candidate/||P_candidate||2 - P_baseline/||P_baseline||2||2` over the entire
+fixed n-by-n center crop at identical coordinates and dx, without registration
+or a positive-baseline mask. The existing 0.01 engineering budget now applies
+to this direct distance, not the difference between two relative-to-reference
+errors. Raw output energy and measured displacement differences remain extra
+checks with unchanged limits. Zero/nonfinite PSFs or missing diagnostics cannot
+be consistent. This is a finite-window stability check, not proof of no aliasing.
+
+`padding_stability` is an explicitly labeled case-level summary aggregating
+all baseline-vs-candidate pairs. Any inconsistent pair makes the case
+inconsistent; undefined/missing comparisons are indeterminate, and a single
+padding is NOT_CHECKED. Each pair records paddings, NPZ filenames, direct metric
+definition/value, energy/shift diagnostics, status/reasons and comparison ID.
+Each row identifies its own padding and `padding_comparison_ids`; a baseline
+self-comparison never counts as convergence. Truncation consumes the aggregate
+status, so inconsistent/unchecked padding cannot yield not_detected on that
+basis. Only two saved center-crop PSFs are loaded per pair; extra extended
+complex fields are not retained for this fix.
+
+Every actual propagation receives a deterministic unique `sample_id` across
+the run. Metrics store original-precision `angle_deg`, `sample_id`, `npz_file`
+and `png_file`; NPZ also stores angle, padding and ID. Use these recorded paths,
+not rounded angle strings, to locate evidence. Close angles such as 0.1 and
+0.10000001 remain distinct. All file writes use exclusive creation and reject
+unexpected collisions. Cross-padding references use the same saved NPZ mapping.
+
+
+FIX-01 validation (2026-11-04, newconda, single-thread CPU): three new regressions
+failed on the old snapshot (equal-energy shape incorrectly consistent, middle
+padding omitted, close-angle file overwrite). After the fix the same focused
+selection returned 3 passed / 18 deselected in 4.89s. The affected command
+`python -m pytest -q -s tools/psf_conversion/tests/test_isoplanatism.py -k "not cuda" -p no:cacheprovider --confcutdir=tools/psf_conversion/tests --basetemp <fresh-system-temp>/cases`
+returned 24 passed / 1 deselected in 11.87s, including independent recomputation
+from recorded NPZ paths, three-padding order invariance, undefined PSF rejection,
+collision preservation, fixture-baseline enforcement and original small ASM.
+Final run preflight: CPU 10.9%, RAM 66.4%, GPU compute 2%, VRAM 1252/6144 MiB;
+CUDA was deliberately deselected. Temporary output was isolated outside source
+and cleaned by TemporaryDirectory. No persistent/800-grid/real-device simulation
+was performed. Real validation remains BLOCKED_MISSING_OPTIMIZED_ARTIFACT;
+FIX-01 is pending independent focused re-review, not final acceptance.
