@@ -1,0 +1,50 @@
+{
+  "mode": "c",
+  "seed": 12345,
+  "configuration": "2d",
+  "fold": 0,
+  "lesiongen_repo": "REPLACE_WITH_PINNED_LESIONGEN_CHECKOUT",
+  "preparation": {
+    "path": "REPLACE_WITH_EXISTING_preparation.json",
+    "sha256": "REPLACE"
+  },
+  "plans": {
+    "path": "REPLACE_WITH_EXISTING_514_PLANS.json",
+    "sha256": "REPLACE"
+  },
+  "split": {
+    "path": "REPLACE_WITH_EXISTING_splits_final.json",
+    "sha256": "REPLACE"
+  },
+  "pretrained": {
+    "path": "REPLACE_WITH_ORIGINAL_508_CHECKPOINT.pth",
+    "sha256": "REPLACE",
+    "dataset_id": 508
+  },
+  "workers": 0,
+  "iterations_per_epoch": 250,
+  "validation_iterations": 50,
+  "early_stopping": {
+    "max_epochs": 1000,
+    "min_epochs": 0,
+    "patience": 100,
+    "min_delta": 0.0001
+  },
+  "budget_note": "Authorized historical exploratory protocol, all C stages included. Early stopping gives unequal actual updates across groups.",
+  "batch_size": 12,
+  "curriculum_sidecar": {
+    "path": "REPLACE_WITH_NEW_curriculum.private.json",
+    "sha256": "REPLACE"
+  },
+  "curriculum": {
+    "schema": "dataset509-curriculum-policy/v1",
+    "warmup_epochs": 20,
+    "transition_epochs": 80,
+    "synthetic_start": 0.1,
+    "synthetic_end": 0.25,
+    "trusted_quality_min": 0.5,
+    "gain_cap": 2.0,
+    "area_quantile": 0.5,
+    "contrast_quantile": 0.25
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "experiments/dataset509_quality/api_contract.json": "21e01a0dc8958e25d055af7e63769c0f806da29a37bda3f85e261627f2e17c89",
+  "experiments/dataset509_quality/api_contract.py": "d8871ac98531e01eafd4486349a2815a28d2f823cfcffe5da3a122d87baac3cf",
+  "experiments/dataset509_quality/baseline.json": "39c8796ae6646966f053d23fb1662cba2a6ade7cfa349be14ee32db26fe90299",
+  "experiments/dataset509_quality/data.py": "9741845cd49bc6f91acfe13a2598a9969703f3e7af5f5b7e9e2cdeffd53bd1e3",
+  "experiments/dataset509_quality/focused_checks.py": "49e68cc6b10ca959036231913bf74e7f84c706551845be3aee184f45da27fbba",
+  "experiments/dataset509_quality/loss.py": "bde4b0f1dbedebb7ad91484cb7d2133e1f00f54ef9d1f98e087650201f222c7d",
+  "experiments/dataset509_quality/q.json": "f334265d52be72984b411aed3ad9f72d8749b3aa29ea12e25e3da659954f7f2f",
+  "experiments/dataset509_quality/quality.py": "3c3142fdeab782d39de730f1d90451be9b56140d5bf1c404e43a652ccee5dbb4",
+  "experiments/dataset509_quality/quality_filter.json": "09b1a9e7e3421b668fab7b65b5811f7f17a52720849353d08723cb94d95ecbc4",
+  "experiments/dataset509_quality/README.md": "326e078e041e62f75e361d9a7b40a7dce4ff6393f8b04b03aaea83bae1a3990a",
+  "experiments/dataset509_quality/run.py": "234518732e5fbf92b7d76ee92d07b53d0ad02edc98bc4ad2ff7c95771813913f",
+  "experiments/dataset509_quality/trainer.py": "e5b959b6e529cb89c30671fe055e340ce21c923dd4ae4d078dd9c55abd172e40",
+  "experiments/dataset509_quality/trainer514.py": "da4bb697f0baa36b98ba0e0b778025e03e6aeea930732f45e9ccfb827e91af2e",
+  "HANDOFF.md": "9e5821c603c052199a02cfa992d53d12cfcfa4f2d76d95ba925b725ecc39f73d",
+  "experiments/dataset509_quality/evaluate_run.py": "430982488d518c99963b798fee78b2ed0db4bdd160369597f5ea45396687848d",
+  "experiments/dataset509_quality/server_job.py": "5d4ff32ee474d8e32cf09c497cf391a62344a9fa810e177e25c52f55b00af2ab"
+}

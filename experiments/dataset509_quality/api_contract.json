@@ -1,0 +1,11 @@
+{
+  "nnunetv2": "2.8.1",
+  "source_sha256": {
+    "loader_bbox": "25263f7173ae246b17321c09e388562c8b4b6daaf41754283d4b6091b4302253",
+    "loader_batch": "0a430703c66ec9b862e13de0d4cbe3163c00dab40e375100c98575e0b1fddaac",
+    "loaders": "5f59e2b907cfa2d1eb1e77ab2a5b8893161e7af8567fc5669c62a4810334899e",
+    "train_step": "c8993de84c8c419f6471f619f82839931c8e7d1bae0b0eddca42951fcab90819",
+    "validation_step": "3d415b41f6f7cd903c1626467e449e465b58b28c0ee068afdb747f9733ba82e8",
+    "transforms": "cfe49bb4fcb29b09bb88fc39f4dc034e12f02a8263d35ec6a872430e68733d4f"
+  }
+}

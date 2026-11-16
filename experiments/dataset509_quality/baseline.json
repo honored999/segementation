@@ -1,0 +1,40 @@
+{
+  "mode": "baseline",
+  "seed": 12345,
+  "configuration": "2d",
+  "fold": 0,
+  "lesiongen_repo": "REPLACE_WITH_PINNED_LESIONGEN_CHECKOUT",
+  "preparation": {
+    "path": "REPLACE_WITH_EXISTING_preparation.json",
+    "sha256": "REPLACE"
+  },
+  "plans": {
+    "path": "REPLACE_WITH_EXISTING_514_PLANS.json",
+    "sha256": "REPLACE"
+  },
+  "split": {
+    "path": "REPLACE_WITH_EXISTING_splits_final.json",
+    "sha256": "REPLACE"
+  },
+  "pretrained": {
+    "path": "REPLACE_WITH_ORIGINAL_508_CHECKPOINT.pth",
+    "sha256": "REPLACE",
+    "dataset_id": 508
+  },
+  "sidecar": {
+    "path": "REPLACE_WITH_NEW_quality.private.json",
+    "sha256": "REPLACE"
+  },
+  "synthetic_coefficient": 1.0,
+  "filter_threshold": 0.5,
+  "workers": 0,
+  "iterations_per_epoch": 250,
+  "validation_iterations": 50,
+  "early_stopping": {
+    "max_epochs": 1000,
+    "min_epochs": 300,
+    "patience": 100,
+    "min_delta": 0.0001
+  },
+  "budget_note": "Inherited trainer defaults only. Main agent must set a common update budget and matched baseline before formal comparison."
+}
