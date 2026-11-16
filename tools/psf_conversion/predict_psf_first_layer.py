@@ -1,4 +1,9 @@
-"""Official nnUNetPredictor with optional frozen fitted-PSF first convolution."""
+"""Official nnUNetPredictor with an optional frozen PSF first convolution.
+
+`--operator legacy_block_input` (the default) keeps the historical U17 block-input
+chain; `pixel_psf_superposition_v1` is the opt-in one-PSF-per-pixel protocol.
+Both ideal and fitted PSFs share the same selected protocol.
+"""
 import argparse
 import json
 import os
@@ -7,12 +12,17 @@ import sys
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.psf_conversion.psf_first_conv import FirstConvHook, KEY, load_psfs, sha256
+from tools.psf_conversion.psf_first_conv import (
+    FirstConvHook, KEY, LEGACY_OPERATOR, PIXEL_OPERATOR, load_psfs, operator_record,
+    psf_canvas, sha256)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=['electrical', 'fitted'], required=True)
+    parser.add_argument('--mode', choices=['electrical', 'fitted', 'ideal'], required=True)
+    parser.add_argument('--operator', choices=[LEGACY_OPERATOR, PIXEL_OPERATOR],
+                        default=LEGACY_OPERATOR,
+                        help='First-layer protocol; legacy keeps the old U17 block chain')
     parser.add_argument('--model-folder', type=Path, required=True)
     parser.add_argument('--fold', type=int, required=True)
     parser.add_argument('--checkpoint', required=True)
@@ -23,8 +33,8 @@ def main():
     parser.add_argument('--no-tta', action='store_true')
     parser.add_argument('--label', default='NON_FORMAL')
     args = parser.parse_args()
-    if args.mode == 'fitted' and args.psf_dir is None:
-        parser.error('--psf-dir is required for fitted mode')
+    if args.mode in ('fitted', 'ideal') and args.psf_dir is None:
+        parser.error('--psf-dir is required for fitted/ideal mode')
     if Path(args.checkpoint).name != args.checkpoint or args.fold < 0:
         parser.error('checkpoint must be a basename; fold must be nonnegative')
     source = args.input.resolve(strict=True)
@@ -37,8 +47,13 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     record = dict(vars(args), status='FAILED', compile=False, tile_step_size=0.5,
                   use_gaussian=True, use_mirroring=not args.no_tta,
-                  operator='U17 -> physical C(origin=n//2) -> mean R17 stride17 -> s/289 + bias',
                   preprocess_processes=1, export_processes=1)
+    # Electrical keeps the real convolution. A hooked PSF replacement records the
+    # operator provenance of the artifact that was actually loaded, i.e. its own
+    # validated canvas size rather than an assumed one.
+    if args.mode == 'electrical':
+        record['operator_id'] = 'electrical'
+        record['operator'] = 'electrical: checkpoint Conv2d(3x3) first layer, no PSF substitution'
     hook = None
     try:
         os.environ['nnUNet_compile'] = 'false'
@@ -51,10 +66,16 @@ def main():
             device=torch.device(args.device), verbose=False, verbose_preprocessing=False, allow_tqdm=False)
         predictor.initialize_from_trained_model_folder(str(args.model_folder), use_folds=(args.fold,), checkpoint_name=args.checkpoint)
         predictor.network.eval().requires_grad_(False)
-        if args.mode == 'fitted':
+        if args.mode in ('fitted', 'ideal'):
             weight = predictor.network.get_submodule(KEY).weight
-            kernel, hashes = load_psfs(args.psf_dir, weight)
+            kernel, hashes = load_psfs(args.psf_dir, weight, operator=args.operator,
+                                       ideal=args.mode == 'ideal')
+            n = psf_canvas(args.psf_dir)[0]
+            record.update(operator_record(args.operator, n))
+            record['psf_canvas'] = [n, n]
             record['psf_sha256'] = hashes
+            record['psf_variant'] = ('IDEAL_REPLICATED_TARGET_UNIT_GAIN' if args.mode == 'ideal'
+                                     else 'FITTED_RAW_GAIN')
             record['first_weight_sha256'] = __import__('hashlib').sha256(weight.detach().cpu().float().numpy().tobytes()).hexdigest()
             hook = FirstConvHook(predictor.network, kernel)
         inputs = str(source) if source.is_dir() else [[str(source)]]

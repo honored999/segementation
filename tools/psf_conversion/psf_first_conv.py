@@ -1,10 +1,38 @@
-"""Fixed U17 -> physical linear PSF convolution -> mean R17 -> scale/289.
+"""Two first-layer protocols, selected explicitly.
 
-The coarse correlation coefficient at offset d is
-s/17**4 * sum_{a,b=0..16} P[o+a-b-17*d].  The triangular
-sum includes both replication and detector averaging; all PSF samples survive.
-Saved targets are already rotated. Physical convolution is converted to
-correlation only here, through the minus sign on d (never by peak alignment).
+legacy_block_input (default; existing fitted commands and records keep it)
+    Every logical input pixel is replicated into a 17x17 block U17, the block is
+    convolved with the full PSF, the 17x17 block mean R17 is read out and an
+    extra 1/289 is applied:
+        Y_c = b_c + s_c/289 * R17[ g+ C(P+) - g- C(P-) ] evaluated on U17(X).
+    The coarse coefficient mixes input replication and detector averaging, so the
+    input window is smoothed twice.
+
+pixel_psf_superposition_v1 (new; opt-in only)
+    s = 17, c = 8, PSF origin o = (n//2, n//2):
+        D(X)[s*i+c, s*j+c] = X[i, j], 0 on every other fine-grid point
+        Z_c[t] = sum_ij X[i, j] * ( g+ P+[o + t - (s*i+c, s*j+c)]
+                                  - g- P-[o + t - (s*i+c, s*j+c)] )
+        Y_c = scale_c * AvgPool_s,stride_s(Z_c) + bias_c
+    Each logical pixel excites one complete PSF and is shifted by its own
+    isoplanatic position; nothing is replicated.  There is no extra 1/289: the
+    single mean read-out divides by s**2 exactly once.
+
+    Equivalent correlation kernel at kernel offset v (Conv2d index k = v + p):
+        A[u] = 1/s**2 * sum_{a,b=0..s-1} Q[o_y + s*u_y + a - c, o_x + s*u_x + b - c]
+    with Q = g+ P+ - g- P-, A[u] stored at v = -u (Conv2d correlates with the
+    flipped kernel) and everything outside the saved PSF treated as zero.  The
+    summation windows tile the plane as u varies, so every saved PSF sample --
+    including the far periphery -- contributes exactly once; nothing is dropped,
+    cropped, resized or peak-aligned.  D17 + mean R17 with this A is algebraically
+    equal to U17 input + block-centre sampling + /289 at any fixed PSF (see
+    SUMMARY.md); it is NOT equal to the legacy chain, which adds a second box sum.
+
+Saved targets are already rotated 180 degrees.  Physical convolution becomes a
+correlation only through the sign of u, never by peak alignment.
+
+The model is linear intensity superposition: incoherent input, or per-pixel
+time-multiplexed acquisition.  It does not assert coherence between pixels.
 """
 from pathlib import Path
 import hashlib
@@ -18,6 +46,17 @@ from torch.nn import functional as F
 
 KEY = 'encoder.stages.0.0.convs.0.conv'
 FACTOR = 17
+CENTER = FACTOR // 2
+LEGACY_OPERATOR = 'legacy_block_input'
+PIXEL_OPERATOR = 'pixel_psf_superposition_v1'
+OPERATORS = {
+    LEGACY_OPERATOR:
+        'U17 -> physical C(origin=n//2) -> mean R17 stride17 -> s/289 + bias',
+    PIXEL_OPERATOR:
+        'D17(centre=(8,8), step=17) -> one complete PSF per logical pixel, '
+        'shifted and summed -> mean R17 stride17 -> * s + bias; the sole 1/17^2 '
+        'lives inside the correlation kernel, with no extra /289 read-out factor',
+}
 
 
 def sha256(path):
@@ -28,8 +67,32 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def check_operator(operator):
+    if operator not in OPERATORS:
+        raise ValueError(f'Unknown first-layer operator: {operator!r}')
+    return OPERATORS[operator]
+
+
+def operator_record(operator, n):
+    """Provenance for one inference run; identical for ideal and fitted PSFs."""
+    record = {'operator': check_operator(operator), 'operator_id': operator}
+    if operator == PIXEL_OPERATOR:
+        record.update({
+            'pixel_step': FACTOR,
+            'pixel_centre': [CENTER, CENTER],
+            'psf_origin': [n // 2, n // 2],
+            'fine_grid': 'D(X)[17i+8, 17j+8] = X[i,j], all other points 0',
+            'readout': 'block mean R17 stride17 starting at (0,0)',
+            'normalisation': 'scale/17**2 inside the correlation kernel; '
+                             'no extra 1/289 read-out factor',
+            'superposition': 'linear intensity; incoherent or per-pixel '
+                             'time-multiplexed input, not coherent field addition',
+        })
+    return record
+
+
 def effective_kernel(psf, origin):
-    """Return odd square correlation kernel, including BOTH area factors."""
+    """Legacy: odd square correlation kernel with BOTH area factors."""
     p = np.asarray(psf, dtype=np.float64)
     if p.ndim != 2 or not np.isfinite(p).all():
         raise ValueError('PSF must be a finite plane')
@@ -54,8 +117,52 @@ def effective_kernel(psf, origin):
     return result
 
 
-def load_psfs(directory, weight):
-    root = Path(directory)
+def superposition_kernel(psf, origin, *, step=FACTOR):
+    """Pixel-protocol correlation kernel: one complete PSF per logical pixel.
+
+    A[u] = 1/s**2 * sum_{a,b=0..s-1} P[o + s*u + (a,b) - c], see the module
+    docstring.  Only the single mean read-out contributes the 1/s**2.
+
+    `step` is the protocol factor s; 17 is the only production value and the
+    keyword exists so a focused check can replay the same formula at s = 3.
+    """
+    p = np.asarray(psf, dtype=np.float64)
+    if p.ndim != 2 or not np.isfinite(p).all():
+        raise ValueError('PSF must be a finite plane')
+    if any(o < 0 or o >= n for o, n in zip(origin, p.shape)):
+        raise ValueError('Invalid origin')
+    if not isinstance(step, int) or step < 1 or step % 2 == 0:
+        raise ValueError('Protocol factor must be a positive odd integer')
+    s, c = step, step // 2
+    # Window start o-c-s*u must still overlap the array.  Windows that fall wholly
+    # outside are clipped to an empty sum (they tile the plane and are all zero).
+    reach = max((origin[0] - c + s - 1) // s, (origin[1] - c + s - 1) // s,
+                (p.shape[0] - 1 - origin[0] + c) // s,
+                (p.shape[1] - 1 - origin[1] + c) // s)
+    offsets = np.arange(-reach, reach + 1)
+    rows = origin[0] - c - s * offsets
+    cols = origin[1] - c - s * offsets
+    # Zero-padded width-s box sums, evaluated at every window start at once.
+    csum_rows = np.concatenate([np.zeros((1, p.shape[1])), np.cumsum(p, axis=0)], axis=0)
+    lo, hi = np.clip(rows, 0, p.shape[0]), np.clip(rows + s, 0, p.shape[0])
+    band = csum_rows[hi] - csum_rows[lo]
+    csum_cols = np.concatenate([np.zeros((band.shape[0], 1)), np.cumsum(band, axis=1)], axis=1)
+    lo, hi = np.clip(cols, 0, p.shape[1]), np.clip(cols + s, 0, p.shape[1])
+    return (csum_cols[:, hi] - csum_cols[:, lo]) / float(s * s)
+
+
+def _kernel_fn(operator):
+    check_operator(operator)
+    return superposition_kernel if operator == PIXEL_OPERATOR else effective_kernel
+
+
+def psf_canvas(directory):
+    """Validated (n, origin) of one PSF artifact; origin is always (n//2, n//2)."""
+    n = _validated_config(Path(directory))['n']
+    return n, (n//2, n//2)
+
+
+def _validated_config(root):
     config = json.loads((root/'config.json').read_text(encoding='utf-8'))
     n = config['n']
     if (config.get('patch_meta') != 51 or config.get('target_rotated_180') is not True
@@ -65,6 +172,15 @@ def load_psfs(directory, weight):
             or (config['fft_size']-n) % 2
             or config.get('padding') != (config['fft_size']-n)//2):
         raise ValueError('Incompatible PSF geometry/wavelength/rotation config')
+    return config
+
+
+def load_psfs(directory, weight, *, operator=LEGACY_OPERATOR, ideal=False):
+    """Load the signed first-layer kernel under an explicitly chosen protocol."""
+    kernel_fn = _kernel_fn(operator)
+    root = Path(directory)
+    config = _validated_config(root)
+    n = config['n']
     kernels = np.load(root/'electrical_kernels.npy', allow_pickle=False)
     expected = weight.detach().cpu().float().numpy()
     if kernels.shape != (32, 1, 3, 3) or not np.isfinite(kernels).all() or not np.array_equal(kernels, expected):
@@ -95,7 +211,8 @@ def load_psfs(directory, weight):
                         (raw < 0).any() or (gain < 0).any() or
                         (not active and (raw.any() or gain.any()))):
                     raise ValueError(f'Invalid PSF branch: {path.name}')
-                branch = polarity*gain.item()*effective_kernel(raw[0], (n//2,n//2))
+                # Ideal control uses the exact replicated electrical target and unit gain.
+                branch = polarity*(1.0 if ideal else gain.item())*kernel_fn(target if ideal else raw[0], (n//2,n//2))
             signed = branch if signed is None else signed+branch
             files.append(path)
         output.append(signed*scales[channel])
