@@ -145,7 +145,9 @@ def ascii_nifti_name(path: Path) -> str:
     return "segmentation.nii.gz"
 
 
-def read_mask_on_reference(segmentation_path: Path, reference: sitk.Image) -> np.ndarray:
+def read_mask_on_reference(
+    segmentation_path: Path, reference: sitk.Image, foreground_label: int | None = None,
+) -> np.ndarray:
     """读取 mask，并在尺寸不一致时重采样到背景图像的空间尺寸。"""
     try:
         segmentation = sitk.ReadImage(str(segmentation_path))
@@ -164,6 +166,11 @@ def read_mask_on_reference(segmentation_path: Path, reference: sitk.Image) -> np
             0,
             segmentation.GetPixelID(),
         )
+    if foreground_label is not None:
+        array = sitk.GetArrayFromImage(segmentation)
+        if array.ndim != 3:
+            raise ValueError("Explicit label export requires a scalar 3D segmentation.")
+        return array == foreground_label
     return image_to_array(segmentation) != 0
 
 

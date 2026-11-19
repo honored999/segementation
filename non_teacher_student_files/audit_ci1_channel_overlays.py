@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import re
 from pathlib import Path
 from typing import Callable, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pydicom
 import SimpleITK as sitk
 
 from audit_ci1_dwi_adc_masks import (
@@ -286,6 +289,123 @@ def build_channel_overlay_audit(
     return output_paths
 
 
+def export_patient_dwi_b_groups(
+    index_csv: Path, output_dir: Path, patient: str,
+    views: Sequence[str], images_per_view: int,
+    mask_labels: Sequence[int] | None = None,
+    all_patients_preview: bool = False,
+) -> None:
+    """Export all indexed timepoints, explicitly separating lowest/highest b.
+
+    Preserve DICOM-reader intensities until the existing per-slice display
+    normalization. Source data is read-only; output must be a new results folder.
+    """
+    from convert_ci1_dwi_to_2d import collect_slice_infos, select_unique_slice_files
+    from ci1_nvauto_common import diffusion_b_value
+
+    root = output_dir.resolve()
+    results_root = (Path(__file__).resolve().parents[1] / "results").resolve()
+    if results_root not in root.parents:
+        raise ValueError("Output must be a new subdirectory of repository results.")
+    if root.exists():
+        raise FileExistsError(f"Refusing to overwrite existing output: {root}")
+    rows = [row for row in read_index(index_csv) if row.patient == patient]
+    if all_patients_preview:
+        from convert_ci1_dwi_to_2d import IndexRow
+        representatives = []
+        for patient_dir in sorted(Path("CI-1").iterdir()):
+            if not patient_dir.is_dir():
+                continue
+            candidates = []
+            for path in patient_dir.rglob("*"):
+                if not path.is_file() or not path.name.lower().endswith((".nii", ".nii.gz")) or "dwi" not in path.name.lower():
+                    continue
+                match = re.search(r"D(\d+)", path.name, re.IGNORECASE)
+                if match:
+                    candidates.append((int(match.group(1)), "adc" in path.name.lower(), len(path.parts), str(path), path))
+            for day, _, _, _, path in sorted(candidates):
+                dirs = [d for d in patient_dir.iterdir() if d.is_dir() and re.search(rf"D{day}(?!\d)", d.name, re.IGNORECASE) and any(d.glob("*.dcm"))]
+                if dirs:
+                    dicom_dir = max(dirs, key=lambda d: sum(1 for _ in d.glob("*.dcm")))
+                    representatives.append(IndexRow(patient_dir.name, f"D{day}", "DWI", path, dicom_dir))
+                    break
+        rows = representatives
+        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+        print(f"Preview patients: {len(rows)}", flush=True)
+    if not rows:
+        raise ValueError("No matched DWI index rows for requested patient.")
+    root.mkdir(parents=True)
+    records = []
+    failures = []
+    for row in rows:
+        try:
+            groups = {}
+            series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(row.dicom_dir)) or []
+            for series_id in series_ids:
+                files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(row.dicom_dir), series_id)
+                for file in files:
+                    ds = pydicom.dcmread(file, stop_before_pixels=True)
+                    description = str(getattr(ds, "SeriesDescription", ""))
+                    if not background_predicate("dwi")(description):
+                        continue
+                    b = diffusion_b_value(ds)
+                    if b is None or not math.isfinite(b) or b < 0:
+                        raise ValueError("DWI file has missing or invalid standard b-value.")
+                    groups.setdefault((str(series_id), b), []).append(file)
+            b_values = sorted({b for _, b in groups})
+            if len(b_values) < 2:
+                raise ValueError("At least two distinct explicit b-values are required.")
+            b_groups = [("high_b", b_values[-1])] if all_patients_preview else [("low_b", b_values[0]), ("high_b", b_values[-1])]
+            for label, b in b_groups:
+                candidates = [(uid, files) for (uid, value), files in groups.items() if value == b]
+                uid, files = max(candidates, key=lambda item: (len(item[1]), item[0]))
+                infos = collect_slice_infos(files)
+                selected = select_unique_slice_files(infos)
+                if len(selected) != len(files):
+                    raise ValueError("Duplicate positions within one b-value; ambiguous diffusion volume.")
+                reader = sitk.ImageSeriesReader()
+                reader.SetFileNames(selected)
+                image = reader.Execute()
+                volume = image_to_array(image).astype(np.float32)
+                mask = read_mask_on_reference(row.segmentation_path, image)
+                separated_masks = {value: read_mask_on_reference(row.segmentation_path, image, foreground_label=value) for value in (mask_labels or [])}
+                count = 0
+                for view in views:
+                    for value, display_mask in (separated_masks.items() if mask_labels else [(None, mask)]):
+                        selection_mask = display_mask if all_patients_preview else mask
+                        indices = positive_slice_indices(selection_mask, view, images_per_view)
+                        for number, slice_index in enumerate(indices, start=1):
+                            folder = root / f"label_{value}" if value is not None else root
+                            if all_patients_preview:
+                                folder = folder / safe_name(row.patient)
+                            path = folder / label / f"b_{b:g}" / row.timepoint / view / f"overlay_{number:03d}_s{slice_index}.png"
+                            title_prefix = f"{row.patient} " if all_patients_preview else ""
+                            write_triplet_figure(
+                                extract_view_slice(volume, view, slice_index),
+                                extract_view_slice(display_mask, view, slice_index), path,
+                                f"{title_prefix}{row.timepoint} DWI b={b:g} label={value if value is not None else 'all'} {view}={slice_index}",
+                                view_pixel_spacing(image.GetSpacing(), view),
+                            )
+                            count += 1
+                records.append(dict(patient=row.patient, timepoint=row.timepoint, group=label, b_value=b,
+                                    series_uid=uid, source_files=selected,
+                                    slice_count=len(selected), figures=count))
+        except Exception as exc:
+            failures.append(dict(patient=row.patient, timepoint=row.timepoint, error=str(exc)))
+    manifest = dict(
+        kind="visualization_only", volume_percentile_clipping=False,
+        uint8_conversion=False, slice_display_minmax=True,
+        mask_handling="explicit labels separated" if mask_labels else "nonzero union",
+        mask_labels=list(mask_labels) if mask_labels else None,
+        slice_selection="largest positive slices per label" if all_patients_preview else "same nonzero-union selected slices for each label",
+        records=records, failures=failures,
+    )
+    (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Exported {sum(r['figures'] for r in records)} figures; {len(failures)} failed timepoints. Output: {root}")
+    if failures:
+        raise RuntimeError("Incomplete export; see manifest.json failures.")
+
+
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(
@@ -301,6 +421,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("results") / "ci1_channel_overlay_audit",
     )
+    parser.add_argument("--all-patients-label-preview", action="store_true", help="One indexed timepoint per patient, high-b axial label 1/2/4 previews, two slices per present label.")
+    parser.add_argument("--mask-labels", nargs="+", type=int, choices=(1, 2, 4), help="Separate label 1/2/4 in patient DWI b-split export; same selected slices for comparison.")
+    parser.add_argument("--patient-dwi-b-split", metavar="PATIENT", help="Export all matched timepoints at lowest/highest explicit b, without volume clipping or uint8 conversion.")
     parser.add_argument("--channels", nargs="+", choices=CHANNELS, default=list(CHANNELS))
     parser.add_argument("--views", nargs="+", choices=VIEWS, default=list(VIEWS))
     parser.add_argument("--max-cases", type=int, default=6)
@@ -311,6 +434,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """命令行入口。"""
     args = parse_args()
+    if args.all_patients_label_preview:
+        export_patient_dwi_b_groups(args.index_csv, args.output_dir, "", ["axial"], 2, [1, 2, 4], all_patients_preview=True)
+        return
+    if args.mask_labels and not args.patient_dwi_b_split:
+        raise ValueError("--mask-labels requires --patient-dwi-b-split.")
+    if args.patient_dwi_b_split:
+        export_patient_dwi_b_groups(args.index_csv, args.output_dir, args.patient_dwi_b_split, args.views, args.images_per_view, args.mask_labels)
+        return
     output_paths = build_channel_overlay_audit(
         index_csv=args.index_csv,
         output_dir=args.output_dir,
