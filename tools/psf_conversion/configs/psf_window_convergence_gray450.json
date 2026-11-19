@@ -1,0 +1,30 @@
+{
+  "schema": "psf_window_convergence_run_config/1",
+  "description": "gray450 kernel000 regression: FFT window convergence scan of the fitted kernel_000_pos/kernel_000_neg pair, centre and the pre-specified far corner, four response groups (POS centre, NEG centre, POS corner, NEG corner).",
+  "fft_sizes": [2400, 3200, 3600, 4000, 4400, 4800, 5600, 6400, 7200],
+  "corner_theta_deg": [0.5, -0.5],
+  "corner_source": "Pre-specified far corner: the (+x, -y) field corner at 0.5 deg per axis. It lies outside the earlier single-axis sweep, which only reached 0.5 deg along one axis at a time, and it is the largest |sin(theta)| point of the two-dimensional grid.",
+  "tolerances": {
+    "energy_roi_rel": 0.01,
+    "centroid_px": 0.05,
+    "shape_pixel_integrated": 0.01,
+    "outside_roi_fraction": 0.005,
+    "edge_fraction": 0.005,
+    "edge_fraction_max": 0.01,
+    "differential_energy_rel": 0.01,
+    "differential_shape": 0.01,
+    "rebound_ratio": 1.5,
+    "rebound_floor_fraction": 0.25,
+    "support_windows": 2
+  },
+  "edge_band_px": 64,
+  "roi_size_px": 51,
+  "camera_pixel_um": 3.45,
+  "notes": [
+    "Provisional tolerances: these are project working values carried over from Thresholds (padding_shape_abs/padding_energy_rel 1e-2) and from the camera pitch. They are not an application requirement; replace them when the imaging specification defines one, and never present a window as 'passed' outside the values written here.",
+    "roi_size_px 51 reproduces the physical detection ROI of the kernel000 fit (patch_camera 6 x camera_pixel_um 3.45 um = 20.7 um = 51.75 px at dx 400 nm, rounded to patch_meta 51). The ROI is fixed across windows; it never follows the shifted PSF.",
+    "edge_band_px 64 is the border band used for the edge-energy fraction on the padded N x N grid; the same band is reported for the fixed detection crop so both trims stay comparable.",
+    "The fitted PSF keeps its own 3n FFT (fit_psf_gray450.py builds create_propagation_layer(..., padding=args.n)); there is no --padding switch. If a larger propagation window changes the fitted width map, re-fit with a larger --fft-size while keeping n fixed and re-check the fit against the same ROI before reusing this configuration.",
+    "Run this configuration on the server (CUDA, serial single window). At fft 7200 the field alone is 7200^2 complex64 = 414 MB, so the scan intentionally releases each window before the next one."
+  ]
+}

@@ -1,4 +1,4 @@
-"""Standalone grayscale kernel-to-PSF fitting at 450 nm.
+"""Standalone grayscale kernel-to-PSF fitting at 450 or 532 nm (default: 450).
 
 Input kernels: exactly [32, 1, 3, 3], validated before --limit.
 Adapted from the preserved fit_psf.py; see README.md for provenance and limits.
@@ -61,11 +61,12 @@ def build_target(kernel, n, patch):
 class Metasurface(nn.Module):
     def __init__(self, args):
         super().__init__()
+        self.wavelength_nm = args.wavelength_nm
         self.raw_width = nn.Parameter(torch.empty(args.n, args.n, device=args.device).uniform_(-1, 1))
         self.propagate = create_propagation_layer(
             distance=args.distance_um * 1e-6,
-            wavelength=450e-9,
-            pixel_size=args.dx_nm * 1e-9, device=args.device, padding=args.n,
+            wavelength=args.wavelength_nm * 1e-9,
+            pixel_size=args.dx_nm * 1e-9, device=args.device, padding=(args.fft_size - args.n) // 2,
         )
 
     def width(self):
@@ -74,7 +75,7 @@ class Metasurface(nn.Module):
     def forward(self):
         # Evaluate the high-order fitted polynomial in float64 to reduce cancellation.
         width = self.width().double()
-        phase = compute_phase_fitted(width, 450)[None]
+        phase = compute_phase_fitted(width, self.wavelength_nm)[None]
         field = torch.exp(1j * phase).to(torch.complex64)[None]
         return self.propagate(field)[0].abs().square()
 
@@ -93,7 +94,7 @@ def shape_loss(psf, target, active, mode):
 def fit_one(target, args):
     active = target.flatten(1).sum(1) > 0
     if not active.any():
-        return None, torch.zeros_like(target), [], active
+        return None, torch.zeros_like(target).cpu(), [], active.cpu()
     model = Metasurface(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     best, best_width, stale = float('inf'), None, 0
@@ -132,6 +133,8 @@ def main():
     parser.add_argument('--demo', action='store_true', help='Synthetic [32,1,3,3] kernels; NOT trained task weights')
     parser.add_argument('--out', default='results')
     parser.add_argument('--limit', type=int, help='Fit first N output channels')
+    parser.add_argument('--wavelength-nm', type=int, choices=[450, 532], default=450)
+    parser.add_argument('--fft-size', type=int, help='FFT edge; default 3*n, aperture and dx unchanged')
     parser.add_argument('--n', type=int, default=800)
     parser.add_argument('--dx-nm', type=float, default=400)
     parser.add_argument('--camera-pixel-um', type=float, default=3.45)
@@ -153,6 +156,9 @@ def main():
         parser.error('--limit must be positive')
     if args.dx_nm != 400:
         parser.error('Bundled P400 phase library requires --dx-nm 400')
+    args.fft_size = args.fft_size if args.fft_size is not None else 3 * args.n
+    if args.fft_size < args.n or (args.fft_size - args.n) % 2:
+        parser.error('--fft-size must be n plus equal nonnegative integer padding on both sides')
     torch.manual_seed(args.seed)
     kernels = (validate_kernels(torch.randn(32, 1, 3, 3)) if args.demo else load_kernels(args.kernels, args.key))
     if args.limit:
@@ -176,7 +182,7 @@ def main():
         parser.error('Output already exists; choose a fresh --out directory')
     np.save(out / 'electrical_kernels.npy', kernels.numpy())
     np.save(out / 'shared_scales.npy', scales.numpy())
-    config = dict(vars(args), patch_meta=patch, grayscale=True, wavelength_nm=450,
+    config = dict(vars(args), patch_meta=patch, grayscale=True, padding=(args.fft_size-args.n)//2,
                   target_rotated_180=True, zero_channels='ignored; must be blocked or subtracted experimentally',
                   phase_library='P400 H600 W80-320; phase-only fitted approximation')
     (out / 'config.json').write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -194,7 +200,7 @@ def main():
             np.savez_compressed(out / f'kernel_{index:03d}_{sign}.npz',
                 width_nm=np.empty((0, 0)) if width is None else width.numpy(),
                 psf_raw=psf.numpy(), target=target_cpu.numpy(),
-                active_gray=active.cpu().numpy(), gain_gray=gains.numpy(), wavelength_nm=np.array(450), history=np.array(history))
+                active_gray=active.cpu().numpy(), gain_gray=gains.numpy(), wavelength_nm=np.array(args.wavelength_nm), history=np.array(history))
             summary.append(dict(index=index, sign=sign, skipped=not bool(active.any()),
                                 best_loss=min(history) if history else None, steps=len(history)))
     (out / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')

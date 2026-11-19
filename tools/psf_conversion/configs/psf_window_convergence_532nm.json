@@ -1,0 +1,43 @@
+{
+  "schema": "psf_window_convergence_run_config/1",
+  "description": "532 nm numerical diagnostic; source config and artifact must both be 532 nm. Provisional legacy energy tolerances, not the shape-only full-campaign decision.",
+  "fft_sizes": [
+    2400,
+    3200,
+    3600,
+    4000,
+    4400,
+    4800,
+    5600,
+    6400,
+    7200
+  ],
+  "corner_theta_deg": [
+    2,
+    -2
+  ],
+  "corner_source": "User-authorized single-axis half-field exploration up to 2 degrees; not a measured physical FOV.",
+  "tolerances": {
+    "energy_roi_rel": 0.01,
+    "centroid_px": 0.05,
+    "shape_pixel_integrated": 0.01,
+    "outside_roi_fraction": 0.005,
+    "edge_fraction": 0.005,
+    "edge_fraction_max": 0.01,
+    "differential_energy_rel": 0.01,
+    "differential_shape": 0.01,
+    "rebound_ratio": 1.5,
+    "rebound_floor_fraction": 0.25,
+    "support_windows": 2
+  },
+  "edge_band_px": 64,
+  "roi_size_px": 51,
+  "camera_pixel_um": 3.45,
+  "notes": [
+    "Use newly fitted 532 nm artifacts, never relabel 450 nm artifacts.",
+    "For the user-requested shape-only 9-window / 25-field full32 study use validate_psf_campaign.py --wavelength-nm 532; this legacy pair diagnostic still includes energy and edge criteria.",
+    "Detector pitch and propagation distance remain the historical engineering configuration, not a verified 532 nm hardware model.",
+    "The phase library is a wavelength-dependent, phase-only P400/H600 polynomial approximation; no independent full-wave or amplitude calibration claim.",
+    "Fixed aperture n=800 and dx=400 nm. FFT padding is independent and recorded explicitly."
+  ]
+}

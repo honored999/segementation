@@ -99,7 +99,8 @@ def test_real_asm_selfcheck(tmp_path):
     assert all(r['padding_stability']['status']=='consistent' for r in rows)
     assert all(r['isoplanatism_acceptance']=='NOT_SPECIFIED' for r in rows)
     assert len(list(out.glob('*.npz')))==12
-    assert len(list(out.glob('*.png')))==12
+    assert sorted(p.name for p in out.glob('*.png'))==sorted(
+        name for r in rows for name in (r['png_file'],r['full_plane_png_file']))
     with np.load(next(out.glob('*.npz'))) as data:
         assert data['valid_mask'].dtype==bool
         assert data['extended_field'].ndim==2
@@ -209,7 +210,8 @@ def test_angle_artifact_mapping(monkeypatch,tmp_path):
     rows=json.loads((tmp_path/'metrics.json').read_text())
     assert len(rows)==3
     assert len(list(tmp_path.glob('*.npz')))==len(rows)
-    assert len(list(tmp_path.glob('*.png')))==len(rows)
+    assert sorted(p.name for p in tmp_path.glob('*.png'))==sorted(
+        name for r in rows for name in (r['png_file'],r['full_plane_png_file']))
     assert len({r['sample_id'] for r in rows})==len(rows)
     assert {r['angle_deg'] for r in rows}=={0.,.1,.10000001}
     for row in rows:

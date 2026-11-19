@@ -1,9 +1,9 @@
-"""Numerical core for the GRAY450 tilted-plane-wave isoplanatism validation.
+"""Numerical core for the 450/532 nm tilted-plane-wave isoplanatism validation.
 
 This module is a read-only consumer of the existing fitting / propagation code:
 
 * the transmission field is rebuilt exactly like the fitting entry point,
-  ``exp(1j * compute_phase_fitted(width_nm, 450))`` with uniform unit
+  ``exp(1j * compute_phase_fitted(width_nm, artifact.wavelength_nm))`` with uniform unit
   amplitude (``fit_psf_gray450.py:62-78``);
 * propagation always goes through
   :func:`optics.propagation.create_propagation_layer`; no ASM physics is
@@ -41,7 +41,8 @@ import torch.nn.functional as F
 from optics.fitted_phase_parameters_p400 import compute_phase_fitted
 from optics.propagation import create_propagation_layer
 
-WAVELENGTH_NM = 450.0
+WAVELENGTH_NM = 450.0  # backward-compatible default only
+SUPPORTED_WAVELENGTHS_NM = (450.0, 532.0)
 DX_NM = 400.0
 WIDTH_MIN_NM = 80.0
 WIDTH_MAX_NM = 320.0
@@ -51,7 +52,7 @@ DEFAULT_ANGLES_DEG: Tuple[float, ...] = (-0.5, -0.25, -0.1, 0.0, 0.1, 0.25, 0.5)
 
 #: Locked inputs from the task book (section 2).  Any change is a hard stop.
 LOCKED_SHA256: Dict[str, str] = {
-    "fit_psf_gray450.py": "64F84618C6A683A013D899607BD3BCBC1171F76F69AF2F2B6F47DCC154F5E999",
+    "fit_psf_gray450.py": "D3034D83EF8BF216BE431C162C2AAF654DC3E158734C83FA91E04DC2C8F4B53F",
     "fit_psf.py": "E251CDA52251F3EB415E116AC2FA6ED5DDC476B3F7A9DF24E088EE55AD29C1E8",
     "optics/propagation.py": "B9D7CF9C302814EB232D13D74C26220C5D371CCD628B4DB353225E87193FCE1E",
     "optics/fitted_phase_parameters_p400.py": "A71E0B7DCCB4F0E9FCCD094A059EDC0B0ED7195EA88549EFD9C324A1F3D3BE20",
@@ -207,8 +208,8 @@ def load_artifact(path: Path) -> Artifact:
     if "wavelength_nm" not in arrays:
         raise ValidationError(f"{path.name}: missing wavelength_nm")
     wavelength = _as_scalar_float(arrays["wavelength_nm"], "wavelength_nm")
-    if abs(wavelength - WAVELENGTH_NM) > 1e-6:
-        raise ValidationError(f"{path.name}: wavelength_nm={wavelength} is not {WAVELENGTH_NM}")
+    if wavelength not in SUPPORTED_WAVELENGTHS_NM:
+        raise ValidationError(f"{path.name}: unsupported wavelength_nm={wavelength}; supported={SUPPORTED_WAVELENGTHS_NM}")
 
     gain = None
     if "gain_gray" in arrays:
@@ -294,14 +295,14 @@ def load_source_config(path: Path) -> SourceConfig:
     wavelength_nm = _as_scalar_float(data["wavelength_nm"], "wavelength_nm")
     if abs(dx_nm - DX_NM) > 1e-9:
         raise ValidationError(f"{path.name}: dx_nm={dx_nm} differs from the fitted library pitch {DX_NM}")
-    if abs(wavelength_nm - WAVELENGTH_NM) > 1e-6:
-        raise ValidationError(f"{path.name}: wavelength_nm={wavelength_nm} is not {WAVELENGTH_NM}")
+    if wavelength_nm not in SUPPORTED_WAVELENGTHS_NM:
+        raise ValidationError(f"{path.name}: unsupported wavelength_nm={wavelength_nm}; supported={SUPPORTED_WAVELENGTHS_NM}")
     if distance_um <= 0:
         raise ValidationError(f"{path.name}: distance_um must be positive")
 
     grayscale = data.get("grayscale")
     if grayscale is not None and grayscale is not True:
-        raise ValidationError(f"{path.name}: grayscale must be true for this 450 nm pipeline")
+        raise ValidationError(f"{path.name}: grayscale must be true for this grayscale pipeline")
 
     patch = None
     if "patch_meta" in data:
@@ -318,10 +319,16 @@ def load_source_config(path: Path) -> SourceConfig:
         padding = _as_int(data["padding"], "padding")
         if padding < 0:
             raise ValidationError(f"{path.name}: padding must be >= 0")
-        if padding != n:
-            raise ValidationError("padding conflicts with locked fitting entry padding=n")
-        padding_source = "config, cross-checked against locked fitting entry padding=n"
+        if "fft_size" in data:
+            fft_size = _as_int(data["fft_size"], "fft_size")
+            if fft_size != n + 2 * padding:
+                raise ValidationError("fft_size conflicts with n + 2*padding")
+        elif padding != n:
+            raise ValidationError("legacy config without fft_size requires padding=n")
+        padding_source = "config fft_size=n+2*padding" if "fft_size" in data else "legacy config padding=n"
     else:
+        if "fft_size" in data:
+            raise ValidationError("fft_size requires explicit padding")
         padding = n
         padding_source = (
             "derived: source config has no padding field; fit_psf_gray450.py:65-69 passes "
@@ -419,6 +426,8 @@ def carrier_phase(
 
 def build_transmission(width_nm: np.ndarray, wavelength_nm: float = WAVELENGTH_NM) -> torch.Tensor:
     """Rebuild the fitting-entry transmission field: uniform amplitude * exp(i*phase)."""
+    if wavelength_nm not in SUPPORTED_WAVELENGTHS_NM:
+        raise ValidationError(f"Unsupported grayscale wavelength: {wavelength_nm}")
     width = torch.as_tensor(np.asarray(width_nm), dtype=torch.float64)
     phase = compute_phase_fitted(width, float(wavelength_nm))
     phase = torch.as_tensor(phase, dtype=torch.float64)
@@ -838,6 +847,11 @@ class SamplingDiagnostics:
     tf_near_pi_fraction: Optional[float]
 
 
+def _linear_p99_cpu(values: torch.Tensor) -> float:
+    """Global h=(N-1)*0.99 linear quantile of all unchanged CPU values."""
+    return float(np.quantile(values.detach().numpy(), 0.99, method='linear'))
+
+
 def sampling_diagnostics(
     field_in: torch.Tensor,
     layer: Any,
@@ -897,7 +911,7 @@ def sampling_diagnostics(
     if steps.numel() == 0:
         tf_p99 = tf_max = tf_near_pi = None
     else:
-        tf_p99 = float(torch.quantile(steps, 0.99)) / math.pi
+        tf_p99 = _linear_p99_cpu(steps) / math.pi
         tf_max = float(steps.max()) / math.pi
         tf_near_pi = float((steps > 0.9 * math.pi).to(torch.float64).mean())
 
@@ -1119,3 +1133,170 @@ def classify_validity(
             reasons.append(f"{name}_alignment_invalid: {comparison.reason}")
             continue
     return ("invalid" if invalid else "ok"), reasons
+
+
+# ---------------------------------------------------------------------------
+# detection-plane metrics: centroid, ROI energy budget, camera-pixel binning
+# ---------------------------------------------------------------------------
+#
+# Additive only: the tilted-plane validation and the FFT-window convergence
+# scan share these definitions so that "same ROI, same units" is checkable
+# instead of implied.  Every function is CPU/float64 on postprocessing values.
+
+
+@dataclass
+class Centroid:
+    """Intensity centroid inside an optional window, relative to array centre."""
+
+    valid: bool
+    reason: Optional[str]
+    total_au: float
+    y_px: Optional[float]
+    x_px: Optional[float]
+    y_um: Optional[float]
+    x_um: Optional[float]
+    window: Optional[Dict[str, Any]]
+    definition: str = (
+        "sum(I*r)/sum(I) over the requested window only; r=(index-(N-1)/2)*dx; "
+        "+y down. Centred crops of every FFT size share the same physical centre."
+    )
+
+
+def centroid(
+    intensity_image: torch.Tensor,
+    dx_m: float,
+    window: Optional[Mapping[str, Any]] = None,
+) -> Centroid:
+    """Centroid of a non-negative intensity image, optionally inside ``window``."""
+    image = torch.as_tensor(intensity_image)
+    if image.ndim != 2 or image.numel() == 0:
+        return Centroid(False, "needs_2d_intensity", 0.0, None, None, None, None, window)
+    ny, nx = int(image.shape[0]), int(image.shape[1])
+    y0, x0 = 0, 0
+    sub = image
+    if window is not None:
+        if not window.get("valid", False):
+            return Centroid(False, "roi_outside_output", 0.0, None, None, None, None, window)
+        y0, x0 = int(window["y0"]), int(window["x0"])
+        sub = image[y0 : int(window["y1"]), x0 : int(window["x1"])]
+    if not sub.is_floating_point():
+        sub = sub.to(torch.float64)
+    # Accumulate in float64 via sum(dtype=...); a full float64 copy of an
+    # extended plane would cost hundreds of MB.
+    total = float(sub.sum(dtype=torch.float64))
+    if not math.isfinite(total):
+        return Centroid(False, "nonfinite_intensity", 0.0, None, None, None, None, window)
+    if total <= 0.0:
+        return Centroid(False, "zero_total_intensity", 0.0, None, None, None, None, window)
+    if float(sub.min()) < 0.0:
+        return Centroid(False, "negative_intensity", 0.0, None, None, None, None, window)
+    ys = torch.arange(y0, y0 + sub.shape[0], dtype=torch.float64, device=sub.device) - (ny - 1) / 2.0
+    xs = torch.arange(x0, x0 + sub.shape[1], dtype=torch.float64, device=sub.device) - (nx - 1) / 2.0
+    y_px = float((sub.sum(dim=1, dtype=torch.float64) * ys).sum() / total)
+    x_px = float((sub.sum(dim=0, dtype=torch.float64) * xs).sum() / total)
+    return Centroid(
+        True, None, total, y_px, x_px, y_px * dx_m * 1e6, x_px * dx_m * 1e6, window
+    )
+
+
+@dataclass
+class RoiEnergy:
+    """Energy budget of a square detection ROI inside a (possibly extended) plane."""
+
+    valid: bool
+    reason: Optional[str]
+    total_au: float
+    inside_au: float
+    outside_au: float
+    inside_fraction: Optional[float]
+    outside_fraction: Optional[float]
+    window: Optional[Dict[str, Any]]
+
+
+def roi_energy(
+    intensity_image: torch.Tensor,
+    window: Mapping[str, Any],
+) -> RoiEnergy:
+    """Raw (un-normalised) ROI energy and the fraction that falls outside it."""
+    image = torch.as_tensor(intensity_image)
+    if image.ndim != 2 or image.numel() == 0:
+        return RoiEnergy(False, "needs_2d_intensity", 0.0, 0.0, 0.0, None, None, dict(window))
+    if not window.get("valid", False):
+        return RoiEnergy(False, "roi_outside_output", 0.0, 0.0, 0.0, None, None, dict(window))
+    slice_y = slice(int(window["y0"]), int(window["y1"]))
+    slice_x = slice(int(window["x0"]), int(window["x1"]))
+    # Promote the accumulators, not the array: extended planes are hundreds of MB.
+    inside = float(image[slice_y, slice_x].sum(dtype=torch.float64))
+    total = float(image.sum(dtype=torch.float64))
+    if not (math.isfinite(total) and math.isfinite(inside)):
+        return RoiEnergy(False, "nonfinite_intensity", 0.0, 0.0, 0.0, None, None, dict(window))
+    if total <= 0.0:
+        return RoiEnergy(False, "zero_total_intensity", 0.0, inside, 0.0, None, None, dict(window))
+    return RoiEnergy(
+        True, None, total, inside, total - inside, inside / total, 1.0 - inside / total, dict(window)
+    )
+
+
+def pixel_bin_matrix(
+    n: int,
+    dx_m: float,
+    pixel_m: float,
+    *,
+    origin_px: int = 0,
+) -> Dict[str, Any]:
+    """Area-overlap weights binning ``n`` simulation pixels onto camera pixels.
+
+    Bin ``i`` covers ``[origin_px + i*p, origin_px + (i+1)*p)`` simulation pixels
+    with ``p = pixel_m/dx_m``.  Partial bins at both ends are retained with
+    their true width and area; nothing is redistributed or renormalised.
+    """
+    n = int(n)
+    if n < 1:
+        raise ValidationError("pixel_bin_matrix needs n >= 1")
+    if not (math.isfinite(dx_m) and dx_m > 0.0 and math.isfinite(pixel_m) and pixel_m > 0.0):
+        raise ValidationError("pixel_bin_matrix needs positive finite dx and pixel pitch")
+    p = float(pixel_m) / float(dx_m)
+    if p < 1.0:
+        raise ValidationError(f"camera pixel {pixel_m} is smaller than simulation pixel {dx_m}")
+    lo = float(origin_px)
+    bins = int(math.ceil((n - lo) / p))
+    if bins < 1:
+        raise ValidationError("empty camera-pixel binning")
+    edges = lo + np.arange(bins + 1, dtype=np.float64) * p
+    index = np.arange(n, dtype=np.float64)[None, :]
+    lower = np.maximum(edges[:-1, None], index)
+    upper = np.minimum(np.minimum(edges[1:, None], index + 1.0), float(n))
+    matrix = np.clip(upper - lower, 0.0, None)
+    widths = np.diff(edges)
+    covered = matrix.sum(axis=1)
+    return dict(
+        matrix=matrix,
+        bins=bins,
+        pixel_px=p,
+        edges_px=edges,
+        origin_px=int(origin_px),
+        bin_width_px=widths,
+        bin_area_m2=widths * float(dx_m),
+        coverage_px=covered,
+        partial_bins=int((covered + 1e-12 < p).sum()),
+        definition=(
+            "exact area overlap of simulation pixels [j,j+1)*dx with camera bins "
+            "[origin + i*p, origin + (i+1)*p) in simulation-pixel units; "
+            "edges kept at their true partial width"
+        ),
+    )
+
+
+def pixel_integrate(
+    intensity_image: torch.Tensor,
+    rows: Mapping[str, Any],
+    cols: Mapping[str, Any],
+    dx_m: float,
+) -> np.ndarray:
+    """Integrate ``I`` over each camera pixel: ``(W_y @ I @ W_x^T) * dx^2``."""
+    image = np.asarray(_cpu_array(intensity_image), dtype=np.float64)
+    if image.ndim != 2:
+        raise ValidationError("pixel_integrate needs a 2D intensity image")
+    if rows["matrix"].shape[1] != image.shape[0] or cols["matrix"].shape[1] != image.shape[1]:
+        raise ValidationError("pixel bin matrices do not match the image shape")
+    return rows["matrix"] @ image @ cols["matrix"].T * float(dx_m) ** 2
