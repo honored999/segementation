@@ -44,16 +44,75 @@ def test_failed_postserialization_audit_never_marks_complete(tmp_path):
     assert (tmp_path/'joint.pt').is_file() and not (tmp_path/'complete.json').exists()
 
 
-def test_all_gpu_guard_rejects_foreign_busy_gpu_and_vram(monkeypatch):
+def selected_gpu_fixture(monkeypatch, *, rows=None, resources=None):
     from types import SimpleNamespace
-    from experiments.genseg_joint.runtime import gpu_guard
     import experiments.genseg3mm.targets as targets
     import experiments.genseg_joint.runtime as runtime
-    monkeypatch.setattr(targets,'bind_gpu',lambda *a,**kw:{'gpu_uuid':'GPU-a'})
-    for rows in ['0, GPU-a, 1, 1, 100\n1, GPU-b, 90, 1, 100',
-                 '0, GPU-a, 1, 80, 100']:
-        monkeypatch.setattr(runtime.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout=rows))
-        with pytest.raises(ValueError,match='80%'): gpu_guard(0)
+    inventory={0:'0, GPU-zero, 95, 90, 100',1:'1, GPU-one, 3, 10, 100'}
+    queries=[]
+    def query(command,**kwargs):
+        queries.append(command)
+        if rows is not None: output=rows
+        elif '-i' in command: output=inventory[int(command[command.index('-i')+1])]
+        else: output='\n'.join(inventory.values())
+        return SimpleNamespace(stdout=output)
+    def snapshot(index):
+        return dict(cpu_pct=2.,ram_used_pct=20.,ram_available=32*1024**3,
+                    gpu_uuid='GPU-one' if index==1 else 'GPU-zero',gpu_util_pct=3.,
+                    vram_available=32*1024**3) | (resources or {})
+    # Substitute measured OS/GPU telemetry only; the REAL bind_gpu enforces CPU/RAM/headroom.
+    monkeypatch.setattr(targets,'_resource_snapshot',snapshot)
+    monkeypatch.setattr(runtime.subprocess,'run',query)
+    monkeypatch.setenv('CUDA_VISIBLE_DEVICES','test-original')
+    return queries
+
+
+def test_selected_idle_gpu_ignores_busy_other_card(monkeypatch):
+    from experiments.genseg_joint.runtime import gpu_guard
+    queries=selected_gpu_fixture(monkeypatch)
+    snap=gpu_guard(1,expected_uuid='GPU-one')
+    assert snap['all_gpus']==[{'index':1,'uuid':'GPU-one','util_pct':3.,'used_mib':10.,'total_mib':100.}]
+    assert snap['allocator_fraction']==pytest.approx(.69)
+    assert all(command[:3]==['nvidia-smi','-i','1'] for command in queries)
+    assert all('--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total' in command for command in queries)
+    with pytest.raises(ValueError,match=r'GPU 0.*95.*90.*80'):
+        gpu_guard(0)
+
+
+@pytest.mark.parametrize('row', ['1, GPU-one, 80, 10, 100','1, GPU-one, 3, 80, 100'])
+def test_selected_gpu_busy_util_or_vram_rejected(monkeypatch,row):
+    from experiments.genseg_joint.runtime import gpu_guard
+    selected_gpu_fixture(monkeypatch,rows=row)
+    with pytest.raises(ValueError,match=r'GPU 1.*80'): gpu_guard(1)
+
+
+@pytest.mark.parametrize('row', [
+    '0, GPU-one, 3, 10, 100','1, GPU-wrong, 3, 10, 100',
+    '1, GPU-one, nan, 10, 100','1, GPU-one, 3, inf, 100',
+    '1, GPU-one, 3, 10, nan','1, GPU-one, -1, 10, 100',
+    '1, GPU-one, 3, -1, 100','1, GPU-one, 3, 10, 0',
+    '1, GPU-one, 3, 10, -100','1, GPU-one, invalid, 10, 100',
+    '1, GPU-one, 3, 10', '',
+    '1, GPU-one, 3, 10, 100\n0, GPU-zero, 95, 90, 100'])
+def test_selected_gpu_malformed_metrics_or_identity_rejected(monkeypatch,row):
+    from experiments.genseg_joint.runtime import gpu_guard
+    selected_gpu_fixture(monkeypatch,rows=row)
+    with pytest.raises(ValueError,match='GPU 1'): gpu_guard(1,expected_uuid='GPU-one')
+
+
+def test_selected_gpu_expected_uuid_change_rejected(monkeypatch):
+    from experiments.genseg_joint.runtime import gpu_guard
+    selected_gpu_fixture(monkeypatch)
+    with pytest.raises(ValueError,match=r'GPU 1.*UUID'): gpu_guard(1,expected_uuid='GPU-old')
+
+
+@pytest.mark.parametrize('resources',[
+    {'cpu_pct':80.},{'ram_used_pct':80.},{'gpu_util_pct':80.},
+    {'ram_available':7*1024**3},{'vram_available':11*1024**3}])
+def test_selected_idle_gpu_still_enforces_real_bind_resource_guards(monkeypatch,resources):
+    from experiments.genseg_joint.runtime import gpu_guard
+    selected_gpu_fixture(monkeypatch,resources=resources)
+    with pytest.raises(ValueError,match='Resource guard refused'): gpu_guard(1)
 
 
 def test_check_mode_never_constructs_model_or_reads_patient_arrays(tmp_path,monkeypatch,capsys):
