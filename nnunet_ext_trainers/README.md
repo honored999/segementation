@@ -163,3 +163,35 @@ set CUDA_VISIBLE_DEVICES=1
 set nnUNet_extTrainer=%CD%\nnunet_ext_trainers
 nnUNetv2_train Dataset501_StrokeLesion 2d 0 -tr nnUNetTrainerTopK20 -p nnUNetPlans --val
 ```
+
+## Configurable Tversky + CE
+
+Select `-tr nnUNetTrainerTverskyCEEarlyStopping` for the standard nnU-Net
+architecture with Tversky + CE and EMA early stopping. It uses class labels
+and keeps the standard deep supervision and sampling.
+
+In an experiment copy of the plans, add `tversky_ce` under the active
+configuration (for example, `configurations.2d`). Select that plans identifier
+with `-p` and reuse the same plans file when resuming. All keys are optional.
+These are the defaults:
+
+```json
+"tversky_ce": {
+  "alpha": 0.4,
+  "beta": 0.6,
+  "weight_tversky": 1.0,
+  "weight_ce": 1.0
+}
+```
+
+- `alpha` weights false positives and `beta` weights false negatives in the
+  denominator `TP + alpha * FP + beta * FN`. With `0.5` for both, the overlap
+  term matches the official soft Dice loss.
+- `weight_tversky` and `weight_ce` multiply the two loss terms independently,
+  without normalization. For example, `1.5` and `0.5` make the Tversky
+  coefficient three times the CE coefficient. A zero coefficient disables
+  that term.
+
+For the Dataset509 comparison, set `MIN_TRAINING_EPOCHS=0` and `PATIENCE=30`
+for both trainers in the run configuration before training, and reuse those
+settings on resume.
