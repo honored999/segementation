@@ -3,11 +3,10 @@ import gc,importlib,json,os,random,sys,types
 from pathlib import Path
 import numpy as np
 import torch
-from torch.nn import functional as F
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
 from shared import read,write,need,sha,pin,KEY
 from tools.psf_conversion.psf_first_conv import FirstConvHook,load_psfs,PIXEL_OPERATOR
-from tools.psf_conversion.first_layer_model import check_artifact_origin, first_weight_names, load_network, resize_first_conv
+from tools.psf_conversion.first_layer_model import check_artifact_origin, load_network, resize_first_conv
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDatasetNumpy
 class ReadOnlyNumpyDataset(nnUNetDatasetNumpy):
     @staticmethod
@@ -26,46 +25,48 @@ def frozen_state(t):
     need(tensor_sha(t._optical_hook.kernel)==t._optical['effective_kernel_sha256'],'OPTICAL_KERNEL_CHANGED')
     return state
 
-def build(spec,job,preflight, *, target=False):
-    random.seed(12345);np.random.seed(12345);torch.manual_seed(12345);torch.cuda.manual_seed_all(12345)
-    torch.set_num_threads(1);torch.cuda.set_per_process_memory_fraction(.6,0)
-    need(torch.cuda.device_count()==1,'GPU_MAPPING_INVALID')
-    model=Path(spec['model']);ckpt=Path(spec['checkpoint']['path'])
-    need(sha(ckpt)==spec['checkpoint']['sha256'],'SOURCE_CHECKPOINT_CHANGED')
-    plans=read(model/'plans.json');plans['continue_training']=False
-    Trainer=getattr(importlib.import_module(spec['trainer']),spec['trainer'])
-    trainer=Trainer(plans,'2d',0,read(model/'dataset.json'),torch.device('cuda:0'))
-    trainer.MAX_EPOCHS=1000;trainer.MIN_TRAINING_EPOCHS=0;trainer.PATIENCE=30;trainer.MIN_DELTA=1e-4
-    trainer.num_epochs=1000;trainer.initial_lr=.001
-    out=job/('electrical_target' if target else 'backend')/'model'
-    trainer.output_folder_base=str(out);trainer.output_folder=str(out/'fold_0')
-    trainer.log_file=str(Path(trainer.output_folder)/'training_log.txt')
-    Path(trainer.output_folder).mkdir(parents=True,exist_ok=False)
-    trainer.logger=type(trainer.logger)(trainer.output_folder,False)
-    trainer.logger.update_config(dict(plans=plans,configuration='2d',fold=0,dataset=trainer.dataset_json))
+def prepare_trainer(spec, model_dir, *, lr):
+    random.seed(12345)
+    np.random.seed(12345)
+    torch.manual_seed(12345)
+    torch.cuda.manual_seed_all(12345)
+    torch.set_num_threads(1)
+    torch.cuda.set_per_process_memory_fraction(.6, 0)
+    need(torch.cuda.device_count() == 1, 'GPU_MAPPING_INVALID')
+    model = Path(spec['model'])
+    plans = read(model/'plans.json')
+    plans['continue_training'] = False
+    Trainer = getattr(importlib.import_module(spec['trainer']), spec['trainer'])
+    trainer = Trainer(plans, '2d', 0, read(model/'dataset.json'), torch.device('cuda:0'))
+    trainer.MAX_EPOCHS = trainer.num_epochs = 1000
+    trainer.MIN_TRAINING_EPOCHS = 0
+    trainer.PATIENCE = 30
+    trainer.MIN_DELTA = 1e-4
+    trainer.initial_lr = lr
+    trainer.output_folder_base = str(model_dir)
+    trainer.output_folder = str(model_dir/'fold_0')
+    trainer.log_file = str(model_dir/'fold_0'/'training_log.txt')
+    Path(trainer.output_folder).mkdir(parents=True, exist_ok=False)
+    trainer.logger = type(trainer.logger)(trainer.output_folder, False)
+    trainer.logger.update_config(dict(plans=plans, configuration='2d', fold=0, dataset=trainer.dataset_json))
     trainer.initialize()
-    # Trusted project checkpoint pinned above; transfer network only, never optimizer/logging/epoch state.
-    payload=torch.load(ckpt,map_location='cpu',weights_only=False,mmap=True)
-    conv = load_network(trainer.network, payload)
-    trainer.inference_allowed_mirroring_axes=payload.get('inference_allowed_mirroring_axes')
-    if target:
-        conv = resize_first_conv(trainer.network, spec['kernel_size'])
-        trainer.first_layer = dict(kernel_size=spec['kernel_size'],
-            initialization='centered baseline weights, zero exterior',
-            initialization_checkpoint=spec['checkpoint'])
-    else:
-        trainer.first_layer = payload['first_layer']
-    del payload
-    gc.collect()
     need(trainer.dataset_class.__name__ == 'nnUNetDatasetNumpy', 'UNSUPPORTED_CACHE_DATASET_CLASS')
     trainer.dataset_class = ReadOnlyNumpyDataset
     trainer.plot_network_architecture = types.MethodType(lambda self: None, trainer)
-    if target:
-        trainer.network.requires_grad_(False)
-        conv.weight.requires_grad_(True)
-        trainer.optimizer = torch.optim.SGD([conv.weight], lr=0.001, momentum=0.99,
-                                            nesterov=True, weight_decay=trainer.weight_decay)
-        return trainer
+    return trainer
+
+
+def build(spec, job, preflight):
+    ckpt = Path(spec['checkpoint']['path'])
+    need(sha(ckpt) == spec['checkpoint']['sha256'], 'SOURCE_CHECKPOINT_CHANGED')
+    out = job/'backend'/'model'
+    trainer = prepare_trainer(spec, out, lr=.001)
+    payload = torch.load(ckpt, map_location='cpu', weights_only=False, mmap=True)
+    conv = load_network(trainer.network, payload)
+    trainer.inference_allowed_mirroring_axes = payload.get('inference_allowed_mirroring_axes')
+    trainer.first_layer = payload['first_layer']
+    del payload
+    gc.collect()
     check_artifact_origin(Path(spec['psf']), spec['checkpoint']['sha256'])
     kernel,hashes=load_psfs(Path(spec['psf']),conv.weight,operator=PIXEL_OPERATOR,ideal=False)
     need(hashes==spec['psf_hashes'] and len(hashes)==67,'PSF_IDENTITY_CHANGED')
@@ -160,36 +161,74 @@ def train(spec,job,preflight):
               checkpoint=pin(best),model_folder=trainer.output_folder_base,optical_finetune=trainer._optical))
     finally:finish_loaders(trainer)
 
-def train_target(spec, job, preflight):
-    """Update only the first weight with the source trainer's loss and augmentation."""
-    trainer = build(spec, job, preflight, target=True)
-    updates = 1 if preflight else 250
+def train_scratch(spec, job, preflight):
+    """Train every parameter from random initialization before fitting optics."""
+    model = job/'electrical_target'/'model'
+    trainer = prepare_trainer(spec, model, lr=.01)
+    conv = resize_first_conv(trainer.network, spec['kernel_size'])
+    # PlainConvUNet initializes convolutional weights with He initialization.
+    from dynamic_network_architectures.initialization.weight_init import InitWeights_He
+    InitWeights_He(1e-2)(conv)
+    parameters = list(trainer.network.parameters())
+    need(all(p.requires_grad for p in parameters), 'FROZEN_ELECTRICAL_PARAMETER')
+    trainer.optimizer, trainer.lr_scheduler = trainer.configure_optimizers()
+    ids = {id(p) for group in trainer.optimizer.param_groups for p in group['params']}
+    need(ids == {id(p) for p in parameters} and not trainer.optimizer.state
+         and trainer.current_epoch == 0, 'INVALID_SCRATCH_OPTIMIZER')
+    stage = Path(trainer.output_folder)
+    metadata = dict(kernel_size=spec['kernel_size'], initialization='random nnU-Net He',
+                    training='all electrical network parameters', seed=12345,
+                    initial_lr=.01, min_epochs=0, patience=30, min_delta=1e-4, max_epochs=1000)
+    write(model/'electrical_scratch.json', metadata)
+    end = trainer.on_epoch_end
+
+    def epoch_end(self):
+        end()
+        write(job/'electrical_progress.json', dict(completed_epochs=self.current_epoch,
+              ema_fg_dice=float(self.logger.get_value('ema_fg_dice', step=-1)),
+              train_loss=float(self.logger.get_value('train_losses', step=-1)),
+              val_loss=float(self.logger.get_value('val_losses', step=-1)),
+              lr=self.optimizer.param_groups[0]['lr'],
+              epochs_without_improvement=self._epochs_without_improvement,
+              early_stopping_triggered=self._early_stopping_triggered))
+
+    trainer.on_epoch_end = types.MethodType(epoch_end, trainer)
     try:
-        random.seed(12345)
-        np.random.seed(12345)
-        torch.manual_seed(12345)
-        trainer.on_train_start()
-        trainer.network.eval()
-        conv = trainer.network.get_submodule(CONV)
-        before = tensor_sha(conv.weight)
-        weight_names = first_weight_names(trainer.network)
-        frozen = {name: tensor_sha(value) for name, value in trainer.network.state_dict().items()
-                  if name not in weight_names}
-        for _ in range(updates):
-            result = trainer.train_step(next(trainer.dataloader_train))
-            need(np.isfinite(result['loss']).all(), 'NONFINITE_ELECTRICAL_LOSS')
-        need(tensor_sha(conv.weight) != before, 'FIRST_WEIGHT_DID_NOT_UPDATE')
-        need(frozen == {name: tensor_sha(value) for name, value in trainer.network.state_dict().items()
-                        if name not in weight_names}, 'FROZEN_ELECTRICAL_STATE_CHANGED')
-        out = Path(trainer.output_folder)
-        checkpoint = out/'checkpoint_target.pth'
-        torch.save(dict(network_weights=trainer.network.state_dict(), first_layer=trainer.first_layer,
-            init_args=trainer.my_init_kwargs, trainer_name=trainer.__class__.__name__,
-            inference_allowed_mirroring_axes=trainer.inference_allowed_mirroring_axes), checkpoint)
-        np.save(job/'electrical_kernels.npy', conv.weight.detach().float().cpu().numpy())
-        write(job/'target_completed.json', dict(checkpoint=pin(checkpoint), updates=updates,
-              nominal_updates=250, lr=0.001, seed=12345, last_loss=float(result['loss']),
-              formal_eligible=not preflight, frozen_backend_and_bias=True))
+        if preflight:
+            trainer.on_train_start()
+            trainer.network.train()
+            backend = next(p for name, p in trainer.network.named_parameters()
+                           if not name.startswith(CONV) and 'norm' in name)
+            before = tuple(p.detach().clone() for p in (conv.weight, backend))
+            loss = trainer.train_step(next(trainer.dataloader_train))['loss']
+            need(np.isfinite(loss).all(), 'NONFINITE_ELECTRICAL_LOSS')
+            for previous, current in zip(before, (conv.weight, backend)):
+                need(current.grad is not None and torch.isfinite(current.grad).all()
+                     and not torch.equal(previous, current.detach()), 'ELECTRICAL_WEIGHT_DID_NOT_UPDATE')
+            trainer.network.eval()
+            with torch.no_grad():
+                val = trainer.validation_step(next(trainer.dataloader_val))['loss']
+            need(np.isfinite(val).all(), 'NONFINITE_ELECTRICAL_VALIDATION')
+            best = stage/'checkpoint_electrical_NON_FORMAL.pth'
+            trainer.save_checkpoint(str(best))
+        else:
+            trainer.run_training()
+            best = stage/'checkpoint_best.pth'
+        need(best.is_file(), 'ELECTRICAL_BEST_CHECKPOINT_MISSING')
+        payload = torch.load(best, map_location='cpu', weights_only=False, mmap=True)
+        weight = payload['network_weights'][KEY]
+        need(tuple(weight.shape) == (32, 1, spec['kernel_size'], spec['kernel_size'])
+             and torch.isfinite(weight).all(), 'INVALID_ELECTRICAL_BEST_KERNEL')
+        export = stage/'checkpoint_target.pth'
+        # Preserve the native best checkpoint. The inference artifact adds size metadata
+        # and carries the exact same network weights without optimizer state.
+        fields = ('network_weights', 'init_args', 'trainer_name', 'inference_allowed_mirroring_axes')
+        torch.save(dict({key: payload[key] for key in fields}, first_layer=metadata), export)
+        np.save(job/'electrical_kernels.npy', weight.detach().float().numpy())
+        write(job/'target_completed.json', dict(status='COMPLETED', checkpoint=pin(export),
+              native_best_checkpoint=pin(best), best_checkpoint_epoch=payload['current_epoch'],
+              completed_epochs=trainer.current_epoch, formal_eligible=not preflight,
+              scratch=True, all_parameters_trainable=True, policy=metadata))
     finally:
         finish_loaders(trainer)
 
@@ -198,8 +237,8 @@ if __name__ == '__main__':
     job = Path(sys.argv[1])
     phase, mode = sys.argv[2:]
     spec = read(job/'spec.private.json')
-    if phase == 'target':
-        train_target(spec, job, mode == 'preflight')
+    if phase == 'scratch':
+        train_scratch(spec, job, mode == 'preflight')
     elif phase == 'backend':
         train(spec, job, mode == 'preflight')
     else:

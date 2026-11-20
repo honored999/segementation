@@ -96,20 +96,36 @@ def main(root, mode):
     env['PYTHONPATH'] = os.pathsep.join([str(CHECKOUT), str(runtime/'src'), str(runtime/'trainers')])
     source_paths = [*ENTRY.glob('*.py'), *TOOLS.glob('*.py'), *(TOOLS/'optics').glob('*.py'),
                     CHECKOUT/'evaluate_segmentation_metrics.py']
+    electrical_env = dict(env, nnUNet_n_proc_DA='2')
+    historical = Path(spec['before_comparison']).parent
+    write(root/'historical_k3_reference.json', {
+        'role': 'historical reference; electrical patience differs',
+        'checkpoint': spec['checkpoint'], 'electrical_patience': 100,
+        'electrical_metrics': str(historical/'electrical_metrics'),
+        'fitted_metrics': str(historical/'fitted_metrics'),
+        'finetuned_metrics': str(PRIOR/spec['key']/'finetuned_metrics'),
+    })
     write(root/'protocol.json', dict(fold=0, validation_volumes=len(used_cases), audit=pin(audit_path),
           baseline=spec['checkpoint'], formal_eligible=not preflight,
-          electrical=dict(updates=1 if preflight else 250, lr=0.001, seed=12345,
-                          sampling='original trainer, one augmentation process, network eval mode'),
+          electrical=dict(sizes=[5, 7], initialization='random nnU-Net He',
+                          trainable='all network parameters', loss='Dice + CE, deep supervision',
+                          lr=.01, seed=12345, max_epochs=1000, min_epochs=0, patience=30,
+                          min_delta=1e-4, scheduler='PolyLR', sampling='original trainer, DA2',
+                          preflight='one training and one validation step per size'),
           fit=dict(wavelength_nm=532, fft_size=3600, n=800, dx_nm=400, distance_um=2400,
                    sample_cell=17, steps=1 if preflight else 1000, seed=42, patience=30, lr=0.005),
           source={str(p.relative_to(CHECKOUT)): sha(p) for p in source_paths}))
     score_dirs = {}
-    for size in (3, 5, 7):
+    for size in (5, 7):
         job = root/f'k{size}'
         job.mkdir()
         write(job/'spec.private.json', dict(spec, kernel_size=size))
-        run(f'k{size}_target', [ENTRY/'training_adapter.py', job, 'target', mode], env, 20000)
-        target = read(job/'target_completed.json')['checkpoint']
+        run(f'k{size}_electrical_scratch', [ENTRY/'training_adapter.py', job, 'scratch', mode], electrical_env, 20000)
+        trained = read(job/'target_completed.json')
+        need(trained['status'] == 'COMPLETED' and trained['scratch']
+             and trained['formal_eligible'] == (not preflight), 'WRONG_ELECTRICAL_TRAINING')
+        target = trained['checkpoint']
+        need(sha(target['path']) == target['sha256'], 'ELECTRICAL_EXPORT_CHANGED')
         checkpoint = Path(target['path'])
         model = checkpoint.parents[1]
         psf = job/'psf532'
