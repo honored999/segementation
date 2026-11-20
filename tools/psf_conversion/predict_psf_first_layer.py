@@ -6,6 +6,7 @@ Both ideal and fitted PSFs share the same selected protocol.
 """
 import argparse
 import json
+import inspect
 import os
 from pathlib import Path
 import sys
@@ -15,6 +16,42 @@ if __package__ in (None, ''):
 from tools.psf_conversion.psf_first_conv import (
     FirstConvHook, KEY, LEGACY_OPERATOR, PIXEL_OPERATOR, load_psfs, operator_record,
     psf_canvas, sha256)
+from tools.psf_conversion.first_layer_model import check_artifact_origin, load_network
+
+
+def initialize_predictor(predictor, args, payload):
+    if payload.get('first_layer') is None:
+        predictor.initialize_from_trained_model_folder(
+            str(args.model_folder), use_folds=(args.fold,), checkpoint_name=args.checkpoint)
+        return predictor.network.get_submodule(KEY)
+    from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
+    from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+    from nnunetv2.inference import predict_from_raw_data as implementation
+
+    dataset = json.loads((args.model_folder/'dataset.json').read_text(encoding='utf-8-sig'))
+    plans = PlansManager(str(args.model_folder/'plans.json'))
+    configuration = plans.get_configuration(payload['init_args']['configuration'])
+    if hasattr(implementation, 'recursive_find_trainer_class_by_name'):
+        trainer = implementation.recursive_find_trainer_class_by_name(payload['trainer_name'])
+    else:
+        import nnunetv2
+        trainer = implementation.recursive_find_python_class(
+            str(Path(nnunetv2.__path__[0])/'training'/'nnUNetTrainer'),
+            payload['trainer_name'], 'nnunetv2.training.nnUNetTrainer')
+    build = trainer.build_network_architecture
+    inputs = determine_num_input_channels(plans, configuration, dataset)
+    outputs = plans.get_label_manager(dataset).num_segmentation_heads
+    if 'plans_manager' in inspect.signature(build).parameters:
+        network = build(plans, configuration, inputs, outputs, enable_deep_supervision=False)
+    else:
+        network = build(configuration.network_arch_class_name, configuration.network_arch_init_kwargs,
+                        configuration.network_arch_init_kwargs_req_import, inputs, outputs,
+                        enable_deep_supervision=False)
+    first = load_network(network, payload)
+    predictor.manual_initialization(network, plans, configuration, [payload['network_weights']],
+                                    dataset, payload['trainer_name'],
+                                    payload.get('inference_allowed_mirroring_axes'))
+    return first
 
 
 def main():
@@ -53,7 +90,7 @@ def main():
     # validated canvas size rather than an assumed one.
     if args.mode == 'electrical':
         record['operator_id'] = 'electrical'
-        record['operator'] = 'electrical: checkpoint Conv2d(3x3) first layer, no PSF substitution'
+        record['operator'] = 'electrical: checkpoint first-layer Conv2d'
     hook = None
     try:
         os.environ['nnUNet_compile'] = 'false'
@@ -64,12 +101,23 @@ def main():
         predictor = nnUNetPredictor(tile_step_size=0.5, use_gaussian=True,
             use_mirroring=not args.no_tta, perform_everything_on_device=args.device.startswith('cuda'),
             device=torch.device(args.device), verbose=False, verbose_preprocessing=False, allow_tqdm=False)
-        predictor.initialize_from_trained_model_folder(str(args.model_folder), use_folds=(args.fold,), checkpoint_name=args.checkpoint)
+        payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        optical = payload.get('optical_finetune')
+        if optical and (args.mode != 'fitted' or args.operator != PIXEL_OPERATOR):
+            raise ValueError('Frozen-PSF checkpoint requires fitted pixel PSF inference')
+        first = initialize_predictor(predictor, args, payload)
+        record['first_kernel_size'] = first.kernel_size[0]
         predictor.network.eval().requires_grad_(False)
         if args.mode in ('fitted', 'ideal'):
-            weight = predictor.network.get_submodule(KEY).weight
+            if payload.get('first_layer') is not None:
+                checkpoint_origin = optical['source_checkpoint']['sha256'] if optical else record['checkpoint_sha256']
+                check_artifact_origin(args.psf_dir, checkpoint_origin)
+            weight = first.weight
             kernel, hashes = load_psfs(args.psf_dir, weight, operator=args.operator,
                                        ideal=args.mode == 'ideal')
+            if optical and (hashes != optical['psf_sha256'] or
+                            not torch.equal(kernel, payload['optical_effective_kernel'])):
+                raise ValueError('Frozen optical state differs from checkpoint')
             n = psf_canvas(args.psf_dir)[0]
             record.update(operator_record(args.operator, n))
             record['psf_canvas'] = [n, n]

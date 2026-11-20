@@ -47,6 +47,7 @@ from torch.nn import functional as F
 KEY = 'encoder.stages.0.0.convs.0.conv'
 FACTOR = 17
 CENTER = FACTOR // 2
+KERNEL_SIZES = (3, 5, 7)
 LEGACY_OPERATOR = 'legacy_block_input'
 PIXEL_OPERATOR = 'pixel_psf_superposition_v1'
 OPERATORS = {
@@ -165,9 +166,12 @@ def psf_canvas(directory):
 def _validated_config(root):
     config = json.loads((root/'config.json').read_text(encoding='utf-8'))
     n = config['n']
-    if (config.get('patch_meta') != 51 or config.get('target_rotated_180') is not True
+    k = config.get('first_kernel_size', 3)
+    if (k not in KERNEL_SIZES or config.get('sample_cell', FACTOR) != FACTOR
+            or config.get('patch_meta') != FACTOR*k or config.get('target_rotated_180') is not True
             or config.get('grayscale') is not True or config.get('wavelength_nm') not in (450, 532)
-            or not isinstance(n, int) or n < 51
+            or not isinstance(n, int) or n < FACTOR*k
+            or config.get('center', [n//2]*2) != [n//2]*2
             or config.get('fft_size', 0) < n
             or (config['fft_size']-n) % 2
             or config.get('padding') != (config['fft_size']-n)//2):
@@ -183,7 +187,11 @@ def load_psfs(directory, weight, *, operator=LEGACY_OPERATOR, ideal=False):
     n = config['n']
     kernels = np.load(root/'electrical_kernels.npy', allow_pickle=False)
     expected = weight.detach().cpu().float().numpy()
-    if kernels.shape != (32, 1, 3, 3) or not np.isfinite(kernels).all() or not np.array_equal(kernels, expected):
+    k = config.get('first_kernel_size', 3)
+    patch = FACTOR*k
+    if k != 3 and operator != PIXEL_OPERATOR:
+        raise ValueError('Enlarged first layers require pixel PSF superposition')
+    if kernels.shape != (32, 1, k, k) or not np.isfinite(kernels).all() or not np.array_equal(kernels, expected):
         raise ValueError('Checkpoint first layer differs from electrical_kernels')
     scales = np.load(root/'shared_scales.npy', allow_pickle=False)
     expected_scales = np.maximum(np.abs(kernels).max(axis=(1,2,3)), 1e-12)
@@ -197,8 +205,8 @@ def load_psfs(directory, weight, *, operator=LEGACY_OPERATOR, ideal=False):
             path = root/f'kernel_{channel:03d}_{sign}.npz'
             component = np.maximum(polarity*kernels[channel, 0, ::-1, ::-1]/scales[channel], 0)
             target = np.zeros((n,n), dtype=np.float32)
-            start = n//2-25
-            target[start:start+51, start:start+51] = component.repeat(17,0).repeat(17,1)
+            start = n//2-patch//2
+            target[start:start+patch, start:start+patch] = component.repeat(FACTOR,0).repeat(FACTOR,1)
             with np.load(path, allow_pickle=False) as data:
                 raw, gain = data['psf_raw'], data['gain_gray']
                 active = bool(component.any())
@@ -223,8 +231,10 @@ class FirstConvHook:
     """No registered parameters/buffers: Predictor state_dict reload stays intact."""
     def __init__(self, network, kernel):
         conv = network.get_submodule(KEY)
-        if (not isinstance(conv, nn.Conv2d) or tuple(conv.weight.shape) != (32,1,3,3)
-                or conv.stride != (1,1) or conv.padding != (1,1) or conv.dilation != (1,1)
+        if (not isinstance(conv, nn.Conv2d) or conv.in_channels != 1 or conv.out_channels != 32
+                or conv.kernel_size[0] not in KERNEL_SIZES
+                or conv.kernel_size[0] != conv.kernel_size[1]
+                or conv.stride != (1,1) or conv.padding != (conv.kernel_size[0]//2,)*2 or conv.dilation != (1,1)
                 or conv.groups != 1 or conv.padding_mode != 'zeros'):
             raise ValueError('Unsupported first convolution')
         if kernel.ndim != 4 or kernel.shape[:2] != (32,1) or kernel.shape[2] != kernel.shape[3] or kernel.shape[2]%2 != 1 or not torch.isfinite(kernel).all():

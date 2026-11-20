@@ -1,6 +1,6 @@
-"""Standalone grayscale kernel-to-PSF fitting at 450 nm.
+"""Standalone grayscale kernel-to-PSF fitting at 450 or 532 nm (default: 450).
 
-Input kernels: exactly [32, 1, 3, 3], validated before --limit.
+Input kernels: exactly [32, 1, K, K] for K in (3, 5, 7), validated before --limit.
 Adapted from the preserved fit_psf.py; see README.md for provenance and limits.
 The polynomial phase library is specific to the original P400/H600 geometry.
 """
@@ -40,8 +40,8 @@ def load_kernels(path, key):
 
 
 def validate_kernels(kernels):
-    if tuple(kernels.shape) != (32, 1, 3, 3):
-        raise ValueError('Expected exactly [32, 1, 3, 3] grayscale kernels before --limit')
+    if kernels.ndim != 4 or kernels.shape[:2] != (32, 1) or kernels.shape[2] != kernels.shape[3] or kernels.shape[2] not in (3, 5, 7):
+        raise ValueError('Expected [32, 1, K, K] grayscale kernels for K in (3, 5, 7)')
     if not torch.isfinite(kernels).all():
         raise ValueError('Kernels contain NaN/Inf')
     return kernels
@@ -61,11 +61,12 @@ def build_target(kernel, n, patch):
 class Metasurface(nn.Module):
     def __init__(self, args):
         super().__init__()
+        self.wavelength_nm = args.wavelength_nm
         self.raw_width = nn.Parameter(torch.empty(args.n, args.n, device=args.device).uniform_(-1, 1))
         self.propagate = create_propagation_layer(
             distance=args.distance_um * 1e-6,
-            wavelength=450e-9,
-            pixel_size=args.dx_nm * 1e-9, device=args.device, padding=args.n,
+            wavelength=args.wavelength_nm * 1e-9,
+            pixel_size=args.dx_nm * 1e-9, device=args.device, padding=(args.fft_size - args.n) // 2,
         )
 
     def width(self):
@@ -74,7 +75,7 @@ class Metasurface(nn.Module):
     def forward(self):
         # Evaluate the high-order fitted polynomial in float64 to reduce cancellation.
         width = self.width().double()
-        phase = compute_phase_fitted(width, 450)[None]
+        phase = compute_phase_fitted(width, self.wavelength_nm)[None]
         field = torch.exp(1j * phase).to(torch.complex64)[None]
         return self.propagate(field)[0].abs().square()
 
@@ -93,7 +94,7 @@ def shape_loss(psf, target, active, mode):
 def fit_one(target, args):
     active = target.flatten(1).sum(1) > 0
     if not active.any():
-        return None, torch.zeros_like(target), [], active
+        return None, torch.zeros_like(target).cpu(), [], active.cpu()
     model = Metasurface(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     best, best_width, stale = float('inf'), None, 0
@@ -132,11 +133,15 @@ def main():
     parser.add_argument('--demo', action='store_true', help='Synthetic [32,1,3,3] kernels; NOT trained task weights')
     parser.add_argument('--out', default='results')
     parser.add_argument('--limit', type=int, help='Fit first N output channels')
+    parser.add_argument('--wavelength-nm', type=int, choices=[450, 532], default=450)
+    parser.add_argument('--fft-size', type=int, help='FFT edge; default 3*n, aperture and dx unchanged')
     parser.add_argument('--n', type=int, default=800)
     parser.add_argument('--dx-nm', type=float, default=400)
     parser.add_argument('--camera-pixel-um', type=float, default=3.45)
     parser.add_argument('--patch-camera', type=float, default=6)
     parser.add_argument('--distance-um', type=float, default=2400)
+    parser.add_argument('--target-checkpoint-sha256')
+    parser.add_argument('--pixel-superposition', action='store_true', help='Use exactly 17 samples per electrical pixel')
     parser.add_argument('--steps', type=int, default=500)
     parser.add_argument('--patience', type=int, default=30)
     parser.add_argument('--lr', type=float, default=5e-3)
@@ -153,8 +158,14 @@ def main():
         parser.error('--limit must be positive')
     if args.dx_nm != 400:
         parser.error('Bundled P400 phase library requires --dx-nm 400')
+    args.fft_size = args.fft_size if args.fft_size is not None else 3 * args.n
+    if args.fft_size < args.n or (args.fft_size - args.n) % 2:
+        parser.error('--fft-size must be n plus equal nonnegative integer padding on both sides')
     torch.manual_seed(args.seed)
     kernels = (validate_kernels(torch.randn(32, 1, 3, 3)) if args.demo else load_kernels(args.kernels, args.key))
+    k = kernels.shape[-1]
+    if k != 3 and not args.pixel_superposition:
+        parser.error('Enlarged kernels require --pixel-superposition')
     if args.limit:
         kernels = kernels[:args.limit]
     # PyTorch conv2d is correlation; an incoherent optical PSF performs convolution.
@@ -163,7 +174,7 @@ def main():
     # Preserve original shared pos/neg scale per output channel.
     scales = physical_kernels.abs().flatten(1).amax(1).clamp_min(1e-12)
     normalized = physical_kernels / scales[:, None, None, None]
-    patch = int(args.patch_camera * args.camera_pixel_um * 1000 / args.dx_nm)
+    patch = 17*k if args.pixel_superposition else int(args.patch_camera * args.camera_pixel_um * 1000 / args.dx_nm)
     if not 1 <= patch <= args.n:
         parser.error(f'Target patch {patch} exceeds grid {args.n}; increase --n or reduce --patch-camera')
     out = Path(args.out).resolve()
@@ -176,9 +187,18 @@ def main():
         parser.error('Output already exists; choose a fresh --out directory')
     np.save(out / 'electrical_kernels.npy', kernels.numpy())
     np.save(out / 'shared_scales.npy', scales.numpy())
-    config = dict(vars(args), patch_meta=patch, grayscale=True, wavelength_nm=450,
+    config = dict(vars(args), **(dict(first_kernel_size=k, sample_cell=17, center=[args.n//2]*2) if args.pixel_superposition else {}), patch_meta=patch, grayscale=True, padding=(args.fft_size-args.n)//2,
                   target_rotated_180=True, zero_channels='ignored; must be blocked or subtracted experimentally',
                   phase_library='P400 H600 W80-320; phase-only fitted approximation')
+    if args.pixel_superposition:
+        wavelength = args.wavelength_nm / 1000
+        dx = args.dx_nm / 1000
+        half_grid = args.fft_size * dx / 2
+        bandlimit = 1 / (wavelength * np.sqrt(1 + (args.distance_um / half_grid)**2))
+        config['sampling_diagnostics'] = dict(sample_cell_um=17*dx,
+            target_window_um=patch*dx, fft_window_um=2*half_grid, aperture_um=args.n*dx,
+            axis_nyquist_cycles_per_um=1/(2*dx), axis_asm_bandlimit_cycles_per_um=float(bandlimit),
+            asm_bandlimit_applied=False, crop_keeps_full_device_canvas=True)
     (out / 'config.json').write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding='utf-8')
     summary = []
     for index, kernel in enumerate(normalized):
@@ -194,8 +214,15 @@ def main():
             np.savez_compressed(out / f'kernel_{index:03d}_{sign}.npz',
                 width_nm=np.empty((0, 0)) if width is None else width.numpy(),
                 psf_raw=psf.numpy(), target=target_cpu.numpy(),
-                active_gray=active.cpu().numpy(), gain_gray=gains.numpy(), wavelength_nm=np.array(450), history=np.array(history))
-            summary.append(dict(index=index, sign=sign, skipped=not bool(active.any()),
+                active_gray=active.cpu().numpy(), gain_gray=gains.numpy(), wavelength_nm=np.array(args.wavelength_nm), history=np.array(history))
+            edge = psf.sum() - psf[:, 17:-17, 17:-17].sum()
+            marginal = psf.sum(dim=(0, 1))
+            coordinates = torch.arange(args.n) - args.n//2
+            normalizer = psf.sum().clamp_min(1e-12)
+            centroid = [(psf.sum(dim=(0, 2))*coordinates).sum()/normalizer,
+                        (marginal*coordinates).sum()/normalizer]
+            summary.append(dict(centroid_offset_samples=[float(v) for v in centroid], index=index, sign=sign, skipped=not bool(active.any()),
+                                outer_17_sample_mass_fraction=float(edge / psf.sum().clamp_min(1e-12)),
                                 best_loss=min(history) if history else None, steps=len(history)))
     (out / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print(f'Saved: {out.resolve()}')
